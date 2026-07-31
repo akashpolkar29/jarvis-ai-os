@@ -46,7 +46,7 @@ jobs:
         run: uv run pytest --cov --cov-report=xml --cov-report=term
 
       - name: coverage report (domain)
-        run: uv run coverage report --include="src/jarvis/domain/*" --fail-under=95
+        run: uv run coverage report --include="src/jarvis/domain/*" --fail-under=100
 
       - name: coverage report (application.policy)
         run: uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=0

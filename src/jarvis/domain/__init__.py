@@ -29,6 +29,7 @@ from .capability import (
     minimum_tier_for,
 )
 from .errors import JarvisError, TaintViolation
+from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 
 __all__ = [
@@ -36,12 +37,16 @@ __all__ = [
     "CapabilityId",
     "CapabilityInvocation",
     "Classification",
+    "Decision",
+    "DecisionReason",
     "Effect",
     "JarvisError",
+    "PolicyContext",
     "Provenance",
     "TaintViolation",
     "Tainted",
     "Tier",
     "Trust",
+    "evaluate",
     "minimum_tier_for",
 ]
