@@ -17,3 +17,17 @@ Constraints, enforced by tooling rather than convention:
   caller instead.
 * No vendor names (no "openai", "anthropic", "chatgpt", "claude", "gpt").
 """
+
+from __future__ import annotations
+
+from .errors import JarvisError, TaintViolation
+from .provenance import Classification, Provenance, Tainted, Trust
+
+__all__ = [
+    "Classification",
+    "JarvisError",
+    "Provenance",
+    "TaintViolation",
+    "Tainted",
+    "Trust",
+]
