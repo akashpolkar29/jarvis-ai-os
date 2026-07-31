@@ -20,14 +20,28 @@ Constraints, enforced by tooling rather than convention:
 
 from __future__ import annotations
 
+from .capability import (
+    CapabilityDescriptor,
+    CapabilityId,
+    CapabilityInvocation,
+    Effect,
+    Tier,
+    minimum_tier_for,
+)
 from .errors import JarvisError, TaintViolation
 from .provenance import Classification, Provenance, Tainted, Trust
 
 __all__ = [
+    "CapabilityDescriptor",
+    "CapabilityId",
+    "CapabilityInvocation",
     "Classification",
+    "Effect",
     "JarvisError",
     "Provenance",
     "TaintViolation",
     "Tainted",
+    "Tier",
     "Trust",
+    "minimum_tier_for",
 ]

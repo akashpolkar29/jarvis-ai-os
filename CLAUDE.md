@@ -42,7 +42,7 @@ uv run ruff format --check .
 uv run mypy --strict src tests
 uv run lint-imports
 uv run pytest
-uv run coverage report --include="src/jarvis/domain/*" --fail-under=90
+uv run coverage report --include="src/jarvis/domain/*" --fail-under=95
 uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=0
 
 ## Meta-tests
