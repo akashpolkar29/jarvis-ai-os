@@ -20,3 +20,35 @@ class TaintViolation(JarvisError):  # noqa: N818 -- reads as a violation, not an
     Raised by :meth:`jarvis.domain.provenance.Tainted.require_trusted`
     when the wrapped value's provenance is still ``UNTRUSTED_EXTERNAL``.
     """
+
+
+class AuditRecordTampered(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when an AuditRecord's stored hash doesn't match its own content.
+
+    A data-integrity signal, not a programming error: some record's
+    fields (or its stored ``record_hash``) were changed after the fact
+    without recomputing the hash to match. It is structurally
+    impossible to construct an ``AuditRecord`` this way through its
+    normal constructor -- ``__post_init__`` checks this on every
+    construction -- so this being raised means a record was corrupted
+    out-of-band (a buggy deserializer, or an actual tampering attempt):
+    the same category of runtime security-relevant failure that made
+    ``TaintViolation`` a ``JarvisError`` subclass, not a plain
+    ``ValueError``.
+    """
+
+
+class AuditRecordNotSerializable(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when a Decision's content cannot be deterministically hashed.
+
+    Unlike ``AuditRecordTampered``, this is a programming error: a
+    capability passed an argument value that the audit log's
+    canonicalization scheme has no stable way to serialize. It gets
+    its own ``JarvisError`` subclass, distinct from
+    ``AuditRecordTampered``, because the two are actionable in
+    completely different ways -- a caller catching this should fix the
+    capability's argument types; a caller catching
+    ``AuditRecordTampered`` should investigate a security incident.
+    Conflating them into one error would hide which kind of problem
+    actually occurred.
+    """

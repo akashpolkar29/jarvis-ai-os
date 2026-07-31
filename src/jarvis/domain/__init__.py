@@ -20,6 +20,7 @@ Constraints, enforced by tooling rather than convention:
 
 from __future__ import annotations
 
+from .audit import GENESIS_PREVIOUS_HASH, AuditChain, AuditRecord, ChainVerificationResult
 from .capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -28,14 +29,25 @@ from .capability import (
     Tier,
     minimum_tier_for,
 )
-from .errors import JarvisError, TaintViolation
+from .errors import (
+    AuditRecordNotSerializable,
+    AuditRecordTampered,
+    JarvisError,
+    TaintViolation,
+)
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 
 __all__ = [
+    "GENESIS_PREVIOUS_HASH",
+    "AuditChain",
+    "AuditRecord",
+    "AuditRecordNotSerializable",
+    "AuditRecordTampered",
     "CapabilityDescriptor",
     "CapabilityId",
     "CapabilityInvocation",
+    "ChainVerificationResult",
     "Classification",
     "Decision",
     "DecisionReason",
