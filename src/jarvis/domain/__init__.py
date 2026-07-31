@@ -32,11 +32,14 @@ from .capability import (
 from .errors import (
     AuditRecordNotSerializable,
     AuditRecordTampered,
+    CapabilityAlreadyRegistered,
+    CapabilityNotRegistered,
     JarvisError,
     TaintViolation,
 )
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
+from .registry import CapabilityRegistry
 
 __all__ = [
     "GENESIS_PREVIOUS_HASH",
@@ -44,9 +47,12 @@ __all__ = [
     "AuditRecord",
     "AuditRecordNotSerializable",
     "AuditRecordTampered",
+    "CapabilityAlreadyRegistered",
     "CapabilityDescriptor",
     "CapabilityId",
     "CapabilityInvocation",
+    "CapabilityNotRegistered",
+    "CapabilityRegistry",
     "ChainVerificationResult",
     "Classification",
     "Decision",
