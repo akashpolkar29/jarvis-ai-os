@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: gates (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy --strict
+        run: uv run mypy --strict src tests
+
+      - name: lint-imports
+        run: uv run lint-imports
+
+      - name: pytest
+        run: uv run pytest --cov --cov-report=xml --cov-report=term
+
+      - name: coverage report (domain)
+        run: uv run coverage report --include="src/jarvis/domain/*" --fail-under=0
+
+      - name: coverage report (application.policy)
+        run: uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=0

@@ -1,0 +1,154 @@
+[project]
+name = "jarvis"
+version = "0.1.0.dev0"
+description = "Privacy-first, plugin-based agent kernel for Linux."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+readme = "README.md"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jarvis"]
+
+[tool.uv.workspace]
+members = ["plugins/*"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "hypothesis",
+    "mypy",
+    "ruff",
+    "import-linter",
+    "pre-commit",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "C4",  # flake8-comprehensions
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+    "ARG", # flake8-unused-arguments
+    "PTH", # flake8-use-pathlib
+    "ERA", # eradicate (commented-out code)
+    "PL",  # pylint
+    "RUF", # ruff-specific
+    "TID", # flake8-tidy-imports
+    "TC",  # flake8-type-checking
+    "S",   # flake8-bandit
+    "T20", # flake8-print
+    "DTZ", # flake8-datetimez
+    "D",   # pydocstyle
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are not a public API surface: skip docstring and bandit noise
+# (assert usage, hardcoded test fixtures, etc).
+"tests/**" = ["D", "S"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Non-deterministic / wall-clock and randomness sources are banned in favor
+# of ClockPort / IdPort injection (see docs/adr). This catches the direct
+# `from x import y` import forms; attribute-style calls after a bare
+# `import datetime` / `import time` / `import uuid` are NOT visible to this
+# rule and are instead caught by the AST-based
+# tests/meta/test_source_invariants.py.
+"datetime.datetime.now" = { msg = "Inject ClockPort instead of datetime.now()." }
+"datetime.datetime.utcnow" = { msg = "Inject ClockPort instead of datetime.utcnow()." }
+"time.time" = { msg = "Inject ClockPort instead of time.time()." }
+"time.monotonic" = { msg = "Inject ClockPort instead of time.monotonic()." }
+"uuid.uuid1" = { msg = "Inject IdPort instead of uuid.uuid1()." }
+"uuid.uuid4" = { msg = "Inject IdPort instead of uuid.uuid4()." }
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+exclude = ["tests/fixtures"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config --cov"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+norecursedirs = ["tests/fixtures"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/jarvis"]
+
+[tool.importlinter]
+root_packages = ["jarvis"]
+include_external_packages = true
+
+# NOTE: Contracts for plugin isolation (C3), adapter independence (C4), and
+# ui privilege (C5) are intentionally NOT configured yet: import-linter
+# errors on a contract naming a package that does not yet exist on disk.
+# Those packages (plugins/*, per-adapter subpackages, jarvis.ui) arrive in
+# later work packages; see tests/meta/test_gate_integrity.py::CONTRACT_SCHEDULE
+# for when each is due.
+
+[[tool.importlinter.contracts]]
+name = "C1 layered architecture"
+type = "layers"
+layers = [
+    "jarvis.cli",
+    "jarvis.kernel",
+    "jarvis.ipc",
+    "jarvis.adapters",
+    "jarvis.application",
+    "jarvis.ports",
+    "jarvis.domain",
+]
+exhaustive = false
+
+[[tool.importlinter.contracts]]
+name = "C2 domain purity"
+type = "forbidden"
+source_modules = ["jarvis.domain"]
+forbidden_modules = [
+    "jarvis.ports",
+    "jarvis.application",
+    "jarvis.adapters",
+    "jarvis.plugin_api",
+    "jarvis.kernel",
+    "jarvis.ipc",
+    "jarvis.cli",
+]
+
+[[tool.importlinter.contracts]]
+name = "C6 no GLib in the core"
+type = "forbidden"
+source_modules = ["jarvis.domain", "jarvis.application", "jarvis.kernel"]
+forbidden_modules = ["gi"]
+
+[[tool.importlinter.contracts]]
+name = "C7 plugin_api depends only on domain"
+type = "forbidden"
+source_modules = ["jarvis.plugin_api"]
+forbidden_modules = [
+    "jarvis.application",
+    "jarvis.adapters",
+    "jarvis.kernel",
+    "jarvis.ipc",
+    "jarvis.cli",
+]
