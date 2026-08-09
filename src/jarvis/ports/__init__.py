@@ -11,15 +11,18 @@ Constraints:
   A port describes a role, never a specific integration.
 * May depend on ``jarvis.domain`` only.
 
-``ConfirmationPort`` is this ring's first real content: the seam
-between a real confirmation source and
-:class:`~jarvis.domain.policy.PolicyContext`.
+``ConfirmationPort`` is the seam between a real confirmation source
+and :class:`~jarvis.domain.policy.PolicyContext`. ``AuditStoragePort``
+is the seam between an :class:`~jarvis.domain.audit.AuditChain` and
+durable storage.
 """
 
 from __future__ import annotations
 
+from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 
 __all__ = [
+    "AuditStoragePort",
     "ConfirmationPort",
 ]

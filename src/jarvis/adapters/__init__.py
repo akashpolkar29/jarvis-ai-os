@@ -11,17 +11,21 @@ Constraints:
   ``jarvis.application`` (to raise/catch application-level exceptions),
   but never on ``jarvis.kernel``, ``jarvis.ipc``, or ``jarvis.cli``.
 
-``ManualConfirmationAdapter`` is this ring's first real content: the
-simplest possible implementation of
-:class:`~jarvis.ports.confirmation.ConfirmationPort`, reporting fixed,
-constructor-supplied confirmation availability rather than any real
-presence signal (that's future work).
+``ManualConfirmationAdapter`` is the simplest possible implementation
+of :class:`~jarvis.ports.confirmation.ConfirmationPort`, reporting
+fixed, constructor-supplied confirmation availability rather than any
+real presence signal (that's future work).
+``JsonFileAuditStorageAdapter`` implements
+:class:`~jarvis.ports.audit_storage.AuditStoragePort` as a single
+JSON file. Neither adapter depends on the other.
 """
 
 from __future__ import annotations
 
+from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 
 __all__ = [
+    "JsonFileAuditStorageAdapter",
     "ManualConfirmationAdapter",
 ]
