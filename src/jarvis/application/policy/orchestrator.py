@@ -52,6 +52,21 @@ answer "what can I even call". Neither is a decision: neither calls
 ``evaluate()`` nor touches the audit chain. They exist alongside the
 authorize paths only because the orchestrator is already the one
 thing holding the registry reference.
+
+A fifth method, :meth:`get_current_context`, is an optional context
+*source*: given an injected
+:class:`~jarvis.ports.confirmation.ConfirmationPort`, it fetches a
+fresh :class:`~jarvis.domain.policy.PolicyContext` on every call --
+never cached, not even within one call -- because MANUAL_ONLY's
+authorization boundary is physical presence *at decision time*
+(ADR-0013); caching would let a since-expired "physically present"
+reading authorize an action after the human actually left. It does
+not call ``evaluate()`` or touch the chain either, so it cannot become
+a third, parallel decision path: it is a pure context source, and the
+caller composes it with :meth:`authorize` or :meth:`authorize_by_id`
+explicitly at the call site (``orchestrator.authorize(invocation,
+orchestrator.get_current_context())``) rather than either ``authorize``
+method silently pulling context on the caller's behalf.
 """
 
 from __future__ import annotations
@@ -69,13 +84,19 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision, PolicyContext
     from jarvis.domain.provenance import Tainted
     from jarvis.domain.registry import CapabilityRegistry
+    from jarvis.ports.confirmation import ConfirmationPort
 
 
 class AuthorizationOrchestrator:
     """Evaluates and audit-logs every capability invocation it authorizes."""
 
-    def __init__(self, chain: AuditChain, registry: CapabilityRegistry) -> None:
-        """Store the audit chain and capability registry this orchestrator uses.
+    def __init__(
+        self,
+        chain: AuditChain,
+        registry: CapabilityRegistry,
+        confirmation: ConfirmationPort | None = None,
+    ) -> None:
+        """Store the audit chain, capability registry, and (optional) confirmation port.
 
         Args:
             chain: The chain to append decisions to. Owned by the
@@ -85,9 +106,15 @@ class AuthorizationOrchestrator:
             registry: The registry to look capability descriptors up
                 in for :meth:`authorize_by_id`. Owned by the caller,
                 for the same reason as ``chain``.
+            confirmation: The source :meth:`get_current_context` fetches
+                a ``PolicyContext`` from. Optional and ``None`` by
+                default so every existing two-argument construction
+                keeps working unchanged; only :meth:`get_current_context`
+                requires it to be set.
         """
         self._chain = chain
         self._registry = registry
+        self._confirmation = confirmation
 
     def authorize(self, invocation: CapabilityInvocation, context: PolicyContext) -> Decision:
         """Evaluate ``invocation`` under ``context`` and audit-log the outcome.
@@ -176,3 +203,31 @@ class AuthorizationOrchestrator:
             iteration-order disclaimer.
         """
         return tuple(self._registry)
+
+    def get_current_context(self) -> PolicyContext:
+        """Fetch a fresh PolicyContext from the injected ConfirmationPort.
+
+        Queries the port on every call -- never cached, not even
+        within this call -- because MANUAL_ONLY's authorization
+        boundary is physical presence *at decision time* (ADR-0013).
+        Caching would let a since-expired "physically present" reading
+        authorize an action after the human actually left.
+
+        Not a decision -- like :meth:`is_registered` and
+        :meth:`list_capabilities`, this does not call ``evaluate()``
+        and is not audit-logged.
+
+        Returns:
+            The ``PolicyContext`` the injected ``ConfirmationPort``
+            reports right now.
+
+        Raises:
+            RuntimeError: If no ``ConfirmationPort`` was provided at
+                construction. This is a caller/wiring mistake, not a
+                domain condition, so it is not one of the typed
+                ``jarvis.domain.errors``.
+        """
+        if self._confirmation is None:
+            msg = "AuthorizationOrchestrator has no ConfirmationPort configured."
+            raise RuntimeError(msg)
+        return self._confirmation.get_context()

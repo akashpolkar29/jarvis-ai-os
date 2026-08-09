@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
 from jarvis.domain.capability import (
@@ -46,8 +47,34 @@ _NO_CONFIRMATION = PolicyContext(
     remote_confirmation_available=False,
 )
 
+_FULL_CONFIRMATION = PolicyContext(
+    physical_confirmation_available=True,
+    remote_confirmation_available=True,
+)
+
 _THREE_SEQUENTIAL_CALLS = 3
 _TWO_SHARED_CALLS = 2
+
+
+class _MutableConfirmationSource:
+    """A ConfirmationPort test double whose reported context can change between calls.
+
+    Used to prove get_current_context() fetches fresh on every call
+    rather than caching the context it got back the first time (or at
+    construction).
+    """
+
+    def __init__(self, context: PolicyContext) -> None:
+        """Start out reporting ``context``."""
+        self._context = context
+
+    def get_context(self) -> PolicyContext:
+        """Return whatever context was most recently set."""
+        return self._context
+
+    def set_context(self, context: PolicyContext) -> None:
+        """Change what the next get_context() call will return."""
+        self._context = context
 
 
 def test_granted_decision_is_returned_and_appended() -> None:
@@ -253,3 +280,92 @@ def test_list_capabilities_does_not_touch_the_chain() -> None:
     orchestrator.list_capabilities()
 
     assert len(chain) == 0
+
+
+def test_get_current_context_returns_the_port_supplied_context() -> None:
+    """get_current_context() returns exactly what the injected ConfirmationPort reports."""
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), confirmation=confirmation
+    )
+
+    context = orchestrator.get_current_context()
+
+    assert context == confirmation.get_context()
+
+
+def test_get_current_context_raises_without_a_confirmation_port_configured() -> None:
+    """get_current_context() raises when no ConfirmationPort was provided at construction."""
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    with pytest.raises(RuntimeError, match="no ConfirmationPort configured"):
+        orchestrator.get_current_context()
+
+
+def test_get_current_context_does_not_touch_the_chain() -> None:
+    """get_current_context() is a pure read: it is not a decision and is never audited."""
+    chain = AuditChain()
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=True,
+        remote_confirmation_available=True,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), confirmation=confirmation)
+
+    orchestrator.get_current_context()
+
+    assert len(chain) == 0
+
+
+def test_get_current_context_is_fetched_fresh_not_cached() -> None:
+    """Two calls after the port's underlying context changes return different results.
+
+    Proves get_current_context() queries the port on every call rather
+    than caching what it got back at construction or on first call --
+    the correctness property that matters once a real presence-sensing
+    adapter exists (a stale "physically present" reading must not be
+    able to authorize a later action after the human left).
+    """
+    source = _MutableConfirmationSource(_NO_CONFIRMATION)
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), confirmation=source
+    )
+
+    first = orchestrator.get_current_context()
+    source.set_context(_FULL_CONFIRMATION)
+    second = orchestrator.get_current_context()
+
+    assert first == _NO_CONFIRMATION
+    assert second == _FULL_CONFIRMATION
+
+
+def test_authorize_with_fetched_context_matches_authorize_with_explicit_context() -> None:
+    """get_current_context() composes with authorize() through the same evaluate-then-audit path.
+
+    Proves this is not a third, parallel way to reach a Decision: using
+    the fetched context produces the identical outcome (and identical
+    audit behavior) as passing the same context value directly.
+    """
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+    )
+    invocation = _invocation(Effect.DESTRUCTIVE)
+
+    fetched_chain = AuditChain()
+    fetched_orchestrator = AuthorizationOrchestrator(
+        fetched_chain, CapabilityRegistry(), confirmation=confirmation
+    )
+    fetched_decision = fetched_orchestrator.authorize(
+        invocation, fetched_orchestrator.get_current_context()
+    )
+
+    explicit_chain = AuditChain()
+    explicit_orchestrator = AuthorizationOrchestrator(explicit_chain, CapabilityRegistry())
+    explicit_decision = explicit_orchestrator.authorize(invocation, _NO_CONFIRMATION)
+
+    assert fetched_decision == explicit_decision
+    assert len(fetched_chain) == 1
+    assert len(explicit_chain) == 1
