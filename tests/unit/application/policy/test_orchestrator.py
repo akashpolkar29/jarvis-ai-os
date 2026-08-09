@@ -192,3 +192,64 @@ def test_authorize_by_id_and_authorize_produce_identical_results() -> None:
     by_id_decision = by_id_orchestrator.authorize_by_id(descriptor.id, arguments, _NO_CONFIRMATION)
 
     assert direct_decision == by_id_decision
+
+
+def test_is_registered_true_for_registered_capability() -> None:
+    """is_registered() is True for an id that was registered."""
+    registry = CapabilityRegistry()
+    descriptor = _descriptor(Effect.READ_LOCAL)
+    registry.register(descriptor)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+
+    assert orchestrator.is_registered(descriptor.id) is True
+
+
+def test_is_registered_false_for_unregistered_capability() -> None:
+    """is_registered() is False for an id that was never registered."""
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    assert orchestrator.is_registered(CapabilityId("fs.read_file")) is False
+
+
+def test_is_registered_does_not_touch_the_chain() -> None:
+    """is_registered() is a pure read: it is not a decision and is never audited."""
+    chain = AuditChain()
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+
+    orchestrator.is_registered(CapabilityId("fs.read_file"))
+
+    assert len(chain) == 0
+
+
+def test_list_capabilities_empty_registry_returns_empty_tuple() -> None:
+    """list_capabilities() on an empty registry returns an empty tuple."""
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    assert orchestrator.list_capabilities() == ()
+
+
+def test_list_capabilities_returns_every_registered_descriptor() -> None:
+    """list_capabilities() returns exactly the registered descriptors, in any order."""
+    registry = CapabilityRegistry()
+    first = _descriptor(Effect.READ_LOCAL, "fs.read_file")
+    second = _descriptor(Effect.DESTRUCTIVE, "fs.delete_file")
+    registry.register(first)
+    registry.register(second)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+
+    capabilities = orchestrator.list_capabilities()
+
+    assert isinstance(capabilities, tuple)
+    assert set(capabilities) == {first, second}
+
+
+def test_list_capabilities_does_not_touch_the_chain() -> None:
+    """list_capabilities() is a pure read: it is not a decision and is never audited."""
+    chain = AuditChain()
+    registry = CapabilityRegistry()
+    registry.register(_descriptor(Effect.READ_LOCAL))
+    orchestrator = AuthorizationOrchestrator(chain, registry)
+
+    orchestrator.list_capabilities()
+
+    assert len(chain) == 0

@@ -44,6 +44,14 @@ or neither does. The same is true, one step earlier, of
 :class:`~jarvis.domain.errors.CapabilityNotRegistered` failure happens
 before ``evaluate()`` is ever called, so nothing is computed and
 nothing is appended either way.
+
+Two further methods, :meth:`is_registered` and :meth:`list_capabilities`,
+give read-only introspection into the injected registry -- "is this
+callable" and "what's callable at all", for a future kernel/CLI to
+answer "what can I even call". Neither is a decision: neither calls
+``evaluate()`` nor touches the audit chain. They exist alongside the
+authorize paths only because the orchestrator is already the one
+thing holding the registry reference.
 """
 
 from __future__ import annotations
@@ -57,7 +65,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from jarvis.domain.audit import AuditChain
-    from jarvis.domain.capability import CapabilityId
+    from jarvis.domain.capability import CapabilityDescriptor, CapabilityId
     from jarvis.domain.policy import Decision, PolicyContext
     from jarvis.domain.provenance import Tainted
     from jarvis.domain.registry import CapabilityRegistry
@@ -139,3 +147,32 @@ class AuthorizationOrchestrator:
         descriptor = self._registry.get(capability_id)
         invocation = CapabilityInvocation(descriptor, arguments)
         return self.authorize(invocation, context)
+
+    def is_registered(self, capability_id: CapabilityId) -> bool:
+        """Return whether a descriptor is registered under ``capability_id``.
+
+        Not a decision -- this does not call ``evaluate()`` and is not
+        audit-logged, exactly like :meth:`list_capabilities`.
+
+        Args:
+            capability_id: The id to check.
+
+        Returns:
+            ``True`` if a descriptor is registered under ``capability_id``,
+            ``False`` otherwise.
+        """
+        return capability_id in self._registry
+
+    def list_capabilities(self) -> tuple[CapabilityDescriptor, ...]:
+        """Return every descriptor currently registered.
+
+        Not a decision -- this does not call ``evaluate()`` and is not
+        audit-logged, exactly like :meth:`is_registered`.
+
+        Returns:
+            A snapshot tuple of every registered descriptor. Order is
+            not part of this method's contract, matching
+            :class:`~jarvis.domain.registry.CapabilityRegistry`'s own
+            iteration-order disclaimer.
+        """
+        return tuple(self._registry)
