@@ -7,6 +7,9 @@ license = { text = "MIT" }
 readme = "README.md"
 dependencies = []
 
+[project.scripts]
+jarvis = "jarvis.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -66,6 +69,10 @@ convention = "google"
 # Tests are not a public API surface: skip docstring and bandit noise
 # (assert usage, hardcoded test fixtures, etc).
 "tests/**" = ["D", "S"]
+# The CLI's whole job is printing to the terminal -- T20 exists to
+# catch stray debug prints in library code, not to forbid a CLI's
+# actual user-facing output.
+"src/jarvis/cli/**" = ["T20"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # Non-deterministic / wall-clock and randomness sources are banned in favor
