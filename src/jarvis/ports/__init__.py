@@ -10,4 +10,16 @@ Constraints:
 * No vendor names (no "openai", "anthropic", "chatgpt", "claude", "gpt").
   A port describes a role, never a specific integration.
 * May depend on ``jarvis.domain`` only.
+
+``ConfirmationPort`` is this ring's first real content: the seam
+between a real confirmation source and
+:class:`~jarvis.domain.policy.PolicyContext`.
 """
+
+from __future__ import annotations
+
+from .confirmation import ConfirmationPort
+
+__all__ = [
+    "ConfirmationPort",
+]
