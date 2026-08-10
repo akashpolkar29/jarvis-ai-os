@@ -14,15 +14,20 @@ Constraints:
 ``ConfirmationPort`` is the seam between a real confirmation source
 and :class:`~jarvis.domain.policy.PolicyContext`. ``AuditStoragePort``
 is the seam between an :class:`~jarvis.domain.audit.AuditChain` and
-durable storage.
+durable storage. ``MediaPlayerPort`` is the seam between an authorized
+playback command and a real, currently-running media player.
 """
 
 from __future__ import annotations
 
 from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
+from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
 
 __all__ = [
     "AuditStoragePort",
     "ConfirmationPort",
+    "MediaPlayerCommandFailedError",
+    "MediaPlayerPort",
+    "NoMediaPlayerRunningError",
 ]

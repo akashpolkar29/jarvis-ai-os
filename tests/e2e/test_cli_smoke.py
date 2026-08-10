@@ -26,7 +26,7 @@ def test_python_dash_m_jarvis_cli_runs_as_a_real_process(tmp_path: Path) -> None
     chain_path = tmp_path / "audit_chain.json"
 
     result = subprocess.run(
-        [sys.executable, "-m", "jarvis.cli", "--chain-path", str(chain_path)],
+        [sys.executable, "-m", "jarvis.cli", "ping", "--chain-path", str(chain_path)],
         capture_output=True,
         text=True,
         check=False,

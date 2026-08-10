@@ -1,33 +1,83 @@
-"""Unit tests for jarvis.cli.main.main, called directly with explicit argv (no subprocess)."""
+"""Unit tests for jarvis.cli.main.main, called directly with explicit argv (no subprocess).
+
+The `ping` subcommand's tests call the real jarvis.kernel.ping code
+path -- fully hermetic (tmp_path chain file only, no external system
+dependency), so no mocking is needed. The `play`/`pause`/`next`/
+`previous` subcommands' tests monkeypatch
+jarvis.cli.main.authorize_and_run_music_command itself rather than
+letting it run for real, because its real default path constructs an
+MprisMediaPlayerAdapter that needs a live D-Bus session bus -- exactly
+what must not be required in CI. This tests the CLI's own
+responsibility (does it route the right subcommand to the right
+kernel call, with the right arguments, and format the result) without
+re-testing jarvis.kernel.music's own logic, which
+tests/unit/test_music.py already covers directly.
+
+Patching note: ``jarvis.cli.__init__`` does ``from .main import main``,
+which reassigns the *attribute* ``jarvis.cli.main`` (on the package
+object) to the ``main`` function -- shadowing the submodule. Both
+``import jarvis.cli.main as x`` and ``monkeypatch.setattr("jarvis.cli.main.X", ...)``
+resolve via that same shadowed attribute once the package is already
+imported, and would silently patch the wrong object. Fetching the
+real submodule via ``sys.modules["jarvis.cli.main"]`` (keyed by full
+dotted name, unaffected by the shadowing) and patching that object
+directly is the reliable fix.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.cli.main import main
+from jarvis.domain.capability import (
+    CapabilityDescriptor,
+    CapabilityId,
+    CapabilityInvocation,
+    Effect,
+    Tier,
+)
+from jarvis.domain.policy import Decision, DecisionReason
+from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.kernel.music import MusicCommand
+from jarvis.ports.media_player import NoMediaPlayerRunningError
 
-if TYPE_CHECKING:
-    import pytest
+
+def _make_decision(*, granted: bool) -> Decision:
+    """Build a minimal Decision for a stubbed kernel call to return."""
+    descriptor = CapabilityDescriptor(
+        id=CapabilityId("music.pause"),
+        effects=Effect.WRITE_LOCAL,
+        description="Pause playback.",
+    )
+    invocation = CapabilityInvocation(descriptor, Tainted({}, Provenance.user()))
+    return Decision(
+        tier=Tier.CONFIRM,
+        granted=granted,
+        reasons=DecisionReason.BASE_TIER,
+        invocation=invocation,
+    )
 
 
-def test_main_default_flags_grants_and_exits_zero(tmp_path: Path) -> None:
+def test_ping_default_flags_grants_and_exits_zero(tmp_path: Path) -> None:
     """With no flags, ping is granted and main() returns 0."""
     chain_path = tmp_path / "audit_chain.json"
 
-    exit_code = main(["--chain-path", str(chain_path)])
+    exit_code = main(["ping", "--chain-path", str(chain_path)])
 
     assert exit_code == 0
 
 
-def test_main_prints_the_decision(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_ping_prints_the_decision(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """main() prints granted status, tier, and reasons for a human to read."""
     chain_path = tmp_path / "audit_chain.json"
 
-    main(["--chain-path", str(chain_path)])
+    main(["ping", "--chain-path", str(chain_path)])
     captured = capsys.readouterr()
 
     assert "ping" in captured.out
@@ -35,12 +85,13 @@ def test_main_prints_the_decision(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "ALLOW" in captured.out
 
 
-def test_main_with_confirmation_flags_still_grants(tmp_path: Path) -> None:
+def test_ping_with_confirmation_flags_still_grants(tmp_path: Path) -> None:
     """Both confirmation flags can be set without error; ping is still granted."""
     chain_path = tmp_path / "audit_chain.json"
 
     exit_code = main(
         [
+            "ping",
             "--physical-confirmation-available",
             "--remote-confirmation-available",
             "--chain-path",
@@ -51,22 +102,22 @@ def test_main_with_confirmation_flags_still_grants(tmp_path: Path) -> None:
     assert exit_code == 0
 
 
-def test_main_persists_the_chain_at_the_given_path(tmp_path: Path) -> None:
+def test_ping_persists_the_chain_at_the_given_path(tmp_path: Path) -> None:
     """main() saves the chain at --chain-path, readable by a fresh adapter afterward."""
     chain_path = tmp_path / "audit_chain.json"
 
-    main(["--chain-path", str(chain_path)])
+    main(["ping", "--chain-path", str(chain_path)])
 
     chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert len(chain) == 1
 
 
-def test_main_default_chain_path_is_relative_audit_chain_json(tmp_path: Path) -> None:
+def test_ping_default_chain_path_is_relative_audit_chain_json(tmp_path: Path) -> None:
     """Omitting --chain-path falls back to ./audit_chain.json in the current directory."""
     original_cwd = Path.cwd()
     os.chdir(tmp_path)
     try:
-        exit_code = main([])
+        exit_code = main(["ping"])
     finally:
         os.chdir(original_cwd)
 
@@ -74,7 +125,7 @@ def test_main_default_chain_path_is_relative_audit_chain_json(tmp_path: Path) ->
     assert (tmp_path / "audit_chain.json").exists()
 
 
-def test_main_reports_a_tampered_chain_cleanly_and_exits_nonzero(
+def test_ping_reports_a_tampered_chain_cleanly_and_exits_nonzero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A tampered chain file surfaces as a clean error message, not a raw traceback.
@@ -84,13 +135,104 @@ def test_main_reports_a_tampered_chain_cleanly_and_exits_nonzero(
     that catch actually being exercised.
     """
     chain_path = tmp_path / "audit_chain.json"
-    main(["--chain-path", str(chain_path)])
+    main(["ping", "--chain-path", str(chain_path)])
     raw = json.loads(chain_path.read_text(encoding="utf-8"))
     raw[0]["record_hash"] = "0" * 64
     chain_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    exit_code = main(["--chain-path", str(chain_path)])
+    exit_code = main(["ping", "--chain-path", str(chain_path)])
     captured = capsys.readouterr()
 
     assert exit_code == 1
     assert "Error:" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("subcommand", "expected_command"),
+    [
+        ("play", MusicCommand.PLAY),
+        ("pause", MusicCommand.PAUSE),
+        ("next", MusicCommand.NEXT),
+        ("previous", MusicCommand.PREVIOUS),
+    ],
+)
+def test_music_subcommand_routes_to_the_matching_music_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    subcommand: str,
+    expected_command: MusicCommand,
+) -> None:
+    """Each music subcommand calls authorize_and_run_music_command with the right MusicCommand."""
+    received: list[MusicCommand] = []
+
+    def fake_authorize_and_run(
+        command: MusicCommand,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(command)
+        return _make_decision(granted=True)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_music_command", fake_authorize_and_run
+    )
+
+    exit_code = main([subcommand, "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert received == [expected_command]
+    assert exit_code == 0
+
+
+def test_music_subcommand_prints_the_command_name_and_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() prints the subcommand name (not "ping") for a music command."""
+
+    def fake_authorize_and_run(
+        command: MusicCommand,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_music_command", fake_authorize_and_run
+    )
+
+    exit_code = main(["pause", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "pause: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_music_subcommand_reports_no_media_player_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """NoMediaPlayerRunningError from the kernel surfaces as a clean message, not a traceback."""
+
+    def fake_authorize_and_run(
+        command: MusicCommand,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "No MPRIS media player is currently running on the session bus."
+        raise NoMediaPlayerRunningError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_music_command", fake_authorize_and_run
+    )
+
+    chain_path = tmp_path / "audit_chain.json"
+    exit_code = main(["play", "--physical-confirmation-available", "--chain-path", str(chain_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "No MPRIS media player" in captured.err

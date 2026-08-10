@@ -17,15 +17,20 @@ fixed, constructor-supplied confirmation availability rather than any
 real presence signal (that's future work).
 ``JsonFileAuditStorageAdapter`` implements
 :class:`~jarvis.ports.audit_storage.AuditStoragePort` as a single
-JSON file. Neither adapter depends on the other.
+JSON file. ``MprisMediaPlayerAdapter`` implements
+:class:`~jarvis.ports.media_player.MediaPlayerPort` by talking MPRIS
+over D-Bus to whichever media player is currently running. None of
+these adapters depend on each other.
 """
 
 from __future__ import annotations
 
 from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
+from .media_player import MprisMediaPlayerAdapter
 
 __all__ = [
     "JsonFileAuditStorageAdapter",
     "ManualConfirmationAdapter",
+    "MprisMediaPlayerAdapter",
 ]

@@ -11,11 +11,12 @@ Constraints:
   a call against ``jarvis.kernel`` / ``jarvis.ipc`` and formats the
   result; it does not decide policy or interpret capabilities itself.
 
-``main`` is this ring's first real content: it parses argv, calls
-``jarvis.kernel.authorize_ping`` directly (booting the kernel in-process
-for local/dev use, per this docstring's own stated option -- no
-``jarvis.ipc`` transport exists yet), and formats the returned
-``Decision``.
+``main`` is this ring's first real content: it parses argv into a
+subcommand (``ping``, ``play``, ``pause``, ``next``, ``previous``) and
+calls the matching ``jarvis.kernel`` composition function directly
+(booting the kernel in-process for local/dev use, per this docstring's
+own stated option -- no ``jarvis.ipc`` transport exists yet), then
+formats the returned ``Decision``.
 """
 
 from __future__ import annotations

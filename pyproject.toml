@@ -5,7 +5,9 @@ description = "Privacy-first, plugin-based agent kernel for Linux."
 requires-python = ">=3.12"
 license = { text = "MIT" }
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "jeepney>=0.9.0",
+]
 
 [project.scripts]
 jarvis = "jarvis.cli:main"
@@ -92,6 +94,14 @@ convention = "google"
 strict = true
 warn_unreachable = true
 exclude = ["tests/fixtures"]
+
+[[tool.mypy.overrides]]
+# jeepney ships no py.typed marker (its source is annotated, but it
+# doesn't opt in to being type-checked by consumers), so mypy strict
+# treats every import from it as untyped. This is the one place in
+# src/ that talks to a third-party runtime dependency at all.
+module = "jeepney.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config --cov"
