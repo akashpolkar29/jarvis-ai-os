@@ -19,18 +19,22 @@ real presence signal (that's future work).
 :class:`~jarvis.ports.audit_storage.AuditStoragePort` as a single
 JSON file. ``MprisMediaPlayerAdapter`` implements
 :class:`~jarvis.ports.media_player.MediaPlayerPort` by talking MPRIS
-over D-Bus to whichever media player is currently running. None of
-these adapters depend on each other.
+over D-Bus to whichever media player is currently running.
+``LocalFileSystemAdapter`` implements
+:class:`~jarvis.ports.file_system.FileSystemPort` via ``pathlib``.
+None of these adapters depend on each other.
 """
 
 from __future__ import annotations
 
 from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
+from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
 
 __all__ = [
     "JsonFileAuditStorageAdapter",
+    "LocalFileSystemAdapter",
     "ManualConfirmationAdapter",
     "MprisMediaPlayerAdapter",
 ]

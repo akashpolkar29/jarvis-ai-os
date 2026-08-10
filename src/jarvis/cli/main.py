@@ -1,12 +1,12 @@
 """The CLI's argument parsing and result formatting -- no business logic.
 
 :func:`main` parses argv into a subcommand (``ping``, ``play``,
-``pause``, ``next``, ``previous``) and the confirmation/chain-path
-flags every subcommand shares, calls the matching
+``pause``, ``next``, ``previous``, ``read``) and the confirmation/
+chain-path flags every subcommand shares, calls the matching
 ``jarvis.kernel`` composition function, and formats the returned
-``Decision`` for a terminal. It decides nothing about policy or
-capabilities itself -- that is exactly the line this ring's own
-docstring draws.
+``Decision`` (and, for ``read``, the file content) for a terminal. It
+decides nothing about policy or capabilities itself -- that is exactly
+the line this ring's own docstring draws.
 """
 
 from __future__ import annotations
@@ -17,12 +17,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.domain.errors import JarvisError
+from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
 from jarvis.kernel.music import MusicCommand, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from jarvis.domain.provenance import Tainted
 
 _DEFAULT_CHAIN_PATH = Path("audit_chain.json")
 
@@ -79,6 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
     previous_parser = subparsers.add_parser("previous", help="Go back to the previous track.")
     _add_common_flags(previous_parser)
 
+    read_parser = subparsers.add_parser(
+        "read", help="Read a local file's contents (scoped to your home directory)."
+    )
+    read_parser.add_argument("path", type=Path, help="The file to read.")
+    _add_common_flags(read_parser)
+
     return parser
 
 
@@ -90,12 +99,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             to ``sys.argv[1:]`` (argparse's own default) when ``None``.
 
     Returns:
-        ``0`` if the call was granted, ``1`` if denied, if a
-        JarvisError was raised (e.g. a tampered audit chain), if no
-        media player was reachable for a granted music command, or if
-        a reachable player rejected the command it was sent.
+        ``0`` if the call was granted, ``1`` if denied, or if any of
+        the errors below was raised.
     """
     args = _build_parser().parse_args(argv)
+    content: Tainted[str] | None = None
 
     try:
         if args.command == "ping":
@@ -104,6 +112,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 remote_confirmation_available=args.remote_confirmation_available,
                 chain_path=args.chain_path,
             )
+        elif args.command == "read":
+            outcome = authorize_and_read_file(
+                args.path,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+            decision = outcome.decision
+            content = outcome.content
         else:
             decision = authorize_and_run_music_command(
                 _MUSIC_COMMANDS[args.command],
@@ -111,10 +128,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 remote_confirmation_available=args.remote_confirmation_available,
                 chain_path=args.chain_path,
             )
-    except (JarvisError, NoMediaPlayerRunningError, MediaPlayerCommandFailedError) as exc:
+    except (
+        JarvisError,
+        NoMediaPlayerRunningError,
+        MediaPlayerCommandFailedError,
+        PathOutsideAllowedScopeError,
+        OSError,
+        UnicodeDecodeError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     status = "GRANTED" if decision.granted else "DENIED"
     print(f"{args.command}: {status} (tier={decision.tier.name}, reasons={decision.reasons})")
+    if content is not None:
+        print(content.value)
     return 0 if decision.granted else 1

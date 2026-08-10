@@ -43,17 +43,18 @@ from jarvis.domain.capability import (
     Tier,
 )
 from jarvis.domain.policy import Decision, DecisionReason
-from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.provenance import Classification, Provenance, Tainted
+from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.media_player import NoMediaPlayerRunningError
 
 
-def _make_decision(*, granted: bool) -> Decision:
+def _make_decision(*, granted: bool, capability_id: str = "music.pause") -> Decision:
     """Build a minimal Decision for a stubbed kernel call to return."""
     descriptor = CapabilityDescriptor(
-        id=CapabilityId("music.pause"),
+        id=CapabilityId(capability_id),
         effects=Effect.WRITE_LOCAL,
-        description="Pause playback.",
+        description="A test capability.",
     )
     invocation = CapabilityInvocation(descriptor, Tainted({}, Provenance.user()))
     return Decision(
@@ -236,3 +237,117 @@ def test_music_subcommand_reports_no_media_player_cleanly(
     assert exit_code == 1
     assert "Error:" in captured.err
     assert "No MPRIS media player" in captured.err
+
+
+def test_read_subcommand_routes_the_given_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`jarvis read <path>` calls authorize_and_read_file with that path."""
+    received: list[Path] = []
+    file_path = tmp_path / "note.txt"
+
+    def fake_authorize_and_read(
+        path: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileReadOutcome:
+        received.append(path)
+        provenance = Provenance.external("note.txt", Classification.SENSITIVE)
+        content = Tainted("file contents", provenance)
+        decision = _make_decision(granted=True, capability_id="fs.read_file")
+        return FileReadOutcome(decision=decision, content=content)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_file", fake_authorize_and_read
+    )
+
+    exit_code = main(["read", str(file_path), "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert received == [file_path]
+    assert exit_code == 0
+
+
+def test_read_subcommand_prints_the_file_content_when_granted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() prints the decision line and then the file's content."""
+
+    def fake_authorize_and_read(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileReadOutcome:
+        content = Tainted("hello from a file", Provenance.external("x", Classification.SENSITIVE))
+        decision = _make_decision(granted=True, capability_id="fs.read_file")
+        return FileReadOutcome(decision=decision, content=content)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_file", fake_authorize_and_read
+    )
+
+    exit_code = main(
+        ["read", str(tmp_path / "note.txt"), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "read: GRANTED" in captured.out
+    assert "hello from a file" in captured.out
+    assert exit_code == 0
+
+
+def test_read_subcommand_reports_path_outside_scope_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PathOutsideAllowedScopeError from the kernel surfaces as a clean message, not a traceback."""
+
+    def fake_authorize_and_read(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileReadOutcome:
+        msg = "/etc/shadow is outside the allowed root /home/user."
+        raise PathOutsideAllowedScopeError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_file", fake_authorize_and_read
+    )
+
+    exit_code = main(["read", "/etc/shadow", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "outside the allowed root" in captured.err
+
+
+def test_read_subcommand_reports_file_not_found_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted-but-nonexistent path surfaces as a clean message, not a raw traceback."""
+
+    def fake_authorize_and_read(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileReadOutcome:
+        raise FileNotFoundError(2, "No such file or directory", "missing.txt")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_file", fake_authorize_and_read
+    )
+
+    exit_code = main(
+        ["read", str(tmp_path / "missing.txt"), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
