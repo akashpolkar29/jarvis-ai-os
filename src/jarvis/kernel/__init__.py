@@ -22,10 +22,18 @@ playback command) rather than a no-op.
 scales with its argument (the path) rather than only its capability's
 Effect type -- see its own module docstring for the resulting
 pre-authorization scope check and the audit-trail gap it creates.
+
+``build_default_registry`` is the single place every capability jarvis
+knows about is declared -- ``authorize_ping``,
+``authorize_and_run_music_command``, and ``authorize_and_read_file``
+each call it internally rather than constructing their own
+descriptors inline. See ``kernel.capabilities`` for why it takes no
+injectable registry parameter.
 """
 
 from __future__ import annotations
 
+from .capabilities import build_default_registry
 from .files import FileReadOutcome, PathOutsideAllowedScopeError, authorize_and_read_file
 from .music import MusicCommand, authorize_and_run_music_command
 from .ping import authorize_ping
@@ -37,4 +45,5 @@ __all__ = [
     "authorize_and_read_file",
     "authorize_and_run_music_command",
     "authorize_ping",
+    "build_default_registry",
 ]

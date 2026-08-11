@@ -2,12 +2,13 @@
 
 :func:`authorize_ping` is the kernel's first real job: it is the one
 place that knows about every ring at once (per this package's own
-docstring), wiring a :class:`~jarvis.domain.registry.CapabilityRegistry`,
+docstring), wiring a :class:`~jarvis.domain.registry.CapabilityRegistry`
+(built by :func:`~jarvis.kernel.capabilities.build_default_registry`),
 an :class:`~jarvis.adapters.audit_storage.JsonFileAuditStorageAdapter`,
 a :class:`~jarvis.adapters.confirmation.ManualConfirmationAdapter`, and
 an :class:`~jarvis.application.policy.AuthorizationOrchestrator`
-together for one authorization call against a single, hardcoded
-capability -- ``ping``, a no-op with ``Effect.READ_LOCAL`` (``Tier.ALLOW``).
+together for one authorization call against ``ping`` -- a no-op with
+``Effect.READ_LOCAL`` (``Tier.ALLOW``).
 
 This is a plain one-shot function, not a persistent in-process kernel
 object: each CLI invocation is already a fresh process, so there is no
@@ -33,17 +34,13 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
-from jarvis.domain.capability import CapabilityDescriptor, CapabilityId, Effect
 from jarvis.domain.provenance import Provenance, Tainted
-from jarvis.domain.registry import CapabilityRegistry
+from jarvis.kernel.capabilities import PING_CAPABILITY_ID, build_default_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from jarvis.domain.policy import Decision
-
-PING_CAPABILITY_ID = CapabilityId("ping")
-"""The hardcoded capability id this module registers and authorizes."""
 
 
 def authorize_ping(
@@ -69,13 +66,7 @@ def authorize_ping(
         durably appended to the chain at ``chain_path`` by the time
         this returns.
     """
-    registry = CapabilityRegistry()
-    ping_descriptor = CapabilityDescriptor(
-        id=PING_CAPABILITY_ID,
-        effects=Effect.READ_LOCAL,
-        description="A no-op capability that proves the authorization stack is wired end-to-end.",
-    )
-    registry.register(ping_descriptor)
+    registry = build_default_registry()
 
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()

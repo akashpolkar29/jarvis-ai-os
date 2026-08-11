@@ -2,8 +2,10 @@
 
 :func:`authorize_and_read_file` follows the same composition-root
 shape as :func:`~jarvis.kernel.music.authorize_and_run_music_command`:
-build the registry/storage/confirmation/orchestrator pieces, authorize,
-act only if granted, save unconditionally via ``try``/``finally``.
+build the registry (via
+:func:`~jarvis.kernel.capabilities.build_default_registry`)/storage/
+confirmation/orchestrator pieces, authorize, act only if granted, save
+unconditionally via ``try``/``finally``.
 
 Effect and tier: ``fs.read_file`` is registered with
 ``Effect.EGRESS_LOCAL``, not ``Effect.READ_LOCAL``. Both currently
@@ -67,16 +69,12 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.file_system import LocalFileSystemAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
-from jarvis.domain.capability import CapabilityDescriptor, CapabilityId, Effect
 from jarvis.domain.provenance import Classification, Provenance, Tainted
-from jarvis.domain.registry import CapabilityRegistry
+from jarvis.kernel.capabilities import READ_FILE_CAPABILITY_ID, build_default_registry
 
 if TYPE_CHECKING:
     from jarvis.domain.policy import Decision
     from jarvis.ports.file_system import FileSystemPort
-
-READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
-"""The hardcoded capability id this module registers and authorizes."""
 
 
 class PathOutsideAllowedScopeError(Exception):
@@ -183,14 +181,7 @@ def authorize_and_read_file(  # noqa: PLR0913 -- one more than music's 5, for al
     """
     resolved_path = _resolve_within_scope(path, allowed_root or Path.home())
 
-    registry = CapabilityRegistry()
-    registry.register(
-        CapabilityDescriptor(
-            id=READ_FILE_CAPABILITY_ID,
-            effects=Effect.EGRESS_LOCAL,
-            description="Read a local file's contents, scoped to the allowed root.",
-        )
-    )
+    registry = build_default_registry()
 
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()

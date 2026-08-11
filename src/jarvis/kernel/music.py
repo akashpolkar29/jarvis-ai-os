@@ -2,10 +2,12 @@
 
 :func:`authorize_and_run_music_command` extends the composition-root
 pattern :func:`~jarvis.kernel.ping.authorize_ping` established: it
-wires the same registry/storage/confirmation/orchestrator pieces
-together, plus a :class:`~jarvis.ports.media_player.MediaPlayerPort`,
-and is the first kernel function whose authorization decision gates a
-real, observable side effect rather than a no-op.
+wires the same registry (built by
+:func:`~jarvis.kernel.capabilities.build_default_registry`)/storage/
+confirmation/orchestrator pieces together, plus a
+:class:`~jarvis.ports.media_player.MediaPlayerPort`, and is the first
+kernel function whose authorization decision gates a real, observable
+side effect rather than a no-op.
 
 Effect and tier: all four capabilities (``music.play``, ``music.pause``,
 ``music.next``, ``music.previous``) are registered with
@@ -46,13 +48,19 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.media_player import MprisMediaPlayerAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
-from jarvis.domain.capability import CapabilityDescriptor, CapabilityId, Effect
 from jarvis.domain.provenance import Provenance, Tainted
-from jarvis.domain.registry import CapabilityRegistry
+from jarvis.kernel.capabilities import (
+    MUSIC_NEXT_CAPABILITY_ID,
+    MUSIC_PAUSE_CAPABILITY_ID,
+    MUSIC_PLAY_CAPABILITY_ID,
+    MUSIC_PREVIOUS_CAPABILITY_ID,
+    build_default_registry,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
     from jarvis.ports.media_player import MediaPlayerPort
 
@@ -67,34 +75,17 @@ class MusicCommand(Enum):
 
 
 _CAPABILITY_IDS: dict[MusicCommand, CapabilityId] = {
-    MusicCommand.PLAY: CapabilityId("music.play"),
-    MusicCommand.PAUSE: CapabilityId("music.pause"),
-    MusicCommand.NEXT: CapabilityId("music.next"),
-    MusicCommand.PREVIOUS: CapabilityId("music.previous"),
+    MusicCommand.PLAY: MUSIC_PLAY_CAPABILITY_ID,
+    MusicCommand.PAUSE: MUSIC_PAUSE_CAPABILITY_ID,
+    MusicCommand.NEXT: MUSIC_NEXT_CAPABILITY_ID,
+    MusicCommand.PREVIOUS: MUSIC_PREVIOUS_CAPABILITY_ID,
 }
+"""Maps this module's own dispatch enum to the ids build_default_registry() registers.
 
-_DESCRIPTIONS: dict[MusicCommand, str] = {
-    MusicCommand.PLAY: "Resume playback on the currently running MPRIS media player.",
-    MusicCommand.PAUSE: "Pause playback on the currently running MPRIS media player.",
-    MusicCommand.NEXT: "Skip to the next track on the currently running MPRIS media player.",
-    MusicCommand.PREVIOUS: (
-        "Go back to the previous track on the currently running MPRIS media player."
-    ),
-}
-
-
-def _build_registry() -> CapabilityRegistry:
-    """Register the whole music.* family, regardless of which single command is running."""
-    registry = CapabilityRegistry()
-    for command, capability_id in _CAPABILITY_IDS.items():
-        registry.register(
-            CapabilityDescriptor(
-                id=capability_id,
-                effects=Effect.WRITE_LOCAL,
-                description=_DESCRIPTIONS[command],
-            )
-        )
-    return registry
+The ids themselves are declared once in ``kernel.capabilities`` -- this
+dict is purely a local dispatch concern (which enum member means which
+id), not a second source of truth for what the ids are.
+"""
 
 
 def _run(media_player: MediaPlayerPort, command: MusicCommand) -> None:
@@ -143,7 +134,7 @@ def authorize_and_run_music_command(
         (barring an exception it raised); if denied, it was never
         touched at all.
     """
-    registry = _build_registry()
+    registry = build_default_registry()
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()
 
