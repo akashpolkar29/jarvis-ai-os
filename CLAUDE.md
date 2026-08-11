@@ -1,6 +1,6 @@
 # JARVIS AI OS
 
-Privacy-first, plugin-based agent kernel for Linux. Pre-alpha, Milestone 0.
+Privacy-first, plugin-based agent kernel for Linux. Pre-alpha. Milestone 0 complete (v0.1.0).
 
 ## Baseline
 `docs/architecture/` and `docs/adr/` are approved and frozen. They are the source of truth, not this file.
@@ -13,7 +13,7 @@ domain (stdlib only, no I/O, no async) → ports (Protocols) → application (us
 
 Core principles:
 - The kernel knows capabilities, not agents. New features are plugins; nothing in domain/application/ports names a specific integration (no "email agent", no vendor names).
-- No shell. Capabilities declare typed effects (READ_LOCAL, WRITE_LOCAL, DESTRUCTIVE, IRREVERSIBLE, CREDENTIAL, EGRESS_SENSITIVE, etc). A single Policy Engine evaluates effects against a Tier (ALLOW/CONFIRM/MANUAL_ONLY/DENY) at one choke point. Command blocklists are never used.
+- No shell. Capabilities declare typed effects (READ_LOCAL, WRITE_LOCAL, EGRESS_LOCAL, DESTRUCTIVE, IRREVERSIBLE, CREDENTIAL, EGRESS_SENSITIVE, etc). A single Policy Engine evaluates effects against a Tier (ALLOW/CONFIRM/MANUAL_ONLY/DENY) at one choke point. Command blocklists are never used.
 - Every value carries Provenance (Trust: USER_DIRECT/SYSTEM/UNTRUSTED_EXTERNAL; Classification: PUBLIC/PERSONAL/SENSITIVE/SECRET). Values are wrapped Tainted[T]. Untrusted external content (web pages, emails, READMEs) escalates the required permission tier automatically.
 - Voice/speaker verification is a convenience filter, never an authorization boundary (defeated by replay/cloning). Physical interaction with the machine is the real auth boundary.
 - Privacy: SECRET data (API keys, passwords, tokens) is DENY to any cloud provider, always, no exceptions, never enters model context. SENSITIVE data (personal info, third-party confidential data) may go to a cloud provider only behind explicit CONFIRM. Where classification of a task's inputs is uncertain, it fails closed — inherits the highest classification present. Secrets live only in the system keyring, referenced, never stored as values, never in source, database, or audit log.
@@ -22,7 +22,9 @@ Core principles:
 - Multi-provider reasoning (ChatGPT, Claude, others): both are trusted providers behind a ReasoningPort abstraction. No vendor names anywhere in domain/application/ports. Passing validation (build/test/lint/execution) is always stronger evidence than model agreement. An escalation ladder tries cheap deterministic fixes first, then self-repair, before ever consulting a second provider. Models never merge implementations — the arbiter selects one candidate unmodified, never a splice of two. A reviewing model must produce a failing test case, not a verdict/opinion. A test authored by a provider carries zero weight when scoring that same provider's own candidate.
 - Audit log: every capability invocation is logged, hash-chained (tamper-evident), argument VALUES are never logged (only digests — secrets must never appear in the audit trail), and headers/payloads are split so payloads can be redacted without breaking the chain.
 
-## Workflow — one work package at a time, per docs/architecture/roadmap.md
+## Workflow — one work package at a time, as directed
+
+`docs/architecture/roadmap.md` does not exist yet (see `docs/architecture/README.md`); work package sequencing and scope come directly from the user in conversation, not from a roadmap file. If `roadmap.md` is ever supplied, this section should be updated to reference it for real.
 
 For each work package: Analysis → Plan → Implement → Verify (all gates) → Review. You may move through these phases without stopping for approval at each one (I've approved autonomous execution for now), but ALWAYS stop completely at the end of a work package and report before starting the next one.
 

@@ -2,9 +2,34 @@
 
 Privacy-first, plugin-based agent kernel for Linux.
 
-**Status:** pre-alpha, Milestone 0 (repository scaffold). Nothing here runs
-yet — this work package establishes the project layout and the quality
-gates every later work package must pass.
+**Status:** pre-alpha, Milestone 0 complete (work packages 1–16, tagged
+`v0.1.0`). What works today: a capability-based policy engine enforcing
+a four-tier authorization ladder, a hash-chained and persisted audit
+log, a capability registry, and a working `jarvis` CLI exposing two
+real capability families — MPRIS media control (`play`/`pause`/`next`/
+`previous`) and scope-checked local file reading (`read`) — alongside
+`ping`, the no-op that proved the stack end-to-end first. There is no
+dynamic plugin loading, no IPC transport, and no real physical-presence
+detection yet — see `docs/plugin-guide/`, `docs/protocol/`, and
+`docs/threat-model/v0.md` for exactly what's real and what isn't.
+
+## Try it
+
+```sh
+uv sync --all-groups
+uv run jarvis ping --chain-path /tmp/audit_chain.json
+uv run jarvis read ~/some-file.txt --chain-path /tmp/audit_chain.json
+uv run jarvis pause --physical-confirmation-available --chain-path /tmp/audit_chain.json
+uv run jarvis --help
+```
+
+Every invocation authorizes (and, if granted, runs) exactly one
+capability, then appends a record to the audit chain at
+`--chain-path`. See `docs/protocol/README.md` for the full CLI
+interface, and `docs/threat-model/v0.md` before assuming more
+protection than currently exists — in particular, confirmation flags
+are currently self-reported with no real presence detection behind
+them.
 
 ## Architecture
 
@@ -32,11 +57,25 @@ domain -> ports -> application -> adapters -> kernel -> ipc / cli
   command-line entry point.
 
 Everything the kernel knows about is a capability, not an agent — new
-features are plugins built against `jarvis.plugin_api`, which depends on
-`domain` only.
+features are meant to be plugins built against `jarvis.plugin_api`,
+which depends on `domain` only. Today, `jarvis.plugin_api` has no real
+content yet and every capability is registered directly in
+`kernel/capabilities.py` — see `docs/plugin-guide/README.md` for how
+to add one under the current, pre-dynamic-loading setup.
 
 See `docs/architecture/` for the full, approved design and `docs/adr/`
 for the individual decisions behind it.
+
+## Documentation
+
+- **[`docs/protocol/README.md`](docs/protocol/README.md)** — the
+  actual CLI interface: subcommands, flags, exit codes, what gets
+  audited.
+- **[`docs/plugin-guide/README.md`](docs/plugin-guide/README.md)** —
+  how to add a new capability today, worked from the two that exist.
+- **[`docs/threat-model/v0.md`](docs/threat-model/v0.md)** — what is
+  and isn't actually defended against right now. Read this before
+  trusting the system with anything that matters.
 
 ## Privacy model
 
