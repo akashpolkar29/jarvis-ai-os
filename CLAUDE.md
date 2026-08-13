@@ -3,7 +3,10 @@
 Privacy-first, plugin-based agent kernel for Linux. Pre-alpha. Milestone 0 complete (v0.1.0).
 
 ## Baseline
-`docs/architecture/` and `docs/adr/` are approved and frozen. They are the source of truth, not this file.
+`docs/architecture/` and `docs/adr/` are approved and frozen. They are the source of truth, not this file. This includes `docs/architecture/m1-voice-architecture.md` alongside `m0-architecture.md`, `m2-reasoning-layer.md`, `system-design.md`, and `roadmap.md`.
+
+## Current Status
+M0 complete, tagged v0.1.1. M1 (voice) is architected but not started — see `docs/architecture/m1-voice-architecture.md`. Next work package: WP-19, a standalone proof-of-concept script (outside the formal architecture) proving openWakeWord + faster-whisper work on this machine's real microphone and GPU before any ports/adapters are built.
 
 ## Architecture summary (see docs/architecture/ for full detail)
 
