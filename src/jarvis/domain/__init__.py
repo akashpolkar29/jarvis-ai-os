@@ -20,7 +20,15 @@ Constraints, enforced by tooling rather than convention:
 
 from __future__ import annotations
 
-from .audit import GENESIS_PREVIOUS_HASH, AuditChain, AuditRecord, ChainVerificationResult
+from .audit import (
+    ARGUMENT_DIGEST_KEY,
+    GENESIS_PREVIOUS_HASH,
+    AuditChain,
+    AuditRecord,
+    ChainVerificationResult,
+    digest_argument_value,
+    digest_value,
+)
 from .capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -42,6 +50,7 @@ from .provenance import Classification, Provenance, Tainted, Trust
 from .registry import CapabilityRegistry
 
 __all__ = [
+    "ARGUMENT_DIGEST_KEY",
     "GENESIS_PREVIOUS_HASH",
     "AuditChain",
     "AuditRecord",
@@ -65,6 +74,8 @@ __all__ = [
     "Tainted",
     "Tier",
     "Trust",
+    "digest_argument_value",
+    "digest_value",
     "evaluate",
     "minimum_tier_for",
 ]

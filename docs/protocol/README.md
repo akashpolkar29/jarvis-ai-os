@@ -89,7 +89,11 @@ exception: `read` against a path outside the allowed root is rejected
 *before* authorization ever runs and produces **no** audit record at
 all — see Gap 4 in `docs/threat-model/v0.md`.
 
-Audited argument content is currently **not** digest-only, despite
+Audited argument content is digest-only, per
 `docs/adr/0027-audit-log-never-stores-argument-values-only-digests.md`
-saying it should be — see Gap 1 in `docs/threat-model/v0.md` before
-assuming anything written to `--chain-path` is safe to share.
+— only a sha256 digest of an argument value is ever persisted, never
+the value itself. `Provenance` metadata (trust, classification,
+sources) is not covered by this and is persisted in full — see
+Gap 1 (resolved) in `docs/threat-model/v0.md` for the exact scope and
+consequences, including that a pre-work-package-18 `--chain-path` file
+can no longer be loaded.

@@ -135,6 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         PathOutsideAllowedScopeError,
         OSError,
         UnicodeDecodeError,
+        KeyError,
+        ValueError,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

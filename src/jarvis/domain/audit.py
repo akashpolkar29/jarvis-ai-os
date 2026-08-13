@@ -22,6 +22,25 @@ instability for e.g. ``Provenance.sources``). Anything not covered by
 this scheme raises :class:`~jarvis.domain.errors.AuditRecordNotSerializable`
 rather than falling back to an unstable ``repr()``.
 
+One deliberate exception to that generic walk: a :class:`~.provenance.Tainted`
+value is never canonicalized by walking into its ``.value`` directly.
+Instead it is reduced to a digest of that value (see :func:`digest_value`)
+-- this is what makes it possible for
+:class:`~jarvis.adapters.audit_storage.JsonFileAuditStorageAdapter` to
+persist only a digest of a capability invocation's arguments, never
+the raw value, per ADR-0027 (work package 18; this was not true from
+work package 12 through work package 17, and was caught by the
+work-package-17 threat model, not by a test). See :func:`digest_value`
+and the ``Tainted`` branch inside :func:`_canonicalize` for the
+mechanism, and ``adapters/audit_storage.py`` for how it's used. One
+consequence stated plainly: because this changes what
+:func:`_canonicalize` produces for *every* ``Tainted`` value, every
+``record_hash`` computed before this change becomes invalid under the
+new formula -- including records whose arguments were empty. There is
+no migration path; a pre-work-package-18 audit chain file cannot be
+loaded by this version, by construction (the raw values needed to
+recompute a valid hash under the new formula were never persisted).
+
 Limitation, stated plainly: this chain detects any tampering with a
 single record, or any partial reordering that isn't accompanied by
 recomputing every subsequent hash. It does NOT protect against an
@@ -43,6 +62,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from .errors import AuditRecordNotSerializable, AuditRecordTampered
+from .provenance import Tainted
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -57,6 +77,25 @@ containing uppercase letters, which ``hashlib.sha256(...).hexdigest()``
 can never produce (it emits exactly 64 lowercase hex characters,
 always). This makes collision with a real hash impossible by
 construction, not merely astronomically unlikely.
+"""
+
+
+ARGUMENT_DIGEST_KEY = "__jarvis_argument_digest_sha256__"
+"""The reserved key a reconstructed, digest-only Tainted's ``.value`` uses.
+
+Set by :func:`jarvis.adapters.audit_storage._decode_arguments` when
+rebuilding a ``Tainted`` from a persisted digest (the raw value is
+never persisted -- see :func:`digest_value`). :func:`_canonicalize`
+recognizes a ``Mapping`` with exactly this one key as "already a
+digest" and reuses the stored hex string directly rather than hashing
+it a second time -- hashing it again would produce a different digest
+than the one computed the first time, breaking hash verification on
+every reload. The collision risk (a genuine capability argument
+mapping happening to contain exactly this key) is real but treated as
+negligible given the deliberately reserved-looking name; it is not
+possible to make this fully collision-proof without changing
+``CapabilityInvocation.arguments``'s domain-level type, which is out
+of proportion to this fix.
 """
 
 
@@ -78,17 +117,23 @@ def _canonicalize(value: object) -> object:
         return value.value
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    if isinstance(value, Tainted):
+        return _canonicalize_tainted(value)
     if isinstance(value, Mapping):
         return sorted((key, _canonicalize(val)) for key, val in value.items())
-    if isinstance(value, (list, tuple)):
-        return [_canonicalize(item) for item in value]
-    if isinstance(value, (frozenset, set)):
+    if isinstance(value, (list, tuple, frozenset, set)):
+        canonicalized_items = [_canonicalize(item) for item in value]
         # _canonicalize's declared return type is `object`, so mypy can't
-        # see that these items are always orderable in practice (e.g.
-        # Provenance.sources is frozenset[str]); an item that genuinely
-        # isn't orderable would raise TypeError here at runtime, which is
-        # an acceptable failure mode for content this scheme can't handle.
-        return sorted(_canonicalize(item) for item in value)  # type: ignore[type-var]
+        # see that frozenset/set items are always orderable in practice
+        # (e.g. Provenance.sources is frozenset[str]); an item that
+        # genuinely isn't orderable would raise TypeError here at
+        # runtime, an acceptable failure mode for content this scheme
+        # can't handle.
+        return (
+            sorted(canonicalized_items)  # type: ignore[type-var]
+            if isinstance(value, (frozenset, set))
+            else canonicalized_items
+        )
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return [
             (field.name, _canonicalize(getattr(value, field.name)))
@@ -96,6 +141,74 @@ def _canonicalize(value: object) -> object:
         ]
     msg = f"Cannot canonicalize value of type {type(value).__name__!r} for audit hashing."
     raise AuditRecordNotSerializable(msg)
+
+
+def _canonicalize_tainted(value: Tainted[object]) -> object:
+    """Canonicalize a Tainted as a digest of its value, never the value itself.
+
+    Checked before the generic dataclass branch would otherwise catch
+    ``Tainted`` (it is itself a dataclass) and walk into ``.value``
+    directly -- which is exactly the behavior this function replaces,
+    per ADR-0027 (work package 18).
+    """
+    value_digest = digest_argument_value(value)
+    return [("value_digest", value_digest), ("provenance", _canonicalize(value.provenance))]
+
+
+def digest_argument_value[T](arguments: Tainted[T]) -> str:
+    """Return the digest to use for a Tainted argument value, reusing one already computed.
+
+    If ``arguments.value`` is already the one-key
+    ``{ARGUMENT_DIGEST_KEY: <hex>}`` placeholder shape (only ever
+    produced by reconstructing a record from persisted storage -- see
+    ``adapters.audit_storage._decode_arguments``), the existing hex
+    digest is reused as-is rather than hashed again: hashing it a
+    second time would produce a different digest than the one computed
+    when the record was first appended, which would make every
+    reloaded-then-resaved record look tampered even though nothing
+    was. Otherwise, ``.value`` is real content and gets hashed fresh
+    via :func:`digest_value`.
+
+    This is the single source of truth both :func:`_canonicalize_tainted`
+    (live hash computation) and
+    ``adapters.audit_storage._encode_arguments`` (persistence) call --
+    deliberately the same function, not two independent copies of the
+    same detection logic, since a divergence between them would
+    silently reintroduce the double-hashing bug this exists to prevent.
+    """
+    raw = arguments.value
+    if isinstance(raw, Mapping) and set(raw.keys()) == {ARGUMENT_DIGEST_KEY}:
+        existing_digest = raw[ARGUMENT_DIGEST_KEY]
+        if isinstance(existing_digest, str):
+            return existing_digest
+    return digest_value(raw)
+
+
+def digest_value(value: object) -> str:
+    """Return the sha256 hex digest of ``value``'s canonical form.
+
+    Uses the exact same canonicalization :func:`_compute_record_hash`
+    already uses for tamper-detection hashing -- deliberately the same
+    kind of problem (deterministic, one-way, never needs to
+    reconstruct the original), not a different one, so reusing it here
+    is not a stretch. This is the public entry point for anything that
+    needs a stable, one-way digest of a value it must never be able to
+    (or need to) reverse -- e.g. ``adapters.audit_storage``'s
+    digest-only argument persistence (ADR-0027).
+
+    Args:
+        value: The value to digest.
+
+    Returns:
+        A 64-character lowercase sha256 hexdigest.
+
+    Raises:
+        AuditRecordNotSerializable: If ``value`` contains anything
+            :func:`_canonicalize` cannot represent.
+    """
+    canonical = _canonicalize(value)
+    serialized = json.dumps(canonical, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _compute_record_hash(sequence: int, decision: Decision, previous_hash: str) -> str:

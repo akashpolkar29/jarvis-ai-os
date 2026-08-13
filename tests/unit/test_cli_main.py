@@ -148,6 +148,32 @@ def test_ping_reports_a_tampered_chain_cleanly_and_exits_nonzero(
     assert "Error:" in captured.err
 
 
+def test_ping_reports_a_pre_digest_only_format_chain_cleanly_and_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A chain file written before work package 18 (raw "value", no "value_digest") errors cleanly.
+
+    There is no migration path (see domain/audit.py's module
+    docstring) -- the KeyError this raises during decode must still
+    surface as a clean "Error: ..." message and exit 1, not a raw
+    traceback, exactly like any other error a user can hit.
+    """
+    chain_path = tmp_path / "audit_chain.json"
+    main(["ping", "--chain-path", str(chain_path)])
+    raw = json.loads(chain_path.read_text(encoding="utf-8"))
+    for record in raw:
+        arguments = record["decision"]["invocation"]["arguments"]
+        arguments["value"] = {}
+        del arguments["value_digest"]
+    chain_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    exit_code = main(["ping", "--chain-path", str(chain_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+
+
 @pytest.mark.parametrize(
     ("subcommand", "expected_command"),
     [

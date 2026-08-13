@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.domain.audit import (
+    ARGUMENT_DIGEST_KEY,
     GENESIS_PREVIOUS_HASH,
     AuditChain,
     AuditRecord,
+    digest_argument_value,
+    digest_value,
 )
 from jarvis.domain.capability import (
     CapabilityDescriptor,
@@ -140,3 +143,77 @@ def test_audit_record_is_frozen() -> None:
     record = chain.append(_decision())
     with pytest.raises(dataclasses.FrozenInstanceError):
         record.sequence = 99  # type: ignore[misc]
+
+
+def test_digest_value_is_deterministic() -> None:
+    """digest_value() returns the same hexdigest for the same input every time."""
+    value = {"path": "/home/user/secret.txt"}
+    assert digest_value(value) == digest_value(value)
+
+
+def test_digest_value_is_a_sha256_hexdigest() -> None:
+    """digest_value() returns exactly 64 lowercase hex characters."""
+    digest = digest_value({"path": "/home/user/secret.txt"})
+    assert len(digest) == _SHA256_HEXDIGEST_LENGTH
+    assert set(digest).issubset(_HEX_DIGITS)
+
+
+def test_digest_value_distinguishes_different_inputs() -> None:
+    """digest_value() produces different output for different input."""
+    assert digest_value({"path": "/a"}) != digest_value({"path": "/b"})
+
+
+def test_record_hash_is_sensitive_to_the_argument_value() -> None:
+    """Two decisions differing only in argument value produce different record hashes.
+
+    Proves the argument value's digest genuinely participates in
+    record_hash (not, say, a constant placeholder regardless of
+    content) -- see test_reloaded_digest_placeholder_is_not_rehashed
+    below for the complementary proof that a digest already computed
+    once is echoed, not rehashed, on reload.
+    """
+    chain_a = AuditChain()
+    chain_b = AuditChain()
+    record_a = chain_a.append(_decision({"path": "/home/user/a.txt"}))
+    record_b = chain_b.append(_decision({"path": "/home/user/b.txt"}))
+    assert record_a.record_hash != record_b.record_hash
+
+
+def test_digest_argument_value_treats_a_non_string_digest_key_value_as_real_content() -> None:
+    """A Mapping with exactly the ARGUMENT_DIGEST_KEY but a non-str value is not the placeholder.
+
+    The placeholder shape is specifically {ARGUMENT_DIGEST_KEY: <hex
+    str>} -- only ever produced by _decode_arguments. A genuine
+    argument value that happens to have this one key with, say, an int
+    value is real content and must be hashed normally via
+    digest_value(), not mistaken for an already-computed digest.
+    """
+    value = {ARGUMENT_DIGEST_KEY: 12345}
+    tainted = Tainted(value, Provenance.user())
+    assert digest_argument_value(tainted) == digest_value(value)
+
+
+def test_reloaded_digest_placeholder_is_not_rehashed() -> None:
+    """A Tainted wrapping the ARGUMENT_DIGEST_KEY placeholder hashes using that digest as-is.
+
+    This is the mechanism that makes AuditChain.verify() succeed after
+    a save()/load() round-trip through JsonFileAuditStorageAdapter: the
+    digest computed once at save time must be echoed byte-for-byte at
+    verify time, never hashed a second time (which would produce a
+    different result and make every reloaded record look tampered).
+    """
+    real_value = {"path": "/home/user/secret.txt"}
+    value_digest = digest_value(real_value)
+
+    fresh_decision = _decision(real_value)
+    fresh_record = AuditChain().append(fresh_decision)
+
+    placeholder_decision = _decision({ARGUMENT_DIGEST_KEY: value_digest})
+    reconstructed_record = AuditRecord(
+        sequence=0,
+        decision=placeholder_decision,
+        previous_hash=GENESIS_PREVIOUS_HASH,
+        record_hash=fresh_record.record_hash,
+    )
+
+    assert reconstructed_record.record_hash == fresh_record.record_hash

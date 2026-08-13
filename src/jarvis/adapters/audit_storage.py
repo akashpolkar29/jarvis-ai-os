@@ -36,15 +36,19 @@ inconsistency this project avoids elsewhere. Call ``.verify()`` on the
 result explicitly if that guarantee is needed -- it already exists and
 is a single call.
 
-Scope limitation, stated plainly: ``CapabilityInvocation.arguments``
-wraps a ``Mapping[str, object]`` whose value type is genuinely
-unconstrained by the domain. This adapter encodes/decodes that payload
-with plain ``json.dumps``/``json.loads`` -- JSON-native content
-(dict/list/str/int/float/bool/None) round-trips exactly; a
-``frozenset`` or custom object nested *inside* an argument value would
-not. Every existing test in this codebase only ever puts JSON-native
-content in arguments; extending this to the full canonicalizable-type
-surface is real future work, not built speculatively here.
+Argument values, specifically, are the one exception to "type-preserving,
+reconstructible round-tripping" stated above: per ADR-0027, this
+adapter persists only a sha256 digest of a ``CapabilityInvocation``'s
+``Tainted`` argument value (via ``jarvis.domain.audit.digest_value``),
+never the value itself. ``_decode_arguments`` cannot and does not
+reconstruct the original value -- it rebuilds a ``Tainted`` whose
+``.value`` is a reserved placeholder shape wrapping the persisted
+digest (see ``jarvis.domain.audit.ARGUMENT_DIGEST_KEY``). This is a
+deliberate, permanent, one-way loss of information, not a gap: it is
+the entire point of the fix (work package 18). ``Provenance`` (trust,
+classification, sources) is unaffected and still round-trips in full --
+ADR-0027 scopes the digest-only requirement to argument *values*, not
+their provenance metadata.
 
 Not handled here: atomic writes (temp-file-then-rename). A crash
 mid-``save`` can leave a partially-written file. Real robustness
@@ -56,7 +60,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from jarvis.domain.audit import AuditChain, AuditRecord
+from jarvis.domain.audit import ARGUMENT_DIGEST_KEY, AuditChain, AuditRecord, digest_argument_value
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -91,16 +95,37 @@ def _decode_provenance(data: dict[str, Any]) -> Provenance:
 
 
 def _encode_arguments(arguments: Tainted[Mapping[str, object]]) -> dict[str, Any]:
-    """Encode a CapabilityInvocation's Tainted arguments to JSON-primitive fields."""
+    """Encode a CapabilityInvocation's Tainted arguments -- a digest, never the raw value.
+
+    Per ADR-0027: the audit log records only a digest of a capability
+    invocation's arguments, never the argument values themselves. Uses
+    ``jarvis.domain.audit.digest_argument_value`` -- not a plain
+    ``digest_value(arguments.value)`` call -- because a record already
+    loaded from storage (its ``.value`` already the digest-placeholder
+    shape) must have its existing digest reused verbatim on re-save,
+    not hashed a second time; see that function's own docstring for why
+    a second, independent copy of this detection logic here would
+    silently reintroduce the double-hashing bug it exists to prevent.
+    """
     return {
-        "value": dict(arguments.value),
+        "value_digest": digest_argument_value(arguments),
         "provenance": _encode_provenance(arguments.provenance),
     }
 
 
 def _decode_arguments(data: dict[str, Any]) -> Tainted[Mapping[str, object]]:
-    """Decode a CapabilityInvocation's Tainted arguments from its encoded fields."""
-    return Tainted(dict(data["value"]), _decode_provenance(data["provenance"]))
+    """Decode a CapabilityInvocation's Tainted arguments from their persisted digest.
+
+    The raw argument value was never persisted (see :func:`_encode_arguments`),
+    so this reconstructs a ``Tainted`` whose ``.value`` is the reserved
+    one-key digest-placeholder shape ``domain.audit._canonicalize`` knows
+    to recognize and pass through as-is rather than re-hashing -- see
+    ``domain.audit.ARGUMENT_DIGEST_KEY``'s own docstring for why.
+    """
+    return Tainted(
+        {ARGUMENT_DIGEST_KEY: data["value_digest"]},
+        _decode_provenance(data["provenance"]),
+    )
 
 
 def _encode_descriptor(descriptor: CapabilityDescriptor) -> dict[str, Any]:
