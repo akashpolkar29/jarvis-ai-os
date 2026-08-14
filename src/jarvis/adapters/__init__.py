@@ -22,7 +22,9 @@ JSON file. ``MprisMediaPlayerAdapter`` implements
 over D-Bus to whichever media player is currently running.
 ``LocalFileSystemAdapter`` implements
 :class:`~jarvis.ports.file_system.FileSystemPort` via ``pathlib``.
-None of these adapters depend on each other.
+``OpenWakeWordAdapter`` implements
+:class:`~jarvis.ports.wake_word.WakeWordPort` via openWakeWord's tflite
+inference path. None of these adapters depend on each other.
 """
 
 from __future__ import annotations
@@ -31,10 +33,12 @@ from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
+from .wake_word import OpenWakeWordAdapter
 
 __all__ = [
     "JsonFileAuditStorageAdapter",
     "LocalFileSystemAdapter",
     "ManualConfirmationAdapter",
     "MprisMediaPlayerAdapter",
+    "OpenWakeWordAdapter",
 ]

@@ -7,6 +7,11 @@ license = { text = "MIT" }
 readme = "README.md"
 dependencies = [
     "jeepney>=0.9.0",
+    "openwakeword==0.6.0",
+    "ai-edge-litert",
+    "sounddevice",
+    "numpy",
+    "platformdirs",
 ]
 
 [project.scripts]
@@ -18,6 +23,20 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jarvis"]
+
+[tool.uv]
+# openwakeword>=0.5.0 declares a hard, unconditional-on-Linux dependency
+# on tflite-runtime, whose last-ever PyPI wheel supports up to Python
+# 3.11 only -- no cp312/cp313 wheel exists at all (see
+# poc/wp19_03_wakeword_smoke.py for the empirical trail: WP-19 hit this
+# as a real resolver failure, not a hypothetical). This override
+# replaces that requirement with an always-false marker, which is not a
+# version-pin trick -- it makes uv treat the requirement as never
+# applicable, so resolution succeeds without needing a real
+# tflite-runtime install at all. ai-edge-litert (a real dependency,
+# above) is what actually provides the interpreter at runtime, via the
+# tflite_runtime compatibility shim in adapters/wake_word.py.
+override-dependencies = ["tflite-runtime; python_version < '0'"]
 
 [tool.uv.workspace]
 members = ["plugins/*"]
@@ -98,9 +117,16 @@ exclude = ["tests/fixtures"]
 [[tool.mypy.overrides]]
 # jeepney ships no py.typed marker (its source is annotated, but it
 # doesn't opt in to being type-checked by consumers), so mypy strict
-# treats every import from it as untyped. This is the one place in
-# src/ that talks to a third-party runtime dependency at all.
+# treats every import from it as untyped.
 module = "jeepney.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# sounddevice and openwakeword ship no py.typed marker / type stubs
+# either -- both used only via lazy imports inside
+# adapters/wake_word.py's real-hardware path (see that module's
+# docstring for why the imports are lazy in the first place).
+module = ["sounddevice.*", "openwakeword.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

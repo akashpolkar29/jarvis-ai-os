@@ -48,6 +48,7 @@ from .errors import (
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 from .registry import CapabilityRegistry
+from .wake_word import WakeEvent
 
 __all__ = [
     "ARGUMENT_DIGEST_KEY",
@@ -74,6 +75,7 @@ __all__ = [
     "Tainted",
     "Tier",
     "Trust",
+    "WakeEvent",
     "digest_argument_value",
     "digest_value",
     "evaluate",

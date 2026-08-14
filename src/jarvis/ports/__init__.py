@@ -17,7 +17,8 @@ is the seam between an :class:`~jarvis.domain.audit.AuditChain` and
 durable storage. ``MediaPlayerPort`` is the seam between an authorized
 playback command and a real, currently-running media player.
 ``FileSystemPort`` is the seam between an authorized read and a real
-file on disk.
+file on disk. ``WakeWordPort`` is the seam between a real audio source
+and a stream of confirmed wake-word detection events.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
+from .wake_word import WakeWordPort
 
 __all__ = [
     "AuditStoragePort",
@@ -34,4 +36,5 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "WakeWordPort",
 ]
