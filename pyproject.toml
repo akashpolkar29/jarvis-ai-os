@@ -17,6 +17,7 @@ dependencies = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12==9.*",
     "piper-tts",
+    "pygobject>=3.56.3",
 ]
 
 [project.scripts]
@@ -150,6 +151,13 @@ ignore_missing_imports = true
 module = "piper.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# gi (PyGObject) ships no py.typed marker / type stubs either -- used
+# only via a lazy import inside ui/confirm/dialog.py's real-display path
+# (see that module's docstring for why the import is lazy).
+module = "gi.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config --cov"
 asyncio_mode = "auto"
@@ -164,12 +172,13 @@ source = ["src/jarvis"]
 root_packages = ["jarvis"]
 include_external_packages = true
 
-# NOTE: Contracts for plugin isolation (C3), adapter independence (C4), and
-# ui privilege (C5) are intentionally NOT configured yet: import-linter
-# errors on a contract naming a package that does not yet exist on disk.
-# Those packages (plugins/*, per-adapter subpackages, jarvis.ui) arrive in
-# later work packages; see tests/meta/test_gate_integrity.py::CONTRACT_SCHEDULE
-# for when each is due.
+# NOTE: Contracts for plugin isolation (C3) and adapter independence (C4)
+# are intentionally NOT configured yet: import-linter errors on a contract
+# naming a package that does not yet exist on disk. Those packages
+# (plugins/*, per-adapter subpackages) arrive in later work packages; see
+# tests/meta/test_gate_integrity.py::CONTRACT_SCHEDULE for when each is due.
+# C5 (ui privilege) is configured below as of WP-24, now that jarvis.ui
+# exists.
 
 [[tool.importlinter.contracts]]
 name = "C1 layered architecture"
@@ -182,6 +191,7 @@ layers = [
     "jarvis.application",
     "jarvis.ports",
     "jarvis.domain",
+    "jarvis.ui",
 ]
 exhaustive = false
 
@@ -210,6 +220,20 @@ name = "C7 plugin_api depends only on domain"
 type = "forbidden"
 source_modules = ["jarvis.plugin_api"]
 forbidden_modules = [
+    "jarvis.application",
+    "jarvis.adapters",
+    "jarvis.kernel",
+    "jarvis.ipc",
+    "jarvis.cli",
+]
+
+[[tool.importlinter.contracts]]
+name = "C5 ui privilege"
+type = "forbidden"
+source_modules = ["jarvis.ui"]
+forbidden_modules = [
+    "jarvis.domain",
+    "jarvis.ports",
     "jarvis.application",
     "jarvis.adapters",
     "jarvis.kernel",

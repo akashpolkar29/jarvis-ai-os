@@ -15,24 +15,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-CURRENT_WORK_PACKAGE = 1
+CURRENT_WORK_PACKAGE = 24
 
 # Work package at which each import-linter contract becomes configurable.
 # A contract can only be added once every package it names exists on
 # disk — import-linter errors on a contract naming a nonexistent
-# package. C4/C3/C5 are estimated from the roadmap concept described in
+# package. C4/C3 are estimated from the roadmap concept described in
 # CLAUDE.md (adapters arrive once there is more than one adapter to keep
 # independent; plugin isolation once plugins/* is a real workspace
-# member; ui privilege once a ui package exists) and should be corrected
-# against docs/architecture/roadmap.md once that document lands.
+# member) and should be corrected against docs/architecture/roadmap.md
+# once that document lands -- pushed forward, not implemented early,
+# since neither package (per-adapter subpackages, a real plugins/*
+# member) exists on disk yet. C5 (ui privilege) was one such estimate
+# too, until WP-24 made jarvis.ui real and configured it for real
+# below, which is why C5's number was corrected down to when that
+# concretely happened rather than left at its original guess.
 CONTRACT_SCHEDULE: dict[str, int] = {
     "C1 layered architecture": 1,
     "C2 domain purity": 1,
     "C6 no GLib in the core": 1,
     "C7 plugin_api depends only on domain": 1,
-    "C4 adapter independence": 7,
-    "C3 plugin isolation": 12,
-    "C5 ui privilege": 18,
+    "C5 ui privilege": 24,
+    "C4 adapter independence": 30,
+    "C3 plugin isolation": 30,
 }
 
 

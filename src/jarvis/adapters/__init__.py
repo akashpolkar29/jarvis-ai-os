@@ -33,7 +33,11 @@ CUDA. ``PiperTtsAdapter`` implements
 synthesis. ``UnverifiedSpeakerIdAdapter`` implements
 :class:`~jarvis.ports.speaker_id.SpeakerIdPort` as a deliberate stub --
 always unverified, no real model (see that module's docstring for
-why). None of these adapters depend on each other.
+why). ``Gtk4PhysicalConfirmationAdapter`` implements
+:class:`~jarvis.ports.physical_confirmation.PhysicalConfirmationPort`
+by delegating to the GTK4 dialog in ``jarvis.ui.confirm`` -- the only
+adapter in this ring permitted to reach into ``jarvis.ui``. None of
+these adapters depend on each other.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
+from .physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from .speaker_id import UnverifiedSpeakerIdAdapter
 from .stt import FasterWhisperAdapter
 from .tts import PiperTtsAdapter
@@ -50,6 +55,7 @@ from .wake_word import OpenWakeWordAdapter
 
 __all__ = [
     "FasterWhisperAdapter",
+    "Gtk4PhysicalConfirmationAdapter",
     "JsonFileAuditStorageAdapter",
     "LocalFileSystemAdapter",
     "ManualConfirmationAdapter",

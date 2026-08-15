@@ -20,6 +20,7 @@ _ALL_CONTRACTS = (
     "C2 domain purity",
     "C6 no GLib in the core",
     "C7 plugin_api depends only on domain",
+    "C5 ui privilege",
 )
 
 
@@ -90,6 +91,15 @@ def test_c7_plugin_api_violation_is_caught(tmp_path: Path) -> None:
     result = run_lint_imports(tmp_path, src_root)
     assert result.returncode != 0
     assert _contract_status(result.stdout, "C7 plugin_api depends only on domain") == "BROKEN"
+
+
+def test_c5_ui_privilege_violation_is_caught(tmp_path: Path) -> None:
+    """``ui`` importing any other jarvis package breaks C5."""
+    src_root = build_project_copy(tmp_path)
+    inject_import_violation(src_root / "jarvis" / "ui" / "__init__.py", "jarvis.domain")
+    result = run_lint_imports(tmp_path, src_root)
+    assert result.returncode != 0
+    assert _contract_status(result.stdout, "C5 ui privilege") == "BROKEN"
 
 
 def test_violation_does_not_spuriously_break_unrelated_contracts(tmp_path: Path) -> None:

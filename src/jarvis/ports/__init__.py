@@ -24,7 +24,11 @@ is the seam between a confirmed-speech segment and recognized text.
 ``TtsPort`` is the seam between recognized text and synthesized,
 playable audio. ``SpeakerIdPort`` is the seam between a confirmed-
 speech segment and a speaker-verification signal -- audit/UX only,
-never an authorization input (ADR-0012).
+never an authorization input (ADR-0012). ``PhysicalConfirmationPort``
+is the seam between a specific, in-flight request and a genuine
+physical approval or denial of it -- the Finding 2 closure
+(docs/threat-model/v0.md); distinct from ``ConfirmationPort``, see
+that module's own docstring for why.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
+from .physical_confirmation import PhysicalConfirmationPort
 from .speaker_id import SpeakerIdPort
 from .stt import SttPort
 from .tts import TtsPort
@@ -46,6 +51,7 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "PhysicalConfirmationPort",
     "SpeakerIdPort",
     "SttPort",
     "TtsPort",
