@@ -49,6 +49,7 @@ from .errors import (
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 from .registry import CapabilityRegistry
+from .speaker_id import SpeakerScore
 from .transcript import Transcript
 from .wake_word import WakeEvent
 
@@ -76,6 +77,7 @@ __all__ = [
     "PolicyContext",
     "Provenance",
     "Segment",
+    "SpeakerScore",
     "TaintViolation",
     "Tainted",
     "Tier",

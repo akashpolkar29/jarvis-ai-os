@@ -22,7 +22,9 @@ and a stream of confirmed wake-word detection events. ``VadPort`` is
 the seam between raw audio and confirmed-speech segments. ``SttPort``
 is the seam between a confirmed-speech segment and recognized text.
 ``TtsPort`` is the seam between recognized text and synthesized,
-playable audio.
+playable audio. ``SpeakerIdPort`` is the seam between a confirmed-
+speech segment and a speaker-verification signal -- audit/UX only,
+never an authorization input (ADR-0012).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
+from .speaker_id import SpeakerIdPort
 from .stt import SttPort
 from .tts import TtsPort
 from .vad import VadPort
@@ -43,6 +46,7 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "SpeakerIdPort",
     "SttPort",
     "TtsPort",
     "VadPort",

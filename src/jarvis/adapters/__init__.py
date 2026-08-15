@@ -30,7 +30,10 @@ wrapper around Silero VAD's ONNX model. ``FasterWhisperAdapter``
 implements :class:`~jarvis.ports.stt.SttPort` via faster-whisper on
 CUDA. ``PiperTtsAdapter`` implements
 :class:`~jarvis.ports.tts.TtsPort` via piper-tts's CPU/ONNX voice
-synthesis. None of these adapters depend on each other.
+synthesis. ``UnverifiedSpeakerIdAdapter`` implements
+:class:`~jarvis.ports.speaker_id.SpeakerIdPort` as a deliberate stub --
+always unverified, no real model (see that module's docstring for
+why). None of these adapters depend on each other.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
+from .speaker_id import UnverifiedSpeakerIdAdapter
 from .stt import FasterWhisperAdapter
 from .tts import PiperTtsAdapter
 from .vad import SileroVadAdapter
@@ -53,4 +57,5 @@ __all__ = [
     "OpenWakeWordAdapter",
     "PiperTtsAdapter",
     "SileroVadAdapter",
+    "UnverifiedSpeakerIdAdapter",
 ]
