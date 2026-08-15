@@ -48,18 +48,19 @@ I/O at construction time" convention (see
 
 Testability seam, matching ``jarvis.adapters.media_player``'s
 ``_send_method_call_over_dbus``: :class:`OpenWakeWordAdapter` accepts an
-injectable ``score_source``, a zero-argument callable returning an
-async iterator of raw per-frame detection scores. Unit tests inject a
-fake one to verify :class:`_WakeWordDebouncer`'s firing behavior
+injectable ``frame_source``, a zero-argument callable returning an
+async iterator of ``(score, raw_chunk)`` pairs -- one per captured
+frame. Unit tests inject a fake one to verify :class:`_WakeWordDebouncer`'s
+firing behavior and the ring-buffer/post-trigger-capture wiring
 deterministically -- no real microphone, no real model, no real
 hardware at all. The default, real implementation,
-:meth:`OpenWakeWordAdapter._default_score_source`, is the one
+:meth:`OpenWakeWordAdapter._default_frame_source`, is the one
 genuinely untested-by-design piece: it requires a live microphone,
 exactly what cannot be relied on in CI. Its correctness is proven by
 manual verification instead (see
 ``docs/architecture/m1-voice-architecture.md`` section 10).
 
-Known simplification: ``_default_score_source`` performs blocking
+Known simplification: ``_default_frame_source`` performs blocking
 hardware I/O (``sounddevice``'s blocking read API) and CPU-bound model
 inference synchronously inside an ``async def`` generator, with no
 ``await`` points -- it blocks the event loop while running, rather than
@@ -68,6 +69,26 @@ manually-verified synchronous design exactly; making it genuinely
 non-blocking is real future work (likely at WP-25's kernel wiring,
 where the actual concurrency model across wake-word/VAD/STT/TTS gets
 decided), not attempted speculatively here.
+
+ADR-0033 (WP-25 finding): :meth:`stream` -- not ``frame_source`` --
+owns the :class:`_AudioRingBuffer` (previously constructed, pushed to,
+and never read inside what was ``_default_score_source``, a dead seam
+WP-20 apparently anticipated but never wired up). On a confirmed
+detection, :meth:`stream` snapshots the ring buffer (pre-trigger
+context) and then keeps pulling further ``(score, chunk)`` pairs from
+the *same* frame-source iterator -- not a new one, not a second
+capture -- for up to ``post_trigger_capture_s`` more seconds (default
+:data:`POST_TRIGGER_CAPTURE_DURATION_S`, deliberately configurable per
+instance so tests can set it to ``0.0`` and keep exercising the
+debouncer/event-count logic without needing unrealistically long fake
+frame lists), without running the debouncer on those frames -- a
+detection is already confirmed; this window is purely "keep recording
+the command," not "also watch for a new wake word." The combined
+audio becomes the yielded :class:`~jarvis.domain.wake_word.WakeEvent`'s
+``audio`` field. If the frame source is exhausted mid-window (a fake
+source in a test, or a real stream closing), whatever was captured so
+far is used rather than raising -- the same graceful-degradation
+choice a real, closing microphone stream would need regardless.
 """
 
 from __future__ import annotations
@@ -80,12 +101,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import platformdirs
 
+from jarvis.domain.audio import AudioChunk
 from jarvis.domain.wake_word import WakeEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
-    ScoreSource = Callable[[], AsyncIterator[float]]
+    FrameSource = Callable[[], AsyncIterator[tuple[float, np.ndarray]]]
 
 _logger = logging.getLogger(__name__)
 
@@ -94,6 +116,7 @@ WAKEWORD_CHUNK_SAMPLES = 1280  # openWakeWord expects 80ms chunks at 16kHz
 DEFAULT_THRESHOLD = 0.5
 REQUIRED_CONSECUTIVE_FRAMES = 2
 RING_BUFFER_DURATION_S = 5.0
+POST_TRIGGER_CAPTURE_DURATION_S = 3.0  # see ADR-0033 -- a considered default, not a measured one
 
 _MODEL_RELEASE_BASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 _MODEL_FILENAMES = ("melspectrogram.tflite", "embedding_model.tflite", "hey_jarvis_v0.1.tflite")
@@ -272,36 +295,78 @@ class OpenWakeWordAdapter:
     """Continuous wake-word detection backed by openWakeWord's tflite inference path."""
 
     def __init__(
-        self, score_source: ScoreSource | None = None, threshold: float = DEFAULT_THRESHOLD
+        self,
+        frame_source: FrameSource | None = None,
+        threshold: float = DEFAULT_THRESHOLD,
+        post_trigger_capture_s: float = POST_TRIGGER_CAPTURE_DURATION_S,
     ) -> None:
         """Store configuration only. No I/O happens at construction time.
 
         Args:
-            score_source: A zero-argument callable returning an async
-                iterator of raw per-frame detection scores. Defaults to
-                a real implementation reading the system's default
-                microphone through the tflite model. Overridable for
-                tests, exactly as ``MprisMediaPlayerAdapter``'s
-                ``send_method_call`` is.
+            frame_source: A zero-argument callable returning an async
+                iterator of ``(score, raw_chunk)`` pairs, one per
+                captured frame. Defaults to a real implementation
+                reading the system's default microphone through the
+                tflite model. Overridable for tests, exactly as
+                ``MprisMediaPlayerAdapter``'s ``send_method_call`` is.
             threshold: The minimum per-frame score treated as a
                 candidate detection. Passed to the debouncer that
                 :meth:`stream` constructs fresh on each call.
+            post_trigger_capture_s: How many additional seconds of
+                audio :meth:`stream` captures after a confirmed
+                detection, before yielding the WakeEvent (ADR-0033).
+                Defaults to the real, production value; tests set this
+                to ``0.0`` to keep exercising firing/event-count logic
+                without needing long fake frame lists.
         """
-        self._score_source: ScoreSource = score_source or self._default_score_source
+        self._frame_source: FrameSource = frame_source or self._default_frame_source
         self._threshold = threshold
+        self._post_trigger_capture_s = post_trigger_capture_s
 
     async def stream(self) -> AsyncIterator[WakeEvent]:
-        """Yield one WakeEvent per confirmed detection. Runs until the caller stops iterating."""
-        debouncer = _WakeWordDebouncer(self._threshold)
-        async for score in self._score_source():
-            if debouncer.observe(score):
-                yield WakeEvent(score=score)
+        """Yield one WakeEvent per confirmed detection, each carrying the triggering audio.
 
-    async def _default_score_source(self) -> AsyncIterator[float]:
-        """The one real, untested-by-design piece: real mic -> real tflite model -> raw scores.
+        Runs until the caller stops iterating. See the module
+        docstring (ADR-0033) for the ring-buffer/post-trigger-capture
+        design this method owns.
+        """
+        debouncer = _WakeWordDebouncer(self._threshold)
+        ring_buffer = _AudioRingBuffer(RING_BUFFER_DURATION_S, SAMPLE_RATE)
+        frames = self._frame_source()
+
+        async for score, chunk in frames:
+            ring_buffer.push(chunk)
+            if not debouncer.observe(score):
+                continue
+
+            pre_trigger_audio = ring_buffer.snapshot()
+            post_trigger_target_samples = int(self._post_trigger_capture_s * SAMPLE_RATE)
+            post_trigger_chunks: list[np.ndarray] = []
+            captured_samples = 0
+            while captured_samples < post_trigger_target_samples:
+                try:
+                    _next_score, next_chunk = await anext(frames)
+                except StopAsyncIteration:
+                    break
+                ring_buffer.push(next_chunk)
+                post_trigger_chunks.append(next_chunk)
+                captured_samples += next_chunk.shape[0]
+
+            combined = np.concatenate([pre_trigger_audio, *post_trigger_chunks])
+            yield WakeEvent(
+                score=score,
+                audio=AudioChunk(
+                    samples=combined.astype(np.int16).tobytes(), sample_rate=SAMPLE_RATE
+                ),
+            )
+
+    async def _default_frame_source(self) -> AsyncIterator[tuple[float, np.ndarray]]:
+        """The one real, untested-by-design piece: real mic -> real tflite model -> (score, chunk).
 
         See the module docstring for why this is not unit-tested and
-        blocks the event loop while running.
+        blocks the event loop while running. Ring-buffering (pre- and
+        post-trigger audio) is :meth:`stream`'s responsibility, not
+        this generator's -- see ADR-0033.
         """
         _ensure_tflite_shim()
         model_paths = _ensure_model_files()
@@ -318,7 +383,6 @@ class OpenWakeWordAdapter:
             melspec_model_path=str(model_paths["melspectrogram.tflite"]),
             embedding_model_path=str(model_paths["embedding_model.tflite"]),
         )
-        ring_buffer = _AudioRingBuffer(RING_BUFFER_DURATION_S, SAMPLE_RATE)
 
         with sd.InputStream(
             samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=WAKEWORD_CHUNK_SAMPLES
@@ -326,6 +390,5 @@ class OpenWakeWordAdapter:
             while True:
                 chunk, _overflowed = stream.read(WAKEWORD_CHUNK_SAMPLES)
                 chunk = chunk.reshape(-1)
-                ring_buffer.push(chunk)
                 predictions = model.predict(chunk)
-                yield _score_for_wake_word(predictions)
+                yield _score_for_wake_word(predictions), chunk

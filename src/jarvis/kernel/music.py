@@ -74,7 +74,24 @@ class MusicCommand(Enum):
     PREVIOUS = auto()
 
 
-_CAPABILITY_IDS: dict[MusicCommand, CapabilityId] = {
+MUSIC_COMMAND_NAMES: dict[str, MusicCommand] = {
+    "play": MusicCommand.PLAY,
+    "pause": MusicCommand.PAUSE,
+    "next": MusicCommand.NEXT,
+    "previous": MusicCommand.PREVIOUS,
+}
+"""The one place a command-name string maps to a MusicCommand -- shared by
+``jarvis.cli.main`` (argparse subcommand dispatch) and
+``jarvis.kernel.intent`` (voice intent resolution, WP-25), per ADR-0033's
+sibling design note: neither module keeps its own separate copy of this
+mapping, so a command added or renamed here cannot silently drift out of
+sync with the other. C1 layering is why this lives here rather than in
+``cli.main``: ``cli`` may import ``kernel``, never the reverse, so
+``kernel.intent`` (which needs this mapping) could not have reached a
+copy kept in ``cli.main``.
+"""
+
+MUSIC_CAPABILITY_IDS: dict[MusicCommand, CapabilityId] = {
     MusicCommand.PLAY: MUSIC_PLAY_CAPABILITY_ID,
     MusicCommand.PAUSE: MUSIC_PAUSE_CAPABILITY_ID,
     MusicCommand.NEXT: MUSIC_NEXT_CAPABILITY_ID,
@@ -84,7 +101,13 @@ _CAPABILITY_IDS: dict[MusicCommand, CapabilityId] = {
 
 The ids themselves are declared once in ``kernel.capabilities`` -- this
 dict is purely a local dispatch concern (which enum member means which
-id), not a second source of truth for what the ids are.
+id), not a second source of truth for what the ids are. Public (not
+``_``-prefixed) since WP-25's ``kernel.intent``/``kernel.voice_loop``
+also need this exact association -- one direction to go from a
+resolved ``MusicCommand`` to the ``CapabilityId`` to authorize, the
+other to go from an authorized capability back to which
+``MusicCommand`` to actually run -- rather than each keeping its own
+copy.
 """
 
 
@@ -145,7 +168,7 @@ def authorize_and_run_music_command(
     orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
 
     decision = orchestrator.authorize_by_id(
-        _CAPABILITY_IDS[command],
+        MUSIC_CAPABILITY_IDS[command],
         Tainted({}, Provenance.user()),
         orchestrator.get_current_context(),
     )

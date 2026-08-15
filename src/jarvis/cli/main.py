@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
-from jarvis.kernel.music import MusicCommand, authorize_and_run_music_command
+from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 
@@ -28,13 +28,6 @@ if TYPE_CHECKING:
     from jarvis.domain.provenance import Tainted
 
 _DEFAULT_CHAIN_PATH = Path("audit_chain.json")
-
-_MUSIC_COMMANDS: dict[str, MusicCommand] = {
-    "play": MusicCommand.PLAY,
-    "pause": MusicCommand.PAUSE,
-    "next": MusicCommand.NEXT,
-    "previous": MusicCommand.PREVIOUS,
-}
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -123,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             content = outcome.content
         else:
             decision = authorize_and_run_music_command(
-                _MUSIC_COMMANDS[args.command],
+                MUSIC_COMMAND_NAMES[args.command],
                 physical_confirmation_available=args.physical_confirmation_available,
                 remote_confirmation_available=args.remote_confirmation_available,
                 chain_path=args.chain_path,

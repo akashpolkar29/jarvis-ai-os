@@ -29,21 +29,36 @@ knows about is declared -- ``authorize_ping``,
 each call it internally rather than constructing their own
 descriptors inline. See ``kernel.capabilities`` for why it takes no
 injectable registry parameter.
+
+``resolve_intent`` (WP-25) is the rule-based mapping from recognized
+text to a capability call -- see ``kernel.intent`` for why this had to
+be built fresh rather than reusing an "existing" resolver the M1
+architecture doc assumed but never actually built. ``run_voice_loop``
+(WP-25) wires wake word through VAD, STT, speaker-id (audit only),
+intent resolution, physical confirmation, and the three ``authorize_*``
+functions above -- unmodified -- into the real voice pipeline; see
+``kernel.voice_loop`` for the full design.
 """
 
 from __future__ import annotations
 
 from .capabilities import build_default_registry
 from .files import FileReadOutcome, PathOutsideAllowedScopeError, authorize_and_read_file
+from .intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
 from .music import MusicCommand, authorize_and_run_music_command
 from .ping import authorize_ping
+from .voice_loop import run_voice_loop
 
 __all__ = [
     "FileReadOutcome",
     "MusicCommand",
     "PathOutsideAllowedScopeError",
+    "ResolvedIntent",
+    "UnrecognizedIntent",
     "authorize_and_read_file",
     "authorize_and_run_music_command",
     "authorize_ping",
     "build_default_registry",
+    "resolve_intent",
+    "run_voice_loop",
 ]
