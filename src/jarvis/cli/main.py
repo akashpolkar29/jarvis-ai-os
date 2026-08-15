@@ -1,25 +1,43 @@
 """The CLI's argument parsing and result formatting -- no business logic.
 
 :func:`main` parses argv into a subcommand (``ping``, ``play``,
-``pause``, ``next``, ``previous``, ``read``) and the confirmation/
-chain-path flags every subcommand shares, calls the matching
-``jarvis.kernel`` composition function, and formats the returned
-``Decision`` (and, for ``read``, the file content) for a terminal. It
-decides nothing about policy or capabilities itself -- that is exactly
-the line this ring's own docstring draws.
+``pause``, ``next``, ``previous``, ``read``, ``listen``) and the
+confirmation/chain-path flags most subcommands share, calls the
+matching ``jarvis.kernel`` composition function, and formats the
+returned ``Decision`` (and, for ``read``, the file content) for a
+terminal. It decides nothing about policy or capabilities itself --
+that is exactly the line this ring's own docstring draws.
+
+``listen`` (WP-26) is the one subcommand that does not fit that
+shape: it runs ``jarvis.kernel.voice_loop.run_voice_loop`` as a
+foreground, continuous process rather than authorizing one call and
+exiting, and it is the one place in this whole project permitted to
+construct a real ``Gtk4PhysicalConfirmationAdapter`` -- ``cli`` sits
+above both ``kernel`` and ``adapters`` in the C1 layering and is
+unrestricted by C6 ("no GLib in the core"), which is exactly why
+``run_voice_loop`` itself takes ``physical_confirmation`` as a
+required, undefaulted parameter (see that module's own docstring).
+``listen`` does not take the ``--physical-confirmation-available``/
+``--remote-confirmation-available`` flags every other subcommand does:
+those model a fixed, upfront confirmation state, whereas the voice
+loop asks a real, per-utterance question through the GTK4 dialog
+instead.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
+from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 
 if TYPE_CHECKING:
@@ -81,7 +99,42 @@ def _build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("path", type=Path, help="The file to read.")
     _add_common_flags(read_parser)
 
+    listen_parser = subparsers.add_parser(
+        "listen",
+        help="Run the voice pipeline continuously in the foreground, until interrupted.",
+    )
+    listen_parser.add_argument(
+        "--chain-path",
+        type=Path,
+        default=_DEFAULT_CHAIN_PATH,
+        help=f"Where the audit chain is persisted (default: {_DEFAULT_CHAIN_PATH}).",
+    )
+
     return parser
+
+
+def _run_listen(chain_path: Path) -> int:
+    """Run the voice loop in the foreground until interrupted.
+
+    Constructs the one real ``Gtk4PhysicalConfirmationAdapter`` this
+    project builds -- see this module's own docstring for why that
+    construction has to happen here, in ``cli``, rather than in
+    ``kernel``. Every other port ``run_voice_loop`` needs defaults to
+    its own real adapter internally; only this one doesn't, so this is
+    the only port this function passes explicitly.
+    """
+    print("Listening -- say the wake phrase, then a command. Press Ctrl+C to stop.")
+
+    try:
+        asyncio.run(
+            run_voice_loop(
+                chain_path=chain_path,
+                physical_confirmation=Gtk4PhysicalConfirmationAdapter(),
+            )
+        )
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -93,9 +146,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     Returns:
         ``0`` if the call was granted, ``1`` if denied, or if any of
-        the errors below was raised.
+        the errors below was raised. For ``listen``, ``0`` once
+        stopped (via Ctrl+C) -- see :func:`_run_listen`.
     """
     args = _build_parser().parse_args(argv)
+    if args.command == "listen":
+        return _run_listen(args.chain_path)
+
     content: Tainted[str] | None = None
 
     try:

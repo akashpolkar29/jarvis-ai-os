@@ -30,10 +30,12 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.cli.main import main
 from jarvis.domain.capability import (
     CapabilityDescriptor,
@@ -47,6 +49,9 @@ from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.media_player import NoMediaPlayerRunningError
+
+if TYPE_CHECKING:
+    from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
 
 
 def _make_decision(*, granted: bool, capability_id: str = "music.pause") -> Decision:
@@ -377,3 +382,97 @@ def test_read_subcommand_reports_file_not_found_cleanly(
 
     assert exit_code == 1
     assert "Error:" in captured.err
+
+
+def test_listen_calls_run_voice_loop_with_the_chain_path_and_a_real_confirmation_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`jarvis listen` calls run_voice_loop with --chain-path and a real confirmation adapter.
+
+    A real Gtk4PhysicalConfirmationAdapter is safe to construct here
+    (as opposed to actually running its dialog): its __init__ does no
+    I/O, matching every other adapter's convention.
+    """
+    received: list[tuple[Path, PhysicalConfirmationPort]] = []
+
+    async def fake_run_voice_loop(
+        *, chain_path: Path, physical_confirmation: PhysicalConfirmationPort, **_kwargs: object
+    ) -> None:
+        received.append((chain_path, physical_confirmation))
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+
+    chain_path = tmp_path / "audit_chain.json"
+    exit_code = main(["listen", "--chain-path", str(chain_path)])
+
+    assert len(received) == 1
+    received_chain_path, received_confirmation = received[0]
+    assert received_chain_path == chain_path
+    assert isinstance(received_confirmation, Gtk4PhysicalConfirmationAdapter)
+    assert exit_code == 0
+
+
+def test_listen_default_chain_path_is_relative_audit_chain_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Omitting --chain-path for listen also falls back to ./audit_chain.json."""
+    received: list[Path] = []
+
+    async def fake_run_voice_loop(*, chain_path: Path, **_kwargs: object) -> None:
+        received.append(chain_path)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["listen"])
+    finally:
+        os.chdir(original_cwd)
+
+    assert received == [Path("audit_chain.json")]
+    assert exit_code == 0
+
+
+def test_listen_stops_cleanly_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ctrl+C during the voice loop is treated as a normal stop, not an error -- exit 0."""
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+
+    exit_code = main(["listen", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Stopped" in captured.out
+
+
+def test_listen_prints_a_listening_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() tells the user it's listening before blocking on the voice loop."""
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        return
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+
+    main(["listen", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "Listening" in captured.out
+
+
+def test_listen_does_not_accept_the_confirmation_flags() -> None:
+    """listen has no --physical-confirmation-available/--remote-confirmation-available.
+
+    Those flags model a fixed, upfront confirmation state; the voice
+    loop asks a real, per-utterance question through the GTK4 dialog
+    instead -- see jarvis.cli.main's own module docstring.
+    """
+    with pytest.raises(SystemExit):
+        main(["listen", "--physical-confirmation-available"])
