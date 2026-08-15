@@ -18,7 +18,11 @@ durable storage. ``MediaPlayerPort`` is the seam between an authorized
 playback command and a real, currently-running media player.
 ``FileSystemPort`` is the seam between an authorized read and a real
 file on disk. ``WakeWordPort`` is the seam between a real audio source
-and a stream of confirmed wake-word detection events.
+and a stream of confirmed wake-word detection events. ``VadPort`` is
+the seam between raw audio and confirmed-speech segments. ``SttPort``
+is the seam between a confirmed-speech segment and recognized text.
+``TtsPort`` is the seam between recognized text and synthesized,
+playable audio.
 """
 
 from __future__ import annotations
@@ -27,6 +31,9 @@ from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
+from .stt import SttPort
+from .tts import TtsPort
+from .vad import VadPort
 from .wake_word import WakeWordPort
 
 __all__ = [
@@ -36,5 +43,8 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "SttPort",
+    "TtsPort",
+    "VadPort",
     "WakeWordPort",
 ]

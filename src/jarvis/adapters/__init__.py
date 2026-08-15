@@ -24,7 +24,13 @@ over D-Bus to whichever media player is currently running.
 :class:`~jarvis.ports.file_system.FileSystemPort` via ``pathlib``.
 ``OpenWakeWordAdapter`` implements
 :class:`~jarvis.ports.wake_word.WakeWordPort` via openWakeWord's tflite
-inference path. None of these adapters depend on each other.
+inference path. ``SileroVadAdapter`` implements
+:class:`~jarvis.ports.vad.VadPort` via a hand-rolled onnxruntime
+wrapper around Silero VAD's ONNX model. ``FasterWhisperAdapter``
+implements :class:`~jarvis.ports.stt.SttPort` via faster-whisper on
+CUDA. ``PiperTtsAdapter`` implements
+:class:`~jarvis.ports.tts.TtsPort` via piper-tts's CPU/ONNX voice
+synthesis. None of these adapters depend on each other.
 """
 
 from __future__ import annotations
@@ -33,12 +39,18 @@ from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
+from .stt import FasterWhisperAdapter
+from .tts import PiperTtsAdapter
+from .vad import SileroVadAdapter
 from .wake_word import OpenWakeWordAdapter
 
 __all__ = [
+    "FasterWhisperAdapter",
     "JsonFileAuditStorageAdapter",
     "LocalFileSystemAdapter",
     "ManualConfirmationAdapter",
     "MprisMediaPlayerAdapter",
     "OpenWakeWordAdapter",
+    "PiperTtsAdapter",
+    "SileroVadAdapter",
 ]

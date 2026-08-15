@@ -12,6 +12,11 @@ dependencies = [
     "sounddevice",
     "numpy",
     "platformdirs",
+    "onnxruntime",
+    "faster-whisper",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12==9.*",
+    "piper-tts",
 ]
 
 [project.scripts]
@@ -127,6 +132,22 @@ ignore_missing_imports = true
 # adapters/wake_word.py's real-hardware path (see that module's
 # docstring for why the imports are lazy in the first place).
 module = ["sounddevice.*", "openwakeword.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# onnxruntime, faster_whisper, and nvidia-cublas-cu12/nvidia-cudnn-cu12
+# (the nvidia.* namespace packages) ship no py.typed marker / type
+# stubs either -- all used only via lazy imports inside
+# adapters/vad.py's and adapters/stt.py's real-hardware paths (see
+# those modules' docstrings for why the imports are lazy).
+module = ["onnxruntime.*", "faster_whisper.*", "nvidia.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# piper (piper-tts) ships no py.typed marker / type stubs either -- used
+# only via a lazy import inside adapters/tts.py's real-hardware path (see
+# that module's docstring for why the import is lazy).
+module = "piper.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

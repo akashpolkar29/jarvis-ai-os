@@ -20,6 +20,7 @@ Constraints, enforced by tooling rather than convention:
 
 from __future__ import annotations
 
+from .audio import AudioChunk, AudioStream, Segment
 from .audit import (
     ARGUMENT_DIGEST_KEY,
     GENESIS_PREVIOUS_HASH,
@@ -48,11 +49,14 @@ from .errors import (
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 from .registry import CapabilityRegistry
+from .transcript import Transcript
 from .wake_word import WakeEvent
 
 __all__ = [
     "ARGUMENT_DIGEST_KEY",
     "GENESIS_PREVIOUS_HASH",
+    "AudioChunk",
+    "AudioStream",
     "AuditChain",
     "AuditRecord",
     "AuditRecordNotSerializable",
@@ -71,9 +75,11 @@ __all__ = [
     "JarvisError",
     "PolicyContext",
     "Provenance",
+    "Segment",
     "TaintViolation",
     "Tainted",
     "Tier",
+    "Transcript",
     "Trust",
     "WakeEvent",
     "digest_argument_value",
