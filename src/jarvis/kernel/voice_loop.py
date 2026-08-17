@@ -87,6 +87,15 @@ listen" subcommand (WP-26) -- ``cli`` sits above both ``kernel`` and
 ``adapters`` in the C1 layering and is unrestricted by C6, so
 constructing the one real, GLib-reaching default there is the correct
 place for it, not a workaround.
+
+Diagnostic logging: this module's ``_logger`` emits DEBUG-level lines
+(a produced VAD segment's byte length, the STT transcript, the
+``resolve_intent`` result) purely as observability -- no behavior
+depends on whether anything is actually listening for them. They are
+invisible by default; ``jarvis.cli.main``'s ``--verbose`` flag (WP-26
+follow-up) is what raises ``jarvis``'s own logger hierarchy to DEBUG.
+Replaces the ad hoc ``print()`` debug scaffolding used during live M1
+verification, which was reverted rather than left in production code.
 """
 
 from __future__ import annotations
@@ -254,6 +263,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
 ) -> None:
     """Transcribe, resolve, confirm, and authorize+execute one VAD-confirmed speech segment."""
     transcript = await stt.transcribe(segment)
+    _logger.debug("transcript: %r", transcript.value.text)
 
     score = speaker_id.score(segment)  # audit/UX only -- never an authorization input (ADR-0012)
     _logger.info(
@@ -263,6 +273,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
     )
 
     resolved = resolve_intent(transcript.value)
+    _logger.debug("resolve_intent result: %r", resolved)
     if isinstance(resolved, UnrecognizedIntent):
         await _speak(tts, play_fn, "I didn't understand that.")
         return
@@ -345,6 +356,7 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
 
     async for wake_event in wake_word.stream():
         async for segment in vad.segment(wake_event.audio):
+            _logger.debug("VAD segment produced: %d bytes", len(segment.samples))
             await _handle_utterance(
                 segment,
                 stt=stt,

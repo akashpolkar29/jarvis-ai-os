@@ -22,12 +22,27 @@ required, undefaulted parameter (see that module's own docstring).
 those model a fixed, upfront confirmation state, whereas the voice
 loop asks a real, per-utterance question through the GTK4 dialog
 instead.
+
+``listen --verbose`` raises ``jarvis``'s own logger hierarchy (every
+``logging.getLogger(__name__)`` under the ``jarvis`` package, e.g.
+``jarvis.adapters.wake_word``, ``jarvis.kernel.voice_loop``) to DEBUG,
+surfacing the diagnostic lines proven useful during live M1
+verification (wake-word scores, trigger confirmations, VAD segment
+sizes, transcripts, intent resolution results) -- see those modules'
+own docstrings. Third-party library loggers (``sounddevice``,
+``onnxruntime``, ``openwakeword``, ``faster_whisper``, ``gi``, etc.)
+deliberately stay at the root's default level regardless of
+``--verbose``, since none of them are ``jarvis``'s own code and
+several would flood the terminal at DEBUG. Without ``--verbose``,
+logging configuration is unchanged from every other subcommand's
+existing (absent) behavior.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -109,11 +124,41 @@ def _build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_CHAIN_PATH,
         help=f"Where the audit chain is persisted (default: {_DEFAULT_CHAIN_PATH}).",
     )
+    listen_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Enable DEBUG-level diagnostic logging for jarvis's own loggers "
+            "(wake-word scores, VAD/STT/intent-resolution output). Third-party "
+            "library loggers are left at their default level."
+        ),
+    )
 
     return parser
 
 
-def _run_listen(chain_path: Path) -> int:
+def _configure_logging(*, verbose: bool) -> None:
+    """Establish a baseline logging config, then optionally raise jarvis's own loggers.
+
+    The baseline (``WARNING``, root-wide) is unconditional so behavior
+    is identical to today's unconfigured default for every existing
+    subcommand -- Python's own ``logging.lastResort`` handler already
+    surfaces WARNING+ with no configuration at all, so this is not new
+    output, just an explicit equivalent of it. The ``"jarvis"`` logger
+    (the common ancestor of every ``jarvis.*`` module logger) is always
+    explicitly set, to ``DEBUG`` or back to ``WARNING`` depending on
+    ``verbose`` -- never left at whatever a previous call happened to
+    leave it, since ``logging.getLogger("jarvis")`` is a process-wide
+    singleton and this function is not guaranteed to run only once per
+    process (e.g. repeated calls within one test session). Third-party
+    loggers, which are not descendants of ``"jarvis"``, are untouched
+    either way and stay quiet.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    logging.getLogger("jarvis").setLevel(logging.DEBUG if verbose else logging.WARNING)
+
+
+def _run_listen(chain_path: Path, *, verbose: bool) -> int:
     """Run the voice loop in the foreground until interrupted.
 
     Constructs the one real ``Gtk4PhysicalConfirmationAdapter`` this
@@ -123,6 +168,7 @@ def _run_listen(chain_path: Path) -> int:
     its own real adapter internally; only this one doesn't, so this is
     the only port this function passes explicitly.
     """
+    _configure_logging(verbose=verbose)
     print("Listening -- say the wake phrase, then a command. Press Ctrl+C to stop.")
 
     try:
@@ -151,7 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = _build_parser().parse_args(argv)
     if args.command == "listen":
-        return _run_listen(args.chain_path)
+        return _run_listen(args.chain_path, verbose=args.verbose)
 
     content: Tainted[str] | None = None
 

@@ -89,6 +89,14 @@ audio becomes the yielded :class:`~jarvis.domain.wake_word.WakeEvent`'s
 source in a test, or a real stream closing), whatever was captured so
 far is used rather than raising -- the same graceful-degradation
 choice a real, closing microphone stream would need regardless.
+
+Diagnostic logging: :meth:`stream` emits a DEBUG-level line per frame
+(``score=%.4f``) and a distinct one on each confirmed trigger, purely
+as observability -- invisible by default, raised to visible only when
+``jarvis.cli.main``'s ``--verbose`` flag sets ``jarvis``'s logger
+hierarchy to DEBUG. Replaces the ad hoc ``print()`` scaffolding used
+during live M1 verification, which was reverted rather than left in
+production code.
 """
 
 from __future__ import annotations
@@ -335,10 +343,12 @@ class OpenWakeWordAdapter:
         frames = self._frame_source()
 
         async for score, chunk in frames:
+            _logger.debug("score=%.4f", score)
             ring_buffer.push(chunk)
             if not debouncer.observe(score):
                 continue
 
+            _logger.debug("*** TRIGGER CONFIRMED *** score=%.4f", score)
             pre_trigger_audio = ring_buffer.snapshot()
             post_trigger_target_samples = int(self._post_trigger_capture_s * SAMPLE_RATE)
             post_trigger_chunks: list[np.ndarray] = []

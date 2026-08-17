@@ -27,6 +27,7 @@ directly is the reliable fix.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -476,3 +477,72 @@ def test_listen_does_not_accept_the_confirmation_flags() -> None:
     """
     with pytest.raises(SystemExit):
         main(["listen", "--physical-confirmation-available"])
+
+
+def test_listen_without_verbose_leaves_jarvis_logger_at_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without --verbose, the "jarvis" logger stays at WARNING -- no new debug output."""
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        return
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+    logging.getLogger("jarvis").setLevel(logging.DEBUG)  # simulate a prior --verbose call
+
+    main(["listen", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert logging.getLogger("jarvis").level == logging.WARNING
+
+
+def test_listen_verbose_raises_the_jarvis_logger_to_debug(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--verbose raises the "jarvis" logger (and everything under it) to DEBUG."""
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        return
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+    logging.getLogger("jarvis").setLevel(logging.WARNING)  # simulate no prior --verbose call
+
+    main(["listen", "--verbose", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert logging.getLogger("jarvis").level == logging.DEBUG
+    assert logging.getLogger("jarvis.adapters.wake_word").getEffectiveLevel() == logging.DEBUG
+
+
+def test_listen_verbose_does_not_touch_third_party_logger_levels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--verbose only raises jarvis's own loggers -- third-party loggers are untouched."""
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        return
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+    third_party_logger = logging.getLogger("faster_whisper")
+    third_party_logger.setLevel(logging.NOTSET)
+
+    main(["listen", "--verbose", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert third_party_logger.getEffectiveLevel() == logging.WARNING
+
+
+def test_listen_verbose_emits_the_wake_word_score_diagnostic_line(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """--verbose actually surfaces a real DEBUG line from the wake-word adapter."""
+    logger = logging.getLogger("jarvis.adapters.wake_word")
+
+    async def fake_run_voice_loop(**_kwargs: object) -> None:
+        logger.debug("score=%.4f", 0.7965)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_voice_loop", fake_run_voice_loop)
+
+    with caplog.at_level(logging.DEBUG, logger="jarvis"):
+        main(["listen", "--verbose", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert "score=0.7965" in caplog.text
