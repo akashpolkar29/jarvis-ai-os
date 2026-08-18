@@ -1,9 +1,9 @@
 # JARVIS AI OS
 
-Privacy-first, plugin-based agent kernel for Linux. Pre-alpha. Milestone 0 complete (v0.1.0).
+Privacy-first, plugin-based agent kernel for Linux. Pre-alpha. Milestone 0 complete (v0.1.1).
 
 ## Baseline
-`docs/architecture/` and `docs/adr/` are approved and frozen. They are the source of truth, not this file. This includes `docs/architecture/m1-voice-architecture.md` alongside `m0-architecture.md`, `m2-reasoning-layer.md`, `system-design.md`, and `roadmap.md`.
+`docs/architecture/` and `docs/adr/` are approved and frozen. They are the source of truth, not this file. `m0-architecture.md`, `system-design.md`, and `m2-reasoning-layer.md` now exist (reconstructed 2026-08-18 from recovered fragments of the original design conversation and reconciled against the real repo — real ADRs, real code, real import-linter config). State plainly: these are reconciled reconstructions, not pristine originals; each documents its own gaps between what was decided and what was actually built. `m2-reasoning-layer.md` in particular is recovered but **not yet re-validated** against what M0 became — that reconciliation is separate, upcoming work. `m1-voice-architecture.md` is current and was kept in sync with implementation, unlike the other three. `m3-desktop-control.md`, `m4-memory-retrieval.md`, `m5-browser-coding.md`, and `m6-integrations.md` remain intentional gate-only placeholders per this project's rolling-wave planning principle (see `docs/ROADMAP.md`) — do not add ports, adapters, work-package breakdowns, or ADRs to them until each milestone actually starts. `docs/ROADMAP.md` is the real roadmap; a bare `roadmap.md` file does not exist.
 
 ## Current Status
 M0 complete, tagged v0.1.1. M1 (voice) is architected but not started — see `docs/architecture/m1-voice-architecture.md`. Next work package: WP-19, a standalone proof-of-concept script (outside the formal architecture) proving openWakeWord + faster-whisper work on this machine's real microphone and GPU before any ports/adapters are built.
