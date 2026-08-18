@@ -8,7 +8,7 @@ capability's declared effects against the active tier lives in
 
 Constraints:
 
-* No vendor names (no "openai", "anthropic", "chatgpt", "claude", "gpt").
+* No vendor names (ADR-0021).
 * May depend on ``jarvis.domain`` and ``jarvis.ports`` only; never
   imports a concrete adapter directly.
 """

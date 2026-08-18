@@ -15,6 +15,12 @@ from tests.meta.helpers import dotted_attribute_calls, iter_py_files, top_level_
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 DOMAIN_ROOT = SRC_ROOT / "jarvis" / "domain"
+APPLICATION_ROOT = SRC_ROOT / "jarvis" / "application"
+PORTS_ROOT = SRC_ROOT / "jarvis" / "ports"
+
+# ADR-0021: these strings may never appear in domain/, application/, or
+# ports/ -- a port describes a role, never a specific integration.
+_BANNED_VENDOR_STRINGS = frozenset({"openai", "anthropic", "chatgpt", "claude", "gpt"})
 
 _BANNED_CLOCK_AND_ID_CALLS = frozenset(
     {
@@ -50,6 +56,24 @@ def test_no_banned_clock_or_id_calls_in_src() -> None:
             continue
         for call in dotted_attribute_calls(py_file):
             assert call not in _BANNED_CLOCK_AND_ID_CALLS, f"{py_file} calls banned API {call!r}"
+
+
+def test_no_vendor_names_in_domain_application_or_ports() -> None:
+    """No banned vendor string (ADR-0021) appears anywhere in domain/, application/, or ports/.
+
+    A real, pre-existing gap closed here: ADR-0021 and CLAUDE.md both
+    describe this as already "enforced by static grep," but no such
+    check existed anywhere in ``tests/`` before this test -- found while
+    confirming WP-31's acceptance criterion that the check "actually
+    covers ports/." It didn't; nothing did. Scans raw file text, not
+    just imports/identifiers, since ADR-0021 bans the *strings*
+    outright, including inside comments and docstrings.
+    """
+    for root in (DOMAIN_ROOT, APPLICATION_ROOT, PORTS_ROOT):
+        for py_file in iter_py_files(root):
+            text = py_file.read_text(encoding="utf-8").lower()
+            for banned in _BANNED_VENDOR_STRINGS:
+                assert banned not in text, f"{py_file} contains banned vendor string {banned!r}"
 
 
 def test_every_src_init_has_a_docstring() -> None:

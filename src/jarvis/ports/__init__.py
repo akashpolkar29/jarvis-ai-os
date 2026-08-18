@@ -7,8 +7,8 @@ supplies it. Concrete implementations live in ``jarvis.adapters``.
 
 Constraints:
 
-* No vendor names (no "openai", "anthropic", "chatgpt", "claude", "gpt").
-  A port describes a role, never a specific integration.
+* No vendor names (ADR-0021). A port describes a role, never a
+  specific integration.
 * May depend on ``jarvis.domain`` only.
 
 ``ConfirmationPort`` is the seam between a real confirmation source
@@ -28,7 +28,11 @@ never an authorization input (ADR-0012). ``PhysicalConfirmationPort``
 is the seam between a specific, in-flight request and a genuine
 physical approval or denial of it -- the Finding 2 closure
 (docs/threat-model/v0.md); distinct from ``ConfirmationPort``, see
-that module's own docstring for why.
+that module's own docstring for why. ``ReasoningPort`` is the seam
+between a task description and a reasoning provider's proposed
+Candidate (M2). ``ValidationPort`` is the seam between a Candidate and
+ground-truth judgement of it -- a build, a test run, a static
+analyzer, or any other real check (M2).
 """
 
 from __future__ import annotations
@@ -38,10 +42,12 @@ from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
 from .physical_confirmation import PhysicalConfirmationPort
+from .reasoning import ReasoningPort
 from .speaker_id import SpeakerIdPort
 from .stt import SttPort
 from .tts import TtsPort
 from .vad import VadPort
+from .validation import ValidationPort
 from .wake_word import WakeWordPort
 
 __all__ = [
@@ -52,9 +58,11 @@ __all__ = [
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
     "PhysicalConfirmationPort",
+    "ReasoningPort",
     "SpeakerIdPort",
     "SttPort",
     "TtsPort",
     "VadPort",
+    "ValidationPort",
     "WakeWordPort",
 ]

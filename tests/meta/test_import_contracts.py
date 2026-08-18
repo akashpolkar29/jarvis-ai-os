@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tests.meta.helpers import build_project_copy, inject_import_violation, run_lint_imports
+from tests.meta.helpers import (
+    build_project_copy,
+    inject_import_violation,
+    run_lint_imports,
+    strip_ansi,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,7 +36,7 @@ def _contract_status(output: str, contract_name: str) -> str:
     line, or the name alone followed by the status a line or two later —
     this checks both shapes.
     """
-    lines = output.splitlines()
+    lines = strip_ansi(output).splitlines()
     for index, line in enumerate(lines):
         stripped = line.strip()
         if stripped == contract_name:

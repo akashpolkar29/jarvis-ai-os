@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import shutil
 import subprocess
 import sysconfig
@@ -18,6 +19,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+
+
+def strip_ansi(text: str) -> str:
+    """Strip ANSI escape sequences (color, cursor movement) from ``text``.
+
+    ``lint-imports``' output is colorized/animated even when captured
+    from a subprocess; callers that parse its text for contract names
+    and KEPT/BROKEN status need the plain text underneath.
+    """
+    return _ANSI_ESCAPE.sub("", text)
 
 
 def build_project_copy(destination: Path) -> Path:

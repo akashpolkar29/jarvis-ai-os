@@ -15,7 +15,7 @@ Constraints, enforced by tooling rather than convention:
   ``time.time()``, ``uuid.uuid4()``, etc). Anything needing the current
   time or a fresh identifier takes a ``ClockPort`` / ``IdPort`` from the
   caller instead.
-* No vendor names (no "openai", "anthropic", "chatgpt", "claude", "gpt").
+* No vendor names (ADR-0021).
 """
 
 from __future__ import annotations
