@@ -1,8 +1,9 @@
 """Orchestrates the M2 escalation ladder: which rung to try next, when to stop, and who wins.
 
 :class:`~jarvis.application.reasoning.ladder.EscalationLadder` is the
-one real entry point for deciding what a dispatcher (WP-37, not yet
-built) should try next for a task, given every :class:`~jarvis.domain.evidence.Attempt`
+one real entry point for deciding what
+:class:`~jarvis.application.reasoning.dispatcher.Dispatcher` should
+try next for a task, given every :class:`~jarvis.domain.evidence.Attempt`
 made so far. It decides nothing about *how* a rung is executed (that's
 ``jarvis.ports.reasoning``/``jarvis.ports.validation``) or *whether*
 there is budget left to try it (that's
@@ -21,17 +22,25 @@ one reasoning-provider call through the real
 using :func:`~jarvis.application.reasoning.classification.egress_effect_for`
 to decide which ``Effect`` a cloud-provider call declares for a given
 task's real Classification.
+
+:class:`~jarvis.application.reasoning.dispatcher.Dispatcher` wires all
+three together, end-to-end, with real ``TaskBudget`` enforcement --
+see that module's own docstring for what it decided about a budget
+unit's meaning and the real, flagged ``DETERMINISTIC_FIX`` gap.
 """
 
 from __future__ import annotations
 
 from .arbiter import Arbiter
 from .classification import egress_effect_for
+from .dispatcher import Dispatcher, DispatchResult
 from .ladder import EscalationLadder
 from .router import ModelRouter
 
 __all__ = [
     "Arbiter",
+    "DispatchResult",
+    "Dispatcher",
     "EscalationLadder",
     "ModelRouter",
     "egress_effect_for",
