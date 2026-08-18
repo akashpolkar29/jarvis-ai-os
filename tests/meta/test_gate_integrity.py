@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-CURRENT_WORK_PACKAGE = 32
+CURRENT_WORK_PACKAGE = 33
 
 # Work package at which each import-linter contract becomes configurable.
 # A contract can only be added once every package it names exists on
@@ -34,7 +34,10 @@ CURRENT_WORK_PACKAGE = 32
 # first real per-adapter subpackage in this repo, and exactly the
 # scenario C4 was written for -- and configured C4 in pyproject.toml in
 # the same change, per the note that used to live here telling whoever
-# built it to do exactly that.
+# built it to do exactly that. WP-33 extended C4's own modules list to
+# also cover jarvis.adapters.validation's five sibling modules, the
+# second per-adapter subpackage this repo's had -- same contract,
+# still due at 32, just wider now.
 CONTRACT_SCHEDULE: dict[str, int] = {
     "C1 layered architecture": 1,
     "C2 domain purity": 1,

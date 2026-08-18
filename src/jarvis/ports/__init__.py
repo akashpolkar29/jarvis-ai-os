@@ -35,6 +35,8 @@ ground-truth judgement of it -- a build, a test run, a static
 analyzer, or any other real check (M2). ``SecretPort`` is the seam
 between a reference and a secret's real value, resolved via the
 system keyring at the point of use (ADR-0017, ADR-0042).
+``WorkspacePort`` is the seam between a Candidate's content and real
+files on disk a validator can check (ADR-0043).
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ from .tts import TtsPort
 from .vad import VadPort
 from .validation import ValidationPort
 from .wake_word import WakeWordPort
+from .workspace import PatchApplicationFailedError, WorkspacePort
 
 __all__ = [
     "AuditStoragePort",
@@ -60,6 +63,7 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "PatchApplicationFailedError",
     "PhysicalConfirmationPort",
     "ReasoningPort",
     "SecretPort",
@@ -69,4 +73,5 @@ __all__ = [
     "VadPort",
     "ValidationPort",
     "WakeWordPort",
+    "WorkspacePort",
 ]

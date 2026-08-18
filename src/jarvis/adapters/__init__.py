@@ -45,7 +45,13 @@ Service D-Bus API (ADR-0042). ``FamilyAReasoningAdapter`` and
 different cloud provider REST API shapes; ``LocalReasoningAdapter``
 implements it against a local, on-device model server -- see
 ``jarvis.adapters.reasoning``'s own docstring for why these three live
-in a subpackage rather than flat modules. None of these adapters
+in a subpackage rather than flat modules. ``LocalWorkspaceAdapter``
+implements :class:`~jarvis.ports.workspace.WorkspacePort` via a real
+``git apply`` subprocess (ADR-0043). ``BuildValidator``,
+``PytestValidator``, ``StaticAnalysisValidator``,
+``RuntimeCheckValidator``, and ``UserScriptValidator`` implement
+:class:`~jarvis.ports.validation.ValidationPort` -- see
+``jarvis.adapters.validation``'s own docstring. None of these adapters
 depend on each other.
 """
 
@@ -62,9 +68,18 @@ from .speaker_id import UnverifiedSpeakerIdAdapter
 from .stt import FasterWhisperAdapter
 from .tts import PiperTtsAdapter
 from .vad import SileroVadAdapter
+from .validation import (
+    BuildValidator,
+    PytestValidator,
+    RuntimeCheckValidator,
+    StaticAnalysisValidator,
+    UserScriptValidator,
+)
 from .wake_word import OpenWakeWordAdapter
+from .workspace import LocalWorkspaceAdapter
 
 __all__ = [
+    "BuildValidator",
     "FamilyAReasoningAdapter",
     "FamilyBReasoningAdapter",
     "FasterWhisperAdapter",
@@ -72,11 +87,16 @@ __all__ = [
     "JsonFileAuditStorageAdapter",
     "LocalFileSystemAdapter",
     "LocalReasoningAdapter",
+    "LocalWorkspaceAdapter",
     "ManualConfirmationAdapter",
     "MprisMediaPlayerAdapter",
     "OpenWakeWordAdapter",
     "PiperTtsAdapter",
+    "PytestValidator",
+    "RuntimeCheckValidator",
     "SecretServiceAdapter",
     "SileroVadAdapter",
+    "StaticAnalysisValidator",
     "UnverifiedSpeakerIdAdapter",
+    "UserScriptValidator",
 ]
