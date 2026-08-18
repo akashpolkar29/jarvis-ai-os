@@ -30,7 +30,8 @@ Every capability is a `CapabilityDescriptor`
 | --- | --- |
 | `READ_LOCAL`, `EGRESS_LOCAL` | `ALLOW` |
 | `WRITE_LOCAL`, `EXECUTE`, `EGRESS_SENSITIVE` | `CONFIRM` |
-| `DESTRUCTIVE`, `IRREVERSIBLE`, `CREDENTIAL`, `EGRESS_SECRET` | `MANUAL_ONLY` |
+| `DESTRUCTIVE`, `IRREVERSIBLE`, `CREDENTIAL` | `MANUAL_ONLY` |
+| `EGRESS_SECRET` | `DENY` (ADR-0038 — unconditional, never satisfiable by any confirmation) |
 
 Ask what your capability *actually does*, not what feels risky in the
 abstract. `music.pause` sends a command that mutates a running

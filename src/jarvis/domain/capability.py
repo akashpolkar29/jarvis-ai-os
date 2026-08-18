@@ -54,7 +54,7 @@ _EFFECT_TIER_FLOOR: dict[Effect, Tier] = {
     Effect.DESTRUCTIVE: Tier.MANUAL_ONLY,
     Effect.IRREVERSIBLE: Tier.MANUAL_ONLY,
     Effect.CREDENTIAL: Tier.MANUAL_ONLY,
-    Effect.EGRESS_SECRET: Tier.MANUAL_ONLY,
+    Effect.EGRESS_SECRET: Tier.DENY,
     Effect.EGRESS_SENSITIVE: Tier.CONFIRM,
     Effect.EXECUTE: Tier.CONFIRM,
     Effect.WRITE_LOCAL: Tier.CONFIRM,

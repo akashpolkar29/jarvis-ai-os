@@ -33,9 +33,9 @@ EFFECT_TIER_CASES = [
     (Effect.DESTRUCTIVE, Tier.MANUAL_ONLY),
     (Effect.IRREVERSIBLE, Tier.MANUAL_ONLY),
     (Effect.CREDENTIAL, Tier.MANUAL_ONLY),
-    (Effect.EGRESS_SECRET, Tier.MANUAL_ONLY),
+    (Effect.EGRESS_SECRET, Tier.DENY),
     (Effect.NONE, Tier.ALLOW),
-    (Effect.EGRESS_SECRET | Effect.READ_LOCAL, Tier.MANUAL_ONLY),
+    (Effect.EGRESS_SECRET | Effect.READ_LOCAL, Tier.DENY),
 ]
 
 

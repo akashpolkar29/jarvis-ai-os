@@ -46,8 +46,10 @@ from .errors import (
     JarvisError,
     TaintViolation,
 )
+from .evidence import Attempt, Candidate, EscalationRung, Evidence, EvidenceKind, Verdict
 from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
+from .reasoning import ProviderProfile, TaskBudget
 from .registry import CapabilityRegistry
 from .speaker_id import SpeakerScore
 from .transcript import Transcript
@@ -56,12 +58,14 @@ from .wake_word import WakeEvent
 __all__ = [
     "ARGUMENT_DIGEST_KEY",
     "GENESIS_PREVIOUS_HASH",
+    "Attempt",
     "AudioChunk",
     "AudioStream",
     "AuditChain",
     "AuditRecord",
     "AuditRecordNotSerializable",
     "AuditRecordTampered",
+    "Candidate",
     "CapabilityAlreadyRegistered",
     "CapabilityDescriptor",
     "CapabilityId",
@@ -73,16 +77,22 @@ __all__ = [
     "Decision",
     "DecisionReason",
     "Effect",
+    "EscalationRung",
+    "Evidence",
+    "EvidenceKind",
     "JarvisError",
     "PolicyContext",
     "Provenance",
+    "ProviderProfile",
     "Segment",
     "SpeakerScore",
     "TaintViolation",
     "Tainted",
+    "TaskBudget",
     "Tier",
     "Transcript",
     "Trust",
+    "Verdict",
     "WakeEvent",
     "digest_argument_value",
     "digest_value",

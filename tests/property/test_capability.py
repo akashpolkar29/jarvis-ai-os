@@ -26,7 +26,6 @@ _HIGH_RISK_EFFECTS: list[Effect] = [
     Effect.DESTRUCTIVE,
     Effect.IRREVERSIBLE,
     Effect.CREDENTIAL,
-    Effect.EGRESS_SECRET,
 ]
 
 
@@ -77,9 +76,24 @@ def test_minimum_tier_for_is_monotonic(a_members: set[Effect], extra_members: se
 def test_high_risk_effect_always_at_least_manual_only(
     high_risk_effect: Effect, other_members: set[Effect]
 ) -> None:
-    """DESTRUCTIVE/IRREVERSIBLE/CREDENTIAL/EGRESS_SECRET always floor at MANUAL_ONLY."""
+    """DESTRUCTIVE/IRREVERSIBLE/CREDENTIAL always floor at MANUAL_ONLY."""
     combined = _combine(other_members) | high_risk_effect
     assert minimum_tier_for(combined) >= Tier.MANUAL_ONLY
+
+
+@given(EFFECT_MEMBER_SET)
+def test_egress_secret_always_denies_unconditionally(other_members: set[Effect]) -> None:
+    """EGRESS_SECRET always floors at DENY, regardless of what else is combined with it.
+
+    Stricter than the other high-risk effects (ADR-0038): DENY is an
+    absolute ceiling evaluate() never grants, unlike MANUAL_ONLY, which
+    physical confirmation can satisfy. Kept as its own property test,
+    not folded back into test_high_risk_effect_always_at_least_manual_only,
+    so this exact guarantee -- not just ">= MANUAL_ONLY" -- has its own
+    assertion.
+    """
+    combined = _combine(other_members) | Effect.EGRESS_SECRET
+    assert minimum_tier_for(combined) == Tier.DENY
 
 
 @given(DESCRIPTOR, ARGUMENTS_VALUE, UNTAINTED_PROVENANCE | TAINTED_PROVENANCE)

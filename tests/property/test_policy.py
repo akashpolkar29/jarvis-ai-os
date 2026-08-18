@@ -30,13 +30,18 @@ def _invocation(effects: Effect, *, tainted: bool) -> CapabilityInvocation:
     return CapabilityInvocation(descriptor, Tainted({}, provenance))
 
 
-# One fixed, representative invocation per tier. DENY is only reachable
-# via taint escalation from MANUAL_ONLY -- minimum_tier_for never
-# returns DENY directly (see jarvis.domain.capability).
+# One fixed, representative invocation per tier. _DENY_INVOCATION
+# reaches DENY via taint escalation from MANUAL_ONLY, not directly --
+# kept this way since it's exercising the *escalation* path
+# specifically. As of ADR-0038, minimum_tier_for can also return DENY
+# directly (EGRESS_SECRET) without any taint escalation at all --
+# see _EGRESS_SECRET_INVOCATION and test_egress_secret_never_reaches_a_cloud_provider
+# below for that path, not this fixture.
 _ALLOW_INVOCATION = _invocation(Effect.READ_LOCAL, tainted=False)
 _CONFIRM_INVOCATION = _invocation(Effect.EXECUTE, tainted=False)
 _MANUAL_ONLY_INVOCATION = _invocation(Effect.DESTRUCTIVE, tainted=False)
 _DENY_INVOCATION = _invocation(Effect.DESTRUCTIVE, tainted=True)
+_EGRESS_SECRET_INVOCATION = _invocation(Effect.EGRESS_SECRET, tainted=False)
 
 CONTEXT = st.builds(
     PolicyContext,
@@ -49,6 +54,23 @@ CONTEXT = st.builds(
 def test_deny_is_absolute(context: PolicyContext) -> None:
     """No confirmation, of any kind, can override a DENY-tier invocation."""
     assert evaluate(_DENY_INVOCATION, context).granted is False
+
+
+@given(CONTEXT)
+def test_egress_secret_never_reaches_a_cloud_provider(context: PolicyContext) -> None:
+    """A SECRET-classified task never reaches a cloud provider, under any confirmation state.
+
+    M2 acceptance criterion #9 (WP-28 planning pass), the concrete
+    regression test ADR-0038 requires: even with
+    physical_confirmation_available=True (which satisfies MANUAL_ONLY),
+    an EGRESS_SECRET-effect invocation must still be denied, because it
+    floors at DENY, not MANUAL_ONLY. Distinct from test_deny_is_absolute
+    below -- that test proves DENY is absolute for a DENY reached via
+    taint escalation; this one proves the same for DENY reached
+    directly from the effect table, which is the path ADR-0038 exists
+    to fix.
+    """
+    assert evaluate(_EGRESS_SECRET_INVOCATION, context).granted is False
 
 
 @given(CONTEXT)
