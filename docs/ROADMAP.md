@@ -9,6 +9,22 @@ control, memory/retrieval, browser/coding assistance, and integrations
 Architecture, capability-based plugin, multi-tier policy engine, and
 hash-chained audit invariants established in M0.
 
+## Standing principle: always legible
+
+Every action JARVIS takes, across every milestone, should be legible
+to Akash in real time — both spoken (reusing M1's existing TTS output)
+and visible on-screen (via M5's Console UI, once it exists). This is a
+decided product expectation, not a specific UI or output design. What
+actually gets spoken vs. shown, and what the on-screen view looks
+like, remains deliberately undecided — per this project's own
+recovered original design intent that Console UI views are frozen at
+the interface level but deliberately not designed further ahead of
+real use (see `m2-reasoning-layer.md` section 8: *"You will know what
+you want after six months of using the HUD."*). Nothing about this
+principle authorizes designing M5's Console UI or M6's integrations
+ahead of their own planning passes — it only states that when they are
+designed, silent/invisible operation is not an acceptable outcome.
+
 ## System at a glance
 
 ```
