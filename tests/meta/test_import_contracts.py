@@ -26,6 +26,7 @@ _ALL_CONTRACTS = (
     "C6 no GLib in the core",
     "C7 plugin_api depends only on domain",
     "C5 ui privilege",
+    "C4 adapter independence",
 )
 
 
@@ -105,6 +106,18 @@ def test_c5_ui_privilege_violation_is_caught(tmp_path: Path) -> None:
     result = run_lint_imports(tmp_path, src_root)
     assert result.returncode != 0
     assert _contract_status(result.stdout, "C5 ui privilege") == "BROKEN"
+
+
+def test_c4_adapter_independence_violation_is_caught(tmp_path: Path) -> None:
+    """One reasoning adapter module importing a sibling adapter module breaks C4."""
+    src_root = build_project_copy(tmp_path)
+    inject_import_violation(
+        src_root / "jarvis" / "adapters" / "reasoning" / "family_a.py",
+        "jarvis.adapters.reasoning.family_b",
+    )
+    result = run_lint_imports(tmp_path, src_root)
+    assert result.returncode != 0
+    assert _contract_status(result.stdout, "C4 adapter independence") == "BROKEN"
 
 
 def test_violation_does_not_spuriously_break_unrelated_contracts(tmp_path: Path) -> None:

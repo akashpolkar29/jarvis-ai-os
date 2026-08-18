@@ -36,8 +36,17 @@ always unverified, no real model (see that module's docstring for
 why). ``Gtk4PhysicalConfirmationAdapter`` implements
 :class:`~jarvis.ports.physical_confirmation.PhysicalConfirmationPort`
 by delegating to the GTK4 dialog in ``jarvis.ui.confirm`` -- the only
-adapter in this ring permitted to reach into ``jarvis.ui``. None of
-these adapters depend on each other.
+adapter in this ring permitted to reach into ``jarvis.ui``.
+``SecretServiceAdapter`` implements
+:class:`~jarvis.ports.secret.SecretPort` via the freedesktop Secret
+Service D-Bus API (ADR-0042). ``FamilyAReasoningAdapter`` and
+``FamilyBReasoningAdapter`` implement
+:class:`~jarvis.ports.reasoning.ReasoningPort` against two structurally
+different cloud provider REST API shapes; ``LocalReasoningAdapter``
+implements it against a local, on-device model server -- see
+``jarvis.adapters.reasoning``'s own docstring for why these three live
+in a subpackage rather than flat modules. None of these adapters
+depend on each other.
 """
 
 from __future__ import annotations
@@ -47,6 +56,8 @@ from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
 from .physical_confirmation import Gtk4PhysicalConfirmationAdapter
+from .reasoning import FamilyAReasoningAdapter, FamilyBReasoningAdapter, LocalReasoningAdapter
+from .secret import SecretServiceAdapter
 from .speaker_id import UnverifiedSpeakerIdAdapter
 from .stt import FasterWhisperAdapter
 from .tts import PiperTtsAdapter
@@ -54,14 +65,18 @@ from .vad import SileroVadAdapter
 from .wake_word import OpenWakeWordAdapter
 
 __all__ = [
+    "FamilyAReasoningAdapter",
+    "FamilyBReasoningAdapter",
     "FasterWhisperAdapter",
     "Gtk4PhysicalConfirmationAdapter",
     "JsonFileAuditStorageAdapter",
     "LocalFileSystemAdapter",
+    "LocalReasoningAdapter",
     "ManualConfirmationAdapter",
     "MprisMediaPlayerAdapter",
     "OpenWakeWordAdapter",
     "PiperTtsAdapter",
+    "SecretServiceAdapter",
     "SileroVadAdapter",
     "UnverifiedSpeakerIdAdapter",
 ]

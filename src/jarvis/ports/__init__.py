@@ -32,7 +32,9 @@ that module's own docstring for why. ``ReasoningPort`` is the seam
 between a task description and a reasoning provider's proposed
 Candidate (M2). ``ValidationPort`` is the seam between a Candidate and
 ground-truth judgement of it -- a build, a test run, a static
-analyzer, or any other real check (M2).
+analyzer, or any other real check (M2). ``SecretPort`` is the seam
+between a reference and a secret's real value, resolved via the
+system keyring at the point of use (ADR-0017, ADR-0042).
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
 from .physical_confirmation import PhysicalConfirmationPort
 from .reasoning import ReasoningPort
+from .secret import SecretPort
 from .speaker_id import SpeakerIdPort
 from .stt import SttPort
 from .tts import TtsPort
@@ -59,6 +62,7 @@ __all__ = [
     "NoMediaPlayerRunningError",
     "PhysicalConfirmationPort",
     "ReasoningPort",
+    "SecretPort",
     "SpeakerIdPort",
     "SttPort",
     "TtsPort",

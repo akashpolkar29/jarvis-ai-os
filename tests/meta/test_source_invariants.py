@@ -11,7 +11,12 @@ import ast
 import sys
 from pathlib import Path
 
-from tests.meta.helpers import dotted_attribute_calls, iter_py_files, top_level_imports
+from tests.meta.helpers import (
+    attribute_name_equality_comparisons,
+    dotted_attribute_calls,
+    iter_py_files,
+    top_level_imports,
+)
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 DOMAIN_ROOT = SRC_ROOT / "jarvis" / "domain"
@@ -74,6 +79,30 @@ def test_no_vendor_names_in_domain_application_or_ports() -> None:
             text = py_file.read_text(encoding="utf-8").lower()
             for banned in _BANNED_VENDOR_STRINGS:
                 assert banned not in text, f"{py_file} contains banned vendor string {banned!r}"
+
+
+def test_no_provider_profile_name_identity_conditionals_outside_adapters() -> None:
+    """No branching on `.name` identity in domain/, application/, or ports/ (task #21, WP-32).
+
+    ``ProviderProfile.name`` (WP-30) is real, registered-once metadata.
+    Branching application logic on which specific provider a ``name``
+    identifies (``if profile.name == "...": ...``) would leak
+    provider-specific behavior into a layer that is supposed to stay
+    provider-agnostic -- the same abstraction leak ADR-0021's
+    vendor-string grep guards against, one level more indirect (a
+    conditional on the field, not a literal banned string in it).
+    Deliberately not scoped to ``adapters/``: WP-32's own
+    ``family_a.py``/``family_b.py``/``local.py`` are the first modules
+    to define a real ``ProviderProfile`` at all, and none of them
+    branch on ``.name`` -- routing by provider identity is
+    ``application.reasoning.router``'s job (WP-36), not decided yet,
+    and this check exists so that whenever it lands, it cannot do so
+    by string-comparing ``.name``.
+    """
+    for root in (DOMAIN_ROOT, APPLICATION_ROOT, PORTS_ROOT):
+        for py_file in iter_py_files(root):
+            lines = attribute_name_equality_comparisons(py_file)
+            assert not lines, f"{py_file} branches on .name identity at line(s) {lines}"
 
 
 def test_every_src_init_has_a_docstring() -> None:

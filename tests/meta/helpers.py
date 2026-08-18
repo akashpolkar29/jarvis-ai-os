@@ -121,6 +121,31 @@ def dotted_attribute_calls(py_file: Path) -> list[str]:
     return calls
 
 
+def attribute_name_equality_comparisons(py_file: Path) -> list[int]:
+    """Return line numbers of `.name == ...` / `... == .name`-shaped comparisons in `py_file`.
+
+    Catches branching on an attribute literally called ``name`` --
+    e.g. ``provider.name == "..."`` -- the same class of abstraction
+    leak a vendor-string grep catches, one level more indirect: a
+    conditional on a registered-once identity field instead of a
+    literal banned string.
+    """
+    tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not all(isinstance(op, ast.Eq | ast.NotEq) for op in node.ops):
+            continue
+        operands = [node.left, *node.comparators]
+        is_name_comparison = any(
+            isinstance(operand, ast.Attribute) and operand.attr == "name" for operand in operands
+        )
+        if is_name_comparison:
+            lines.append(node.lineno)
+    return lines
+
+
 def iter_py_files(package_dir: Path) -> list[Path]:
     """Return every ``.py`` file under ``package_dir``, sorted for determinism."""
     return sorted(package_dir.rglob("*.py"))

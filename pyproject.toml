@@ -172,13 +172,14 @@ source = ["src/jarvis"]
 root_packages = ["jarvis"]
 include_external_packages = true
 
-# NOTE: Contracts for plugin isolation (C3) and adapter independence (C4)
-# are intentionally NOT configured yet: import-linter errors on a contract
-# naming a package that does not yet exist on disk. Those packages
-# (plugins/*, per-adapter subpackages) arrive in later work packages; see
-# tests/meta/test_gate_integrity.py::CONTRACT_SCHEDULE for when each is due.
-# C5 (ui privilege) is configured below as of WP-24, now that jarvis.ui
-# exists.
+# NOTE: The contract for plugin isolation (C3) is intentionally NOT
+# configured yet: import-linter errors on a contract naming a package
+# that does not yet exist on disk, and plugins/* is not a real workspace
+# member yet. See tests/meta/test_gate_integrity.py::CONTRACT_SCHEDULE
+# for when it is due. C5 (ui privilege) is configured below as of WP-24,
+# now that jarvis.ui exists. C4 (adapter independence) is configured
+# below as of WP-32, now that jarvis.adapters.reasoning -- this repo's
+# first real per-adapter subpackage -- exists.
 
 [[tool.importlinter.contracts]]
 name = "C1 layered architecture"
@@ -239,4 +240,13 @@ forbidden_modules = [
     "jarvis.kernel",
     "jarvis.ipc",
     "jarvis.cli",
+]
+
+[[tool.importlinter.contracts]]
+name = "C4 adapter independence"
+type = "independence"
+modules = [
+    "jarvis.adapters.reasoning.family_a",
+    "jarvis.adapters.reasoning.family_b",
+    "jarvis.adapters.reasoning.local",
 ]
