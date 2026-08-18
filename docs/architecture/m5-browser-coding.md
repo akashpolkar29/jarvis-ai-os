@@ -61,3 +61,14 @@ action gated by the four-tier policy engine; every invocation
 audit-logged; the ports-and-adapters dependency rule; no vendor names
 leaking into `domain`/`application`/`ports`. Which specific ports or
 capabilities this milestone will need is not decided here.
+
+M5's eventual design must also satisfy the standing "always legible"
+principle in `docs/ROADMAP.md`: every browser or coding action should
+be legible to Akash in real time, spoken and shown. That means reusing
+M1's TTS — and, for the on-screen half, M5 is not just another
+consumer of this principle: the Console UI named in this milestone's
+own objective is the mechanism the principle depends on, so this is
+where it actually gets built, not inherited from elsewhere. This is a
+constraint M5's future design must satisfy, not a decision about what
+M5's specific ports, adapters, or Console UI will look like — those
+remain genuinely undecided.

@@ -53,3 +53,12 @@ action gated by the four-tier policy engine; every invocation
 audit-logged; the ports-and-adapters dependency rule; no vendor names
 leaking into `domain`/`application`/`ports`. Which specific ports or
 capabilities this milestone will need is not decided here.
+
+M3's eventual design must also satisfy the standing "always legible"
+principle in `docs/ROADMAP.md`: every desktop-control action should be
+legible to Akash in real time, spoken and shown. That means reusing
+M1's TTS and M5's Console UI once they're available to build
+against — not inventing new voice or display mechanisms specific to
+M3. This is a constraint M3's future design must satisfy, not a
+decision about what M3's specific ports, adapters, or UI will look
+like — those remain genuinely undecided.
