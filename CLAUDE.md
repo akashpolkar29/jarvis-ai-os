@@ -49,6 +49,7 @@ uv run lint-imports
 uv run pytest
 uv run coverage report --include="src/jarvis/domain/*" --fail-under=100
 uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=100
+uv run coverage report --include="src/jarvis/application/reasoning/*" --fail-under=100
 
 ## Meta-tests
 

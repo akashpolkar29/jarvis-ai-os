@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-CURRENT_WORK_PACKAGE = 33
+CURRENT_WORK_PACKAGE = 34
 
 # Work package at which each import-linter contract becomes configurable.
 # A contract can only be added once every package it names exists on
@@ -87,6 +87,7 @@ def test_ci_invokes_every_gate() -> None:
         "pytest",
         'coverage report --include="src/jarvis/domain/*"',
         'coverage report --include="src/jarvis/application/policy/*"',
+        'coverage report --include="src/jarvis/application/reasoning/*"',
     )
     for snippet in required_snippets:
         assert snippet in text, f"CI workflow is missing gate: {snippet!r}"

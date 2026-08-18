@@ -73,3 +73,6 @@ jobs:
 
       - name: coverage report (application.policy)
         run: uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=100
+
+      - name: coverage report (application.reasoning)
+        run: uv run coverage report --include="src/jarvis/application/reasoning/*" --fail-under=100
