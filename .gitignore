@@ -25,7 +25,12 @@ htmlcov/
 # Data / secrets
 *.db
 .env
+.env.*
 secrets.toml
+credentials.json
+credential*.json
+*.pem
+*.key
 
 # Editors
 .idea/
