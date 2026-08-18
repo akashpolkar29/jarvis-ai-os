@@ -58,7 +58,7 @@ again" message after each transcript serve as the ongoing "ready" signal
 the fixed-window stage-3 script didn't need.
 
 Nothing is written to disk anywhere in the loop -- no capture, no
-transcript, matching ADR-0036's spirit even though this script sits
+transcript, matching ADR-0018's spirit even though this script sits
 outside its formal enforcement.
 
 Run with: uv run poc/wp19_04_combined.py

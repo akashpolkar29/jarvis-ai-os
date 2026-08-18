@@ -1,8 +1,8 @@
 # JARVIS — M1: Voice Architecture
 
-**Status:** Draft for approval · **Version:** 0.1 · **Grounded in:** confirmed hardware (RTX 5070 Laptop, 8GB VRAM, CUDA 13.2 working, GNOME/Wayland, 30GB RAM)
+**Status:** Implemented (WP-19 through WP-27, tagged v0.2.0) · **Version:** 0.1 · **Grounded in:** confirmed hardware (RTX 5070 Laptop, 8GB VRAM, CUDA 13.2 working, GNOME/Wayland, 30GB RAM)
 **Depends on:** M0 (tagged v0.1.1, complete)
-**Scope:** Architecture only — no implementation until explicitly approved.
+**Scope:** Architecture as originally approved, annotated in place where implementation diverged from or extended the plan (see sections 4, 6, 7, 9, and 11) rather than left silently stale.
 
 ---
 
@@ -20,7 +20,7 @@ M0's threat model ended with an honest admission (Finding 2, docs/threat-model/v
 
 M1 is the first point in this project where that gap can actually be closed for real, and closing it should be M1's central design goal, not a side effect of adding voice.
 
-Here's why voice makes this urgent rather than optional: the moment a spoken command can trigger a capability invocation, physical presence needs to mean something a voice alone cannot produce. If M1 ships voice input without upgrading confirmation, a recording of you, or a video call playing your voice, could satisfy MANUAL_ONLY exactly as well as a CLI flag does today. That is precisely the replay/cloning attack ADR-0005 named as the reason voice can never be an authorization boundary.
+Here's why voice makes this urgent rather than optional: the moment a spoken command can trigger a capability invocation, physical presence needs to mean something a voice alone cannot produce. If M1 ships voice input without upgrading confirmation, a recording of you, or a video call playing your voice, could satisfy MANUAL_ONLY exactly as well as a CLI flag does today. That is precisely the replay/cloning attack ADR-0012 named as the reason voice can never be an authorization boundary.
 
 The fix: a ConfirmationPort adapter backed by a genuine physical action, a keypress or mouse click on a small, focused GTK4 dialog, replaces the self-reported CLI boolean for anything voice-triggered. A spoken command can request a MANUAL_ONLY action, but granting it requires physically pressing a key or clicking a button on the screen in front of the user. That is not defeated by a recording, a video call, or another voice in the room, because none of those can move an actual hand.
 
@@ -31,13 +31,19 @@ This does not make MANUAL_ONLY bulletproof against an attacker who already has f
 ## 2. Revised pipeline
 
 Microphone (PipeWire)
-  -> Ring buffer (in-memory only, never written to disk, per ADR-0036)
+  -> Ring buffer (in-memory only, never written to disk, per ADR-0018)
   -> Wake word detection (openWakeWord, CPU, always running, near-zero GPU cost)
      triggers on a wake phrase
   -> VAD, voice activity detection (Silero VAD, CPU, trims silence)
   -> Speech-to-text (faster-whisper, GPU/CUDA, runs ONLY after wake word, not continuously)
   -> Speaker filter (optional, non-authoritative, see section 3)
-  -> Intent resolution (M0's existing rule-based resolver; full LLM understanding is M2, not M1)
+  -> Intent resolution (a rule-based resolver; full LLM understanding is M2, not M1 --
+     built fresh in WP-25 as kernel.intent.resolve_intent(), not reused from M0: M0
+     never actually built any text -> capability mapping, despite this doc's original
+     wording implying one already existed. The closest M0 analog was argparse's own
+     CLI subcommand dispatch, which only works because argparse has already done the
+     parsing -- it never faces raw free-form text the way an SttPort transcript does.
+     See kernel/intent.py's own module docstring for the full account.)
   -> AuthorizationOrchestrator.authorize_by_id(...)   [unchanged from M0]
        CONFIRM/MANUAL_ONLY routed through the new physical-keypress ConfirmationPort adapter
   -> Capability executes (existing music/file capabilities, unchanged)
@@ -49,9 +55,9 @@ What's genuinely new here vs. M0: everything above the AuthorizationOrchestrator
 
 ## 3. The speaker-filter boundary
 
-ADR-0005 established this in M0: voice and speaker verification are a convenience filter and an audit signal, never an authorization boundary. M1 is where this stops being a principle on paper and becomes real code that is tempting to get wrong under time pressure.
+ADR-0012 established this in M0: voice and speaker verification are a convenience filter and an audit signal, never an authorization boundary. M1 is where this stops being a principle on paper and becomes real code that is tempting to get wrong under time pressure.
 
-The concrete risk: it would be easy, and feel reasonable, to write something like "if speaker_match: physical_confirmation_available = True." That would directly violate ADR-0005, and would mean a good enough voice clone or a recording of the real user specifically, not just anyone, could pass MANUAL_ONLY.
+The concrete risk: it would be easy, and feel reasonable, to write something like "if speaker_match: physical_confirmation_available = True." That would directly violate ADR-0012, and would mean a good enough voice clone or a recording of the real user specifically, not just anyone, could pass MANUAL_ONLY.
 
 The rule for M1, as a structural constraint, not just a comment: SpeakerIdPort's output must never appear anywhere near PolicyContext construction. It is an audit-log field and a UX signal only, never an input to tier-satisfaction logic in evaluate(). The physical-keypress confirmation from section 1 is the only thing allowed to set physical_confirmation_available to True.
 
@@ -60,6 +66,12 @@ The rule for M1, as a structural constraint, not just a comment: SpeakerIdPort's
 ## 4. Ports
 
 WakeWordPort: stream() -> AsyncIterator[WakeEvent]
+  WakeEvent gained a required `audio: AudioChunk` field during WP-25 (ADR-0033),
+  not originally planned here: VadPort.segment() needs real captured audio to
+  operate on, and this doc's original pipeline diagram implied a connection
+  between wake-word detection and VAD that neither port's frozen WP-20/WP-21
+  signature actually provided. See ADR-0033 for the gap, the options considered,
+  and why WakeEvent -- not a new port -- is where that audio is carried.
 VadPort: segment(audio: AudioChunk) -> AsyncIterator[Segment]
 SttPort: async transcribe(audio: Segment) -> Tainted[Transcript]
 TtsPort: async speak(text: str) -> AudioStream
@@ -72,18 +84,28 @@ SttPort.transcribe returns Tainted[Transcript]. A spoken command is Provenance.u
 
 ## 5. Threat model additions (to append to docs/threat-model/v0.md)
 
-- Always-on listening is a new, permanent privacy surface. Wake-word detection runs continuously on-device. It must never touch the network (openWakeWord is fully local) and the ring buffer feeding it must never be written to disk under any circumstance, matching ADR-0036 exactly, extended from "no audio persisted" to "no audio persisted, including transiently during wake-word evaluation."
+- Always-on listening is a new, permanent privacy surface. Wake-word detection runs continuously on-device. It must never touch the network (openWakeWord is fully local) and the ring buffer feeding it must never be written to disk under any circumstance, matching ADR-0018 exactly, extended from "no audio persisted" to "no audio persisted, including transiently during wake-word evaluation."
 - A legal note carried forward from the original M0 review: recording someone else's non-public spoken word without consent is treated seriously under German law (paragraph 201 StGB). A household microphone that can capture flatmates or visitors is exactly the situation that contemplates. The ring-buffer-only, never-persisted design is a direct mitigation.
 - The Finding 2 closure becomes a new, explicit claim once section 1 ships: "MANUAL_ONLY now requires a physical keypress/click that voice alone cannot produce," and this needs its own test proving a simulated or injected keypress event is rejected the same way M0's original synthetic-input interlock was designed to prevent.
 
 ---
 
-## 6. New ADRs this milestone will need
+## 6. New ADRs this milestone needed
 
-ADR-0040: Speaker verification output never feeds PolicyContext; audit/UX signal only (operationalizes ADR-0005)
-ADR-0041: Physical-keypress ConfirmationPort adapter replaces self-reported CLI booleans for MANUAL_ONLY, closing threat-model Finding 2
-ADR-0042: Wake-word/STT split: continuous CPU-only wake-word detection, GPU STT only triggered after wake word
-ADR-0043: piper-tts (OHF-Voice/piper1-gpl) chosen over the archived original Piper repo
+Written for real during implementation, numbered 0033-0037 (the next available
+numbers at the time each was written, checked directly against docs/adr/, not
+the guesses originally sketched here):
+
+ADR-0033: WakeEvent carries the triggering audio, via the existing ring buffer -- an
+  unplanned finding from WP-25 (see section 4's WakeWordPort note above), not
+  anticipated when this doc was first drafted.
+ADR-0034: Speaker verification is audit/UX only, mechanically enforced (operationalizes
+  ADR-0012, not ADR-0005 as originally mis-cited in this doc)
+ADR-0035: A genuine physical-keypress ConfirmationPort closes threat-model Finding 2 --
+  named PhysicalConfirmationPort, deliberately a separate port from ConfirmationPort,
+  not a new ConfirmationPort adapter (see section 4)
+ADR-0036: Continuous CPU wake-word detection, GPU speech-to-text only after a trigger
+ADR-0037: piper-tts (OHF-Voice/piper1-gpl) chosen over the archived original Piper repo
 
 ---
 
@@ -102,9 +124,11 @@ src/jarvis/
     vad.py                   - SileroVadAdapter
     stt.py                    - FasterWhisperAdapter
     tts.py                    - PiperTtsAdapter
-    speaker_id.py            - stub/deferred, see open questions
+    speaker_id.py            - stub, decided and implemented as always-unverified (see section 11)
     physical_confirmation.py - Gtk4PhysicalConfirmationAdapter
   kernel/
+    intent.py                 - resolve_intent(), built fresh in WP-25 -- not in the
+                                 original plan, see section 4's Intent resolution note
     voice_loop.py             - wires wake word to VAD to STT to intent to authorize to TTS
   ui/
     confirm/                  - the GTK4 dialog itself, first real UI code in the project
@@ -134,7 +158,7 @@ Numbering continues from M0's WP-18. The first work package is a rough, honest p
 
 WP-19: Proof of concept, deliberately outside the architecture. A standalone script that captures microphone audio, runs openWakeWord, and on trigger runs faster-whisper, printing the transcript to the terminal. No ports, no adapters, no CLAUDE.md changes. The only goal: prove the microphone, GPU, and libraries actually work together on this real machine. Depends on nothing; pure de-risking.
 
-WP-20: WakeWordPort plus OpenWakeWordAdapter, ring buffer (never persisted, per ADR-0036), formalized into the real architecture for the first time. Depends on WP-19 proving it works.
+WP-20: WakeWordPort plus OpenWakeWordAdapter, ring buffer (never persisted, per ADR-0018), formalized into the real architecture for the first time. Depends on WP-19 proving it works.
 
 WP-21: VadPort and SttPort plus adapters, wired to fire after wake word. Depends on WP-20.
 
@@ -144,11 +168,11 @@ WP-23: SpeakerIdPort plus adapter, with a structural test proving its output can
 
 WP-24: PhysicalConfirmationPort plus GTK4 dialog adapter, the Finding 2 closure. The most safety-critical work package in M1; expect the same depth of review the original policy engine (WP-04) got in M0. Independent.
 
-WP-25: kernel/voice_loop.py, wiring everything together, calling the existing, unchanged AuthorizationOrchestrator. Depends on WP-20 through WP-24.
+WP-25: kernel/voice_loop.py, wiring everything together, calling the existing, unchanged AuthorizationOrchestrator. Depends on WP-20 through WP-24. In practice also had to build kernel/intent.py from scratch (see section 4) and extend WakeEvent to carry audio (ADR-0033, see section 4) -- both real gaps this doc did not anticipate, not scope creep.
 
 WP-26: "jarvis listen" CLI subcommand, runs the voice loop as a foreground process. Depends on WP-25.
 
-WP-27: M1 threat-model closeout, new ADRs 0040 through 0043 written for real, tag v0.2.0. Depends on everything above.
+WP-27: M1 threat-model closeout, new ADRs 0034 through 0037 written for real (ADR-0033 was written during WP-25, when its finding actually happened), tag v0.2.0. Depends on everything above.
 
 ---
 
@@ -164,7 +188,7 @@ Manual verification (real terminal, real microphone, every single time): does th
 
 ## 11. Open questions
 
-1. Wake phrase: openWakeWord's default, or a custom phrase?
-2. Whisper model size: medium (faster, lower latency, recommended default) or large-v3 (slower, marginally more accurate)?
-3. Does the physical-confirmation dialog replace ManualConfirmationAdapter entirely, or run alongside it for CLI use? Recommendation: alongside, so existing CLI workflows are not broken; the stronger physical-confirmation path is added specifically for voice-triggered actions.
-4. SpeakerIdPort: build a real speaker-embedding model with an enrollment step in M1, or stub it as an always-"unverified" pass-through and defer the real implementation? Since it is explicitly non-authoritative (section 3), stubbing it in M1 is recommended; it only ever affects audit logging and UX tone, never a security decision.
+1. Wake phrase: openWakeWord's default, or a custom phrase? **Resolved (WP-20): openWakeWord's default ("hey jarvis").**
+2. Whisper model size: medium (faster, lower latency, recommended default) or large-v3 (slower, marginally more accurate)? **Resolved (WP-21): medium, the recommended default.**
+3. Does the physical-confirmation dialog replace ManualConfirmationAdapter entirely, or run alongside it for CLI use? Recommendation: alongside, so existing CLI workflows are not broken; the stronger physical-confirmation path is added specifically for voice-triggered actions. **Resolved (WP-24): alongside, per the recommendation -- PhysicalConfirmationPort is a wholly separate port from ConfirmationPort, so this held true by construction, not by a choice made under pressure. ManualConfirmationAdapter is untouched and still used for every non-voice (CLI) invocation.**
+4. SpeakerIdPort: build a real speaker-embedding model with an enrollment step in M1, or stub it as an always-"unverified" pass-through and defer the real implementation? Since it is explicitly non-authoritative (section 3), stubbing it in M1 is recommended; it only ever affects audit logging and UX tone, never a security decision. **Resolved (WP-23): stubbed, per the recommendation -- UnverifiedSpeakerIdAdapter always returns verified=False, confidence=0.0. See ADR-0034 for the mechanical enforcement that keeps this non-authoritative for real, not just by convention.**

@@ -13,7 +13,7 @@ format openWakeWord expects in stages 3/4) so later stages reuse this exact
 capture path unchanged.
 
 Nothing captured here is ever written to disk, even temporarily -- kept in
-the spirit of ADR-0036 even though this script sits outside its formal
+the spirit of ADR-0018 even though this script sits outside its formal
 enforcement (see docs/architecture/m1-voice-architecture.md section 9).
 
 Run with: uv run poc/wp19_02_mic_smoke.py
