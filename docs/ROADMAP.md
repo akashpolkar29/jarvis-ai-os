@@ -9,12 +9,34 @@ control, memory/retrieval, browser/coding assistance, and integrations
 Architecture, capability-based plugin, multi-tier policy engine, and
 hash-chained audit invariants established in M0.
 
+## System at a glance
+
+```
+You (voice or text)
+   |
+   v
+Voice interface (M1)  +  Reasoning (M2)
+   |    wake word, STT     escalation ladder
+   v
+Kernel (M0) -- Policy engine (4 tiers: allow -> deny) + Audit log (tamper-evident)
+   |    every request passes through here, always
+   v
+[ Desktop (M3) | Memory (M4) | Browser/code (M5) | Integrations (M6) ]
+   |
+   v
+Response (spoken or shown)
+```
+
+The kernel core — M0 through M2: voice, reasoning, policy, audit — is
+already real and does not change as new capabilities are added. The
+capability domains — M3 through M6 — are what grows outward from that
+core, one milestone at a time, without ever touching it.
+
 ## Milestone summary
 
 Status pulled from real repo state (git tags, the task tracker, actual
-files on disk) as of this document's creation — not from CLAUDE.md's
-"Current Status" line, which is stale (still describes M1 as "not
-started" despite `v0.2.0` being tagged).
+files on disk) as of this document's creation, and kept in sync with
+CLAUDE.md's "Current Status" line, which reflects the same state.
 
 | Milestone | Objective | Entry gate | Exit gate | Complexity | Status |
 |---|---|---|---|---|---|
