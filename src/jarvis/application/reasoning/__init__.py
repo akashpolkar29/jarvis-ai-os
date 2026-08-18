@@ -14,14 +14,25 @@ dispatcher per deliverable #6, not by the ladder itself) -- only
 when more than one competing attempt exists: it selects exactly one
 ``Candidate``, unmodified (ADR-0023), scored by real validation
 evidence with self-authored evidence excluded (ADR-0025).
+
+:class:`~jarvis.application.reasoning.router.ModelRouter` authorizes
+one reasoning-provider call through the real
+``AuthorizationOrchestrator``/``AuditChain`` choke point (ADR-0039),
+using :func:`~jarvis.application.reasoning.classification.egress_effect_for`
+to decide which ``Effect`` a cloud-provider call declares for a given
+task's real Classification.
 """
 
 from __future__ import annotations
 
 from .arbiter import Arbiter
+from .classification import egress_effect_for
 from .ladder import EscalationLadder
+from .router import ModelRouter
 
 __all__ = [
     "Arbiter",
     "EscalationLadder",
+    "ModelRouter",
+    "egress_effect_for",
 ]
