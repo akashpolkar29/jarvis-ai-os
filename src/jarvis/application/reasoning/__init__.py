@@ -33,6 +33,13 @@ records non-authoritative engineering telemetry only (which rung, how
 long, pass/fail) -- see that module's own docstring for how ADR-0039's
 "must never become a second, unaudited authorization record" is
 structurally enforced, not just documented.
+
+:class:`~jarvis.application.reasoning.unverifiable.UnverifiableTaskHandler`
+is deliverable #7's unverifiable-task regime: parallel heterogeneous
+generation with escalation structurally off (no ladder, no arbiter --
+see that module's own docstring), a human picking the winner via
+:class:`~jarvis.ports.candidate_presentation.CandidatePresentationPort`
+instead of evidence-based scoring.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from .dispatcher import Dispatcher, DispatchResult
 from .ladder import EscalationLadder
 from .outcome_logger import Outcome, OutcomeLogger
 from .router import ModelRouter
+from .unverifiable import NoProviderAuthorizedError, UnverifiableTaskHandler
 
 __all__ = [
     "Arbiter",
@@ -50,7 +58,9 @@ __all__ = [
     "Dispatcher",
     "EscalationLadder",
     "ModelRouter",
+    "NoProviderAuthorizedError",
     "Outcome",
     "OutcomeLogger",
+    "UnverifiableTaskHandler",
     "egress_effect_for",
 ]

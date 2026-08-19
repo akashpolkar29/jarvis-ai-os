@@ -57,13 +57,16 @@ interactions for deterministic, network-free regression testing --
 see ``jarvis.adapters.reasoning.cassette``'s own docstring.
 ``JsonLinesOutcomeSinkAdapter`` implements
 :class:`~jarvis.ports.outcome.OutcomeSinkPort` by appending one JSON
-line per entry to a real file. None of these adapters depend on each
-other.
+line per entry to a real file. ``TtsTextCandidatePresentationAdapter``
+implements :class:`~jarvis.ports.candidate_presentation.CandidatePresentationPort`
+via TTS-plus-stdout announcements and a stdin-read selection
+(ADR-0040). None of these adapters depend on each other.
 """
 
 from __future__ import annotations
 
 from .audit_storage import JsonFileAuditStorageAdapter
+from .candidate_presentation import TtsTextCandidatePresentationAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
@@ -117,6 +120,7 @@ __all__ = [
     "SecretServiceAdapter",
     "SileroVadAdapter",
     "StaticAnalysisValidator",
+    "TtsTextCandidatePresentationAdapter",
     "UnverifiedSpeakerIdAdapter",
     "UserScriptValidator",
 ]

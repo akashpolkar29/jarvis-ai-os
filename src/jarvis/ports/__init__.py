@@ -39,11 +39,15 @@ system keyring at the point of use (ADR-0017, ADR-0042).
 files on disk a validator can check (ADR-0043). ``OutcomeSinkPort`` is
 the seam between one non-authoritative engineering-telemetry entry and
 durable storage -- never an authorization-relevant record (ADR-0039).
+``CandidatePresentationPort`` is the seam between competing Candidates
+and a human's choice, TTS/text today, a real Console UI once M5
+builds one (ADR-0040).
 """
 
 from __future__ import annotations
 
 from .audit_storage import AuditStoragePort
+from .candidate_presentation import CandidatePresentationPort, InvalidSelectionError
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
@@ -61,8 +65,10 @@ from .workspace import PatchApplicationFailedError, WorkspacePort
 
 __all__ = [
     "AuditStoragePort",
+    "CandidatePresentationPort",
     "ConfirmationPort",
     "FileSystemPort",
+    "InvalidSelectionError",
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
