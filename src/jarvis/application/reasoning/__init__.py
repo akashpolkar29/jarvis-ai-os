@@ -27,6 +27,12 @@ task's real Classification.
 three together, end-to-end, with real ``TaskBudget`` enforcement --
 see that module's own docstring for what it decided about a budget
 unit's meaning and the real, flagged ``DETERMINISTIC_FIX`` gap.
+
+:class:`~jarvis.application.reasoning.outcome_logger.OutcomeLogger`
+records non-authoritative engineering telemetry only (which rung, how
+long, pass/fail) -- see that module's own docstring for how ADR-0039's
+"must never become a second, unaudited authorization record" is
+structurally enforced, not just documented.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from .arbiter import Arbiter
 from .classification import egress_effect_for
 from .dispatcher import Dispatcher, DispatchResult
 from .ladder import EscalationLadder
+from .outcome_logger import Outcome, OutcomeLogger
 from .router import ModelRouter
 
 __all__ = [
@@ -43,5 +50,7 @@ __all__ = [
     "Dispatcher",
     "EscalationLadder",
     "ModelRouter",
+    "Outcome",
+    "OutcomeLogger",
     "egress_effect_for",
 ]

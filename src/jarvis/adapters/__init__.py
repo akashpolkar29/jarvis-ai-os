@@ -54,8 +54,11 @@ implements :class:`~jarvis.ports.workspace.WorkspacePort` via a real
 ``jarvis.adapters.validation``'s own docstring. ``CassetteRecorder``/
 ``CassettePlayer`` (WP-38) record and replay ``ReasoningPort``
 interactions for deterministic, network-free regression testing --
-see ``jarvis.adapters.reasoning.cassette``'s own docstring. None of
-these adapters depend on each other.
+see ``jarvis.adapters.reasoning.cassette``'s own docstring.
+``JsonLinesOutcomeSinkAdapter`` implements
+:class:`~jarvis.ports.outcome.OutcomeSinkPort` by appending one JSON
+line per entry to a real file. None of these adapters depend on each
+other.
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from .audit_storage import JsonFileAuditStorageAdapter
 from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
+from .outcome import JsonLinesOutcomeSinkAdapter
 from .physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from .reasoning import (
     CassetteExhaustedError,
@@ -100,6 +104,7 @@ __all__ = [
     "FasterWhisperAdapter",
     "Gtk4PhysicalConfirmationAdapter",
     "JsonFileAuditStorageAdapter",
+    "JsonLinesOutcomeSinkAdapter",
     "LocalFileSystemAdapter",
     "LocalReasoningAdapter",
     "LocalWorkspaceAdapter",

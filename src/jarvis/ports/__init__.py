@@ -36,7 +36,9 @@ analyzer, or any other real check (M2). ``SecretPort`` is the seam
 between a reference and a secret's real value, resolved via the
 system keyring at the point of use (ADR-0017, ADR-0042).
 ``WorkspacePort`` is the seam between a Candidate's content and real
-files on disk a validator can check (ADR-0043).
+files on disk a validator can check (ADR-0043). ``OutcomeSinkPort`` is
+the seam between one non-authoritative engineering-telemetry entry and
+durable storage -- never an authorization-relevant record (ADR-0039).
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from .audit_storage import AuditStoragePort
 from .confirmation import ConfirmationPort
 from .file_system import FileSystemPort
 from .media_player import MediaPlayerCommandFailedError, MediaPlayerPort, NoMediaPlayerRunningError
+from .outcome import OutcomeSinkPort
 from .physical_confirmation import PhysicalConfirmationPort
 from .reasoning import ReasoningPort
 from .secret import SecretPort
@@ -63,6 +66,7 @@ __all__ = [
     "MediaPlayerCommandFailedError",
     "MediaPlayerPort",
     "NoMediaPlayerRunningError",
+    "OutcomeSinkPort",
     "PatchApplicationFailedError",
     "PhysicalConfirmationPort",
     "ReasoningPort",
