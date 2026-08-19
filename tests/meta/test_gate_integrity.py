@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-CURRENT_WORK_PACKAGE = 40
+CURRENT_WORK_PACKAGE = 42
 
 # Work package at which each import-linter contract becomes configurable.
 # A contract can only be added once every package it names exists on
