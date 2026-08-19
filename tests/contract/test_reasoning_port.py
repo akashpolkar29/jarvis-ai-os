@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.reasoning import (
+    CassettePlayer,
+    CassetteRecorder,
     FamilyAReasoningAdapter,
     FamilyBReasoningAdapter,
     LocalReasoningAdapter,
@@ -79,3 +81,21 @@ def test_local_reasoning_adapter_satisfies_reasoning_port() -> None:
     adapter = LocalReasoningAdapter()
 
     assert isinstance(adapter, ReasoningPort)
+
+
+def test_cassette_recorder_satisfies_reasoning_port() -> None:
+    """CassetteRecorder is structurally a ReasoningPort.
+
+    Safe to construct here: __init__ does zero I/O (it only stores the
+    wrapped provider reference), so no real adapter behavior is needed.
+    """
+    recorder = CassetteRecorder(LocalReasoningAdapter())
+
+    assert isinstance(recorder, ReasoningPort)
+
+
+def test_cassette_player_satisfies_reasoning_port() -> None:
+    """CassettePlayer is structurally a ReasoningPort."""
+    player = CassettePlayer([])
+
+    assert isinstance(player, ReasoningPort)

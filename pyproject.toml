@@ -249,6 +249,7 @@ modules = [
     "jarvis.adapters.reasoning.family_a",
     "jarvis.adapters.reasoning.family_b",
     "jarvis.adapters.reasoning.local",
+    "jarvis.adapters.reasoning.cassette",
     "jarvis.adapters.validation.build",
     "jarvis.adapters.validation.pytest_validator",
     "jarvis.adapters.validation.static",

@@ -51,8 +51,11 @@ implements :class:`~jarvis.ports.workspace.WorkspacePort` via a real
 ``PytestValidator``, ``StaticAnalysisValidator``,
 ``RuntimeCheckValidator``, and ``UserScriptValidator`` implement
 :class:`~jarvis.ports.validation.ValidationPort` -- see
-``jarvis.adapters.validation``'s own docstring. None of these adapters
-depend on each other.
+``jarvis.adapters.validation``'s own docstring. ``CassetteRecorder``/
+``CassettePlayer`` (WP-38) record and replay ``ReasoningPort``
+interactions for deterministic, network-free regression testing --
+see ``jarvis.adapters.reasoning.cassette``'s own docstring. None of
+these adapters depend on each other.
 """
 
 from __future__ import annotations
@@ -62,7 +65,15 @@ from .confirmation import ManualConfirmationAdapter
 from .file_system import LocalFileSystemAdapter
 from .media_player import MprisMediaPlayerAdapter
 from .physical_confirmation import Gtk4PhysicalConfirmationAdapter
-from .reasoning import FamilyAReasoningAdapter, FamilyBReasoningAdapter, LocalReasoningAdapter
+from .reasoning import (
+    CassetteExhaustedError,
+    CassetteMismatchError,
+    CassettePlayer,
+    CassetteRecorder,
+    FamilyAReasoningAdapter,
+    FamilyBReasoningAdapter,
+    LocalReasoningAdapter,
+)
 from .secret import SecretServiceAdapter
 from .speaker_id import UnverifiedSpeakerIdAdapter
 from .stt import FasterWhisperAdapter
@@ -80,6 +91,10 @@ from .workspace import LocalWorkspaceAdapter
 
 __all__ = [
     "BuildValidator",
+    "CassetteExhaustedError",
+    "CassetteMismatchError",
+    "CassettePlayer",
+    "CassetteRecorder",
     "FamilyAReasoningAdapter",
     "FamilyBReasoningAdapter",
     "FasterWhisperAdapter",

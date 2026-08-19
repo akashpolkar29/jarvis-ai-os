@@ -1,0 +1,10 @@
+[
+  {
+    "task": "fix the failing test in the ROS2 package",
+    "candidate_author": "local",
+    "candidate_content": "attempted patch: reinstalled the missing dependency",
+    "trust": "SYSTEM",
+    "classification": "PUBLIC",
+    "sources": []
+  }
+]

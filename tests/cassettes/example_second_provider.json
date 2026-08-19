@@ -1,0 +1,10 @@
+[
+  {
+    "task": "fix the failing test in the ROS2 package",
+    "candidate_author": "family_a",
+    "candidate_content": "final patch: added the missing package.xml dependency entry",
+    "trust": "UNTRUSTED_EXTERNAL",
+    "classification": "PUBLIC",
+    "sources": ["family_a"]
+  }
+]
