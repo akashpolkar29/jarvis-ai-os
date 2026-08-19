@@ -12,22 +12,24 @@ names below necessarily are vendor-specific (that detail has to live
 somewhere, and "adapter implementation internals" is exactly where
 ADR-0021 says it belongs).
 
-**A real, stated gap, not silently smoothed over**: unlike
-``adapters/secret.py`` (verified live against a real running
-``gnome-keyring-daemon`` before being written up as done), this
-adapter's exact request/response shape has **not** been verified
-against a real endpoint. WP-28's own standalone PoC script -- meant to
-validate this shape against a real provider before adapters were built
-against it -- was never written or run (confirmed absent from ``poc/``).
-Doing so now would require handling a real credential, which is
-exactly the boundary :class:`~jarvis.ports.secret.SecretPort` exists to
-keep out of this session's hands, not something to fabricate a fake
-key for (that would only prove the failure path, not the real one).
-This is real, structurally-complete code, following the same
-injectable-low-level-function testability seam as every D-Bus adapter
-in this repo, but its live correctness is unverified -- tracked
-alongside M1's own open item #19 (live end-to-end verification
-pending), not glossed over as done.
+**A real, stated gap, partially closed, not silently smoothed over**:
+WP-28's own standalone PoC script -- meant to validate this shape
+against a real provider before adapters were built against it -- was
+never written or run (confirmed absent from ``poc/``). During M2
+consolidation, ``_ENDPOINT`` was corrected from a deliberate
+``.example`` placeholder to the real OpenAI Chat Completions endpoint,
+and one real round-trip was attempted through this exact,
+unmodified class, with a real credential resolved via
+:class:`~jarvis.ports.secret.SecretPort`. The request reached OpenAI
+and authenticated successfully -- confirmed by getting back a real
+``insufficient_quota`` error (a billing/quota condition checked
+*after* auth) rather than a DNS failure or ``invalid_api_key`` --
+which is real evidence the request shape (auth header, JSON body,
+``model``/``messages`` fields) is correct. **What remains genuinely
+unverified**: :func:`_extract_content`'s response-parsing shape
+(``choices[0]["message"]["content"]``), since no successful response
+was ever returned to parse. Tracked alongside M1's own open item #19
+(live end-to-end verification pending), not glossed over as done.
 
 Trust level: this is a genuine third-party cloud service --
 ``ProviderProfile.is_local`` is ``False`` for this family -- so its
@@ -57,7 +59,7 @@ if TYPE_CHECKING:
 
     ChatCompletionCall = Callable[[str, str, str], Awaitable[str]]
 
-_ENDPOINT = "https://api.family-a.example/v1/chat/completions"
+_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 _DEFAULT_MODEL = "family-a-default"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _AUTHOR = "family_a"
