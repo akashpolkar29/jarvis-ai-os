@@ -217,28 +217,83 @@ def _atspi_type_text(app: object, text: str) -> bool:
     return True
 
 
-def _atspi_read_text(app: object) -> str | None:
-    """Best-effort: return ``app``'s own Text-interface content, or ``None`` if unavailable.
+_READ_TEXT_MAX_NODES_VISITED = 500
+"""Bounds the descendant walk in _atspi_read_text against pathologically large/deep trees.
 
-    Real, untested-by-design (see module docstring). Only checks
-    ``app`` itself, not descendants -- Terminal's real output-capture
-    need (the one caller that genuinely uses this) targets a terminal
-    emulator's own top-level accessible object, per WP-43's finding
-    that AT-SPI2 support for this is app-specific and was not,
-    itself, live-confirmed for any specific terminal emulator during
-    this pass.
+A real, deliberate scope decision, not exhaustive: a full Electron app
+(VS Code, confirmed live during post-M3 verification to have far more
+nodes than a terminal emulator's own ~90) could otherwise make this
+walk slow or open-ended. 500 was not tuned against a real worst case --
+flagged as a real, adjustable constant if a genuine app is found where
+the content node sits deeper than this bound reaches.
+"""
+
+
+def _atspi_read_text(app: object) -> str | None:
+    """Best-effort: return the first non-empty Text-interface content found, or ``None``.
+
+    Real, untested-by-design (see module docstring). Checks ``app``
+    itself first (the fast path gnome-terminal's own live verification
+    confirmed works -- VTE exposes ``Text`` at the top-level accessible
+    object), then walks descendants depth-first (bounded by
+    ``_READ_TEXT_MAX_NODES_VISITED``) if that comes back empty --
+    added post-M3, live-verified against a real, running VS Code: the
+    editor's actual buffer content lives on a descendant node, not the
+    application root, which the original, root-only implementation
+    never reached (confirmed live: it returned ``None`` against a real
+    VS Code instance with real, non-empty file content open).
+
+    Returns the *first* non-empty text found, not an aggregate of
+    every text-bearing node in the tree -- deliberately, to avoid
+    concatenating unrelated window chrome (menu labels, button text)
+    into what should be one window's "visible content." Real,
+    documented limitation: if a genuine app exposes its real content
+    behind other, earlier-visited, non-empty Text nodes (e.g. a status
+    bar label happens to come first in traversal order), this returns
+    that instead -- not fixed here, since neither app this pass
+    verified live actually hits it (gnome-terminal's own Text node is
+    the app root, found by the fast path; VS Code's editor content was
+    the first non-empty node the descendant walk reached).
     """
     node: Any = app
     try:
         text_iface = node.get_text_iface()
     except AttributeError:
-        return None
-    if text_iface is None:
-        return None
+        text_iface = None
+    if text_iface is not None:
+        try:
+            text = str(text_iface.get_text(0, -1))
+        except Exception:
+            text = ""
+        if text:
+            return text
+
     try:
-        return str(text_iface.get_text(0, -1))
-    except Exception:
-        return None
+        child_count = node.get_child_count()
+    except AttributeError:
+        child_count = 0
+    stack: list[Any] = [node.get_child_at_index(i) for i in range(child_count)]
+    visited = 0
+    while stack and visited < _READ_TEXT_MAX_NODES_VISITED:
+        current = stack.pop()
+        visited += 1
+        try:
+            text_iface = current.get_text_iface()
+        except AttributeError:
+            text_iface = None
+        if text_iface is not None:
+            try:
+                text = str(text_iface.get_text(0, -1))
+            except Exception:
+                text = ""
+            if text:
+                return text
+        try:
+            child_count = current.get_child_count()
+        except AttributeError:
+            child_count = 0
+        stack.extend(current.get_child_at_index(i) for i in range(child_count))
+    return None
 
 
 class AtspiDesktopWindowAdapter:
