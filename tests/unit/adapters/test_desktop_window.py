@@ -1,8 +1,10 @@
 """Unit tests for jarvis.adapters.desktop_window.AtspiDesktopWindowAdapter.
 
-What's faked and why: all five real AT-SPI2/subprocess entry points
+What's faked and why: all seven real AT-SPI2/subprocess entry points
 (``find_app``, ``launch``, ``focus_fn``, ``type_text_fn``,
-``read_text_fn``) are injected fakes -- no live accessibility bus or
+``read_text_fn``, ``is_focused_fn``, ``is_visible_and_showing_fn`` --
+the last two added in ADR-0047, WP-56) are injected fakes -- no live
+accessibility bus or
 real application is required, or reliably available, in CI or during
 this unattended run (see the adapter module's own docstring for the
 concrete reasons live verification was not attempted). Everything
@@ -168,3 +170,61 @@ def test_a_handle_from_a_different_adapter_instance_does_not_resolve() -> None:
 
     with pytest.raises(WindowActionFailedError):
         adapter.focus(foreign_handle)
+
+
+def test_is_focused_returns_whatever_is_focused_fn_returns() -> None:
+    """is_focused() relays is_focused_fn's result unchanged -- ADR-0047."""
+    adapter = AtspiDesktopWindowAdapter(
+        find_app=lambda _app_id: _REAL_APP, is_focused_fn=lambda _app: True
+    )
+    handle = adapter.find_or_launch("gnome-terminal")
+
+    assert adapter.is_focused(handle) is True
+
+
+def test_is_focused_returns_false_when_is_focused_fn_returns_false() -> None:
+    """A real focus-lost result is relayed as False, not an error."""
+    adapter = AtspiDesktopWindowAdapter(
+        find_app=lambda _app_id: _REAL_APP, is_focused_fn=lambda _app: False
+    )
+    handle = adapter.find_or_launch("gnome-terminal")
+
+    assert adapter.is_focused(handle) is False
+
+
+def test_is_focused_raises_when_handle_is_unknown_to_this_adapter_instance() -> None:
+    """Same resolution guarantee as focus()/type_text() -- a handle is instance-scoped."""
+    adapter = AtspiDesktopWindowAdapter(find_app=lambda _app_id: _REAL_APP)
+    foreign_handle = WindowHandle(value="gnome-terminal:999999", app_id="gnome-terminal")
+
+    with pytest.raises(WindowActionFailedError):
+        adapter.is_focused(foreign_handle)
+
+
+def test_is_visible_and_showing_returns_whatever_the_fn_returns() -> None:
+    """is_visible_and_showing() relays is_visible_and_showing_fn's result unchanged -- ADR-0047."""
+    adapter = AtspiDesktopWindowAdapter(
+        find_app=lambda _app_id: _REAL_APP, is_visible_and_showing_fn=lambda _app: True
+    )
+    handle = adapter.find_or_launch("gnome-terminal")
+
+    assert adapter.is_visible_and_showing(handle) is True
+
+
+def test_is_visible_and_showing_returns_false_when_minimized_or_hidden() -> None:
+    """A minimized/hidden window is relayed as False, not an error."""
+    adapter = AtspiDesktopWindowAdapter(
+        find_app=lambda _app_id: _REAL_APP, is_visible_and_showing_fn=lambda _app: False
+    )
+    handle = adapter.find_or_launch("gnome-terminal")
+
+    assert adapter.is_visible_and_showing(handle) is False
+
+
+def test_is_visible_and_showing_raises_when_handle_is_unknown_to_this_adapter_instance() -> None:
+    """Same resolution guarantee as every other method -- a handle is instance-scoped."""
+    adapter = AtspiDesktopWindowAdapter(find_app=lambda _app_id: _REAL_APP)
+    foreign_handle = WindowHandle(value="gnome-terminal:999999", app_id="gnome-terminal")
+
+    with pytest.raises(WindowActionFailedError):
+        adapter.is_visible_and_showing(foreign_handle)

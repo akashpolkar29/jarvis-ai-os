@@ -25,6 +25,10 @@ class _FakeSecretPort:
         self.requested_references.append(reference)
         return self._value
 
+    def set_secret(self, reference: str, value: str) -> None:
+        """Not used by this reasoning adapter -- present only to satisfy SecretPort."""
+        raise NotImplementedError
+
 
 async def test_generate_resolves_the_credential_and_returns_the_called_content() -> None:
     secrets = _FakeSecretPort("sk-real-key")

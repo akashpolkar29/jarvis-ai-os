@@ -64,8 +64,10 @@ from jarvis.kernel.capabilities import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
+    from jarvis.domain.audio import AudioStream
     from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
     from jarvis.ports.brave import BravePort
@@ -73,7 +75,13 @@ if TYPE_CHECKING:
     from jarvis.ports.docker import DockerPort
     from jarvis.ports.git import GitPort
     from jarvis.ports.sandbox import SandboxPort
+    from jarvis.ports.secret import SecretPort
+    from jarvis.ports.synthetic_input import SyntheticInputPort
+    from jarvis.ports.tts import TtsPort
     from jarvis.ports.vscode import VsCodePort
+
+    PlayFn = Callable[[AudioStream], None]
+    EnsureProfileFn = Callable[[], str]
 
 
 class ChatApp(Enum):
@@ -354,10 +362,11 @@ class TerminalRunOutcome:
     output: Tainted[str] | None
 
 
-# Nine keyword-mostly arguments: matches this module's other authorize_and_*
-# functions' shape, plus the sandbox/bind_paths seams this, the highest-risk
+# Thirteen keyword-mostly arguments: matches this module's other authorize_and_*
+# functions' shape, plus the sandbox/bind_paths seams plus ADR-0047's five new
+# real-time-indicator/synthetic-input dependencies this, the highest-risk
 # capability in this milestone, genuinely needs -- not accidental bloat.
-def authorize_and_run_terminal_command(  # noqa: PLR0913
+async def authorize_and_run_terminal_command(  # noqa: PLR0913
     command_text: str,
     *,
     physical_confirmation_available: bool,
@@ -365,9 +374,19 @@ def authorize_and_run_terminal_command(  # noqa: PLR0913
     chain_path: Path,
     sandbox: SandboxPort,
     desktop_window: DesktopWindowPort,
+    synthetic_input: SyntheticInputPort,
+    secret: SecretPort,
+    tts: TtsPort,
+    play_fn: PlayFn,
+    ensure_profile: EnsureProfileFn,
     bind_paths: tuple[Path, ...] = (),
 ) -> TerminalRunOutcome:
     """Wire up the stack, authorize ``command_text``, and run it in a sandboxed terminal if granted.
+
+    ``async`` since ADR-0047 (WP-56): ``run_in_sandboxed_terminal``'s
+    own real-time indicator requires a real, spoken announcement
+    (``TtsPort.speak``, already async throughout this codebase) before
+    any keystroke is sent.
 
     ``terminal.run`` floors ``Tier.MANUAL_ONLY`` unconditionally
     (``Effect.DESTRUCTIVE | Effect.EXECUTE``) -- unlike every other
@@ -375,16 +394,23 @@ def authorize_and_run_terminal_command(  # noqa: PLR0913
     can never grant this call; only ``physical_confirmation_available``
     can (ADR-0013, ``domain/policy.py``'s own ``evaluate()``).
 
-    Both ``sandbox`` and ``desktop_window`` are **required, with no
-    default** -- unlike ``browser``/``editor`` above. Partly the same
-    GLib/C6 reason ``desktop_window`` already has no default on
-    ``authorize_and_send_text_to_chat_app`` (importing
-    ``AtspiDesktopWindowAdapter`` into ``jarvis.kernel`` would break
-    C6), and partly a deliberate, proportional choice for this
-    milestone's single riskiest capability: no implicit default
-    construction at all for the one capability where getting the
-    sandbox wrong has the highest real consequence, requiring an
-    explicit, visible wiring decision at every call site instead.
+    Every one of ``sandbox``/``desktop_window``/``synthetic_input``/
+    ``secret``/``tts``/``play_fn``/``ensure_profile`` is **required,
+    with no default** -- unlike ``browser``/``editor`` above. Partly
+    the same GLib/C6 reason ``desktop_window`` already has no default
+    on ``authorize_and_send_text_to_chat_app`` (importing
+    ``AtspiDesktopWindowAdapter``/``PortalSyntheticInputAdapter`` into
+    ``jarvis.kernel`` would break C6), and partly a deliberate,
+    proportional choice for this milestone's single riskiest
+    capability, applied uniformly to every one of its dependencies, not
+    only the ones GLib happens to force: no implicit default
+    construction at all for the one capability where getting any of
+    this wrong has the highest real consequence, requiring an explicit,
+    visible wiring decision at every call site instead. The real
+    defaults belong wherever this function is eventually wired into a
+    CLI/voice entry point (not yet built for M3) -- the same deferred
+    placement ``sandbox``/``desktop_window`` already documented before
+    ADR-0047 added five more dependencies to this same rule.
 
     Args:
         command_text: The text typed into the sandboxed terminal's
@@ -400,8 +426,20 @@ def authorize_and_run_terminal_command(  # noqa: PLR0913
             module docstring's audit-save guarantee.
         sandbox: Launches the real, contained terminal emulator
             process. No default -- see above.
-        desktop_window: Finds/focuses/types into/reads the launched
-            terminal's window. No default -- see above.
+        desktop_window: Finds/focuses/verifies-focus-of/reads the
+            launched terminal's window. No default -- see above.
+        synthetic_input: Opens the real RemoteDesktop portal session
+            and fires the real keystrokes (ADR-0047). No default,
+            same reason.
+        secret: Persists/replays the portal's restore_token. No
+            default, same reason.
+        tts: Synthesizes the real-time indicator's spoken announcement.
+            No default, same reason.
+        play_fn: Plays the synthesized announcement audio for real. No
+            default, same reason.
+        ensure_profile: Ensures the real-time indicator's dedicated
+            terminal profile exists and returns its UUID. No default,
+            same reason.
         bind_paths: Host directories the sandboxed terminal can
             access. Empty by default -- a fully isolated shell with
             nothing granted, per ``SandboxPort``'s own default
@@ -429,10 +467,15 @@ def authorize_and_run_terminal_command(  # noqa: PLR0913
     output: Tainted[str] | None = None
     try:
         if decision.granted:
-            raw_output = run_in_sandboxed_terminal(
+            raw_output = await run_in_sandboxed_terminal(
                 command_text,
                 sandbox=sandbox,
                 desktop_window=desktop_window,
+                synthetic_input=synthetic_input,
+                secret=secret,
+                tts=tts,
+                play_fn=play_fn,
+                ensure_profile=ensure_profile,
                 bind_paths=bind_paths,
             )
             if raw_output is not None:

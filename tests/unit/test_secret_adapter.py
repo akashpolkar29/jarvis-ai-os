@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from jarvis.adapters.secret import SecretServiceAdapter, _find_secret_value
+from jarvis.adapters.secret import SecretServiceAdapter, _create_item, _find_secret_value
 from jarvis.ports.secret import SecretNotFoundError
 
 if TYPE_CHECKING:
@@ -78,3 +78,24 @@ def test_find_secret_value_is_directly_testable_with_no_bus() -> None:
     secrets = {"/item/1": ("/session/1", b"", b"value-bytes", "text/plain")}
 
     assert _find_secret_value("ref", ["/item/1"], [], secrets) == "value-bytes"
+
+
+def test_set_secret_calls_create_item_with_the_reference_and_value() -> None:
+    """set_secret's own dispatch logic: it delegates to the injected create_item verbatim."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_create_item(reference: str, value: str) -> None:
+        calls.append((reference, value))
+
+    adapter = SecretServiceAdapter(create_item=fake_create_item)
+
+    adapter.set_secret("synthetic-input.restore-token", "token-value")
+
+    assert calls == [("synthetic-input.restore-token", "token-value")]
+
+
+def test_set_secret_default_create_item_is_the_real_dbus_implementation() -> None:
+    """No fake given -- set_secret dispatches to the real, untested-by-design _create_item."""
+    adapter = SecretServiceAdapter()
+
+    assert adapter._create_item is _create_item

@@ -52,12 +52,14 @@ Testability seam, matching ``jarvis.adapters.media_player``'s own
 precedent exactly: the real AT-SPI2 GI calls live in small,
 injectable, untested-by-design functions
 (``_atspi_find_app``/``_atspi_focus``/``_atspi_type_text``/
-``_atspi_read_text``/``_launch_subprocess``), each requiring a live
-accessibility bus and a real target application neither CI nor this
-unattended pass can rely on. Unit tests fake all five and exercise
-only this adapter's own dispatch logic (handle-token bookkeeping,
-which error type each failure mode becomes) -- real, but real about
-what "real" covers here: **live focus/type_text/read_visible_text
+``_atspi_read_text``/``_launch_subprocess``/``_atspi_is_focused``/
+``_atspi_is_visible_and_showing``, the last two added in ADR-0047,
+WP-56), each requiring a live accessibility bus and a real target
+application neither CI nor this unattended pass can rely on. Unit
+tests fake all seven and exercise only this adapter's own dispatch
+logic (handle-token bookkeeping, which error type each failure mode
+becomes) -- real, but real about what "real" covers here: **live
+focus/type_text/read_visible_text/is_focused/is_visible_and_showing
 against an actual running application window was never exercised in
 this pass**, matching M1 tracker #19's and M2's ``family_b``'s own
 honesty pattern for a real capability that is code-complete but not
@@ -82,6 +84,8 @@ if TYPE_CHECKING:
     ReadTextFn = Callable[[object], "str | None"]
     LaunchFn = Callable[[tuple[str, ...]], None]
     SleepFn = Callable[[float], None]
+    IsFocusedFn = Callable[[object], bool]
+    IsVisibleAndShowingFn = Callable[[object], bool]
 
 _LAUNCH_POLL_ATTEMPTS = 10
 _LAUNCH_POLL_INTERVAL_SECONDS = 0.5
@@ -296,10 +300,63 @@ def _atspi_read_text(app: object) -> str | None:
     return None
 
 
+def _atspi_is_focused(app: object) -> bool:
+    """Return whether ``app``'s own accessible object currently reports AT-SPI2 FOCUSED state.
+
+    Real, untested-by-design (see module docstring). Added in
+    ADR-0047 (WP-56) for ``SyntheticInputPort``'s per-character
+    focus-verification loop -- checks ``app`` itself, not descendants:
+    ``find_or_launch``'s own handle is issued against a top-level
+    accessible application/window object, which is the node whose
+    focus state actually matters for "is the compositor's keyboard
+    focus plausibly still on this window" (a descendant walk would
+    answer a different, narrower question -- "is some specific control
+    inside it focused" -- not needed here).
+    """
+    import gi  # noqa: PLC0415
+
+    gi.require_version("Atspi", "2.0")
+    from gi.repository import Atspi  # noqa: PLC0415
+
+    node: Any = app
+    try:
+        states = node.get_state_set()
+        return bool(states is not None and states.contains(Atspi.StateType.FOCUSED))
+    except Exception:
+        return False
+
+
+def _atspi_is_visible_and_showing(app: object) -> bool:
+    """Return whether ``app`` is on-screen: VISIBLE and SHOWING, and not ICONIFIED.
+
+    Real, untested-by-design (see module docstring). Added in
+    ADR-0047 (WP-56) as the real-time indicator's hard-abort
+    precondition -- a minimized or otherwise not-actually-on-screen
+    window cannot make its own visual marking legible to anyone.
+    """
+    import gi  # noqa: PLC0415
+
+    gi.require_version("Atspi", "2.0")
+    from gi.repository import Atspi  # noqa: PLC0415
+
+    node: Any = app
+    try:
+        states = node.get_state_set()
+        if states is None:
+            return False
+        return bool(
+            states.contains(Atspi.StateType.VISIBLE)
+            and states.contains(Atspi.StateType.SHOWING)
+            and not states.contains(Atspi.StateType.ICONIFIED)
+        )
+    except Exception:
+        return False
+
+
 class AtspiDesktopWindowAdapter:
     """Finds, focuses, types into, and reads back text from real windows via AT-SPI2."""
 
-    # Five independent real-mechanism seams + sleep, each its own
+    # Seven independent real-mechanism seams + sleep, each its own
     # testability point per the module docstring -- not accidental bloat.
     def __init__(  # noqa: PLR0913, PLR0917
         self,
@@ -309,6 +366,8 @@ class AtspiDesktopWindowAdapter:
         type_text_fn: TypeTextFn | None = None,
         read_text_fn: ReadTextFn | None = None,
         sleep_fn: SleepFn | None = None,
+        is_focused_fn: IsFocusedFn | None = None,
+        is_visible_and_showing_fn: IsVisibleAndShowingFn | None = None,
     ) -> None:
         """Store the low-level functions this adapter dispatches to. No I/O at construction time.
 
@@ -329,6 +388,13 @@ class AtspiDesktopWindowAdapter:
             sleep_fn: Called between launch-discovery poll attempts.
                 Defaults to real ``time.sleep``. Tests inject a no-op
                 to avoid a real, multi-second wait.
+            is_focused_fn: Given a real accessible object, returns
+                whether it currently reports AT-SPI2 focus. Defaults to
+                the real implementation. Added in ADR-0047 (WP-56).
+            is_visible_and_showing_fn: Given a real accessible object,
+                returns whether it is on-screen and not minimized.
+                Defaults to the real implementation. Added in ADR-0047
+                (WP-56).
         """
         self._find_app: FindAppFn = find_app or _atspi_find_app
         self._launch: LaunchFn = launch or _launch_subprocess
@@ -336,6 +402,10 @@ class AtspiDesktopWindowAdapter:
         self._type_text_fn: TypeTextFn = type_text_fn or _atspi_type_text
         self._read_text_fn: ReadTextFn = read_text_fn or _atspi_read_text
         self._sleep_fn: SleepFn = sleep_fn or time.sleep
+        self._is_focused_fn: IsFocusedFn = is_focused_fn or _atspi_is_focused
+        self._is_visible_and_showing_fn: IsVisibleAndShowingFn = (
+            is_visible_and_showing_fn or _atspi_is_visible_and_showing
+        )
         self._handles: dict[str, object] = {}
 
     def find_or_launch(
@@ -397,6 +467,26 @@ class AtspiDesktopWindowAdapter:
         """
         app = self._resolve(handle)
         return self._read_text_fn(app)
+
+    def is_focused(self, handle: WindowHandle) -> bool:
+        """Return whether ``handle``'s window currently reports AT-SPI2 focus.
+
+        Raises:
+            WindowActionFailedError: If ``handle`` is unknown to this
+                adapter instance.
+        """
+        app = self._resolve(handle)
+        return self._is_focused_fn(app)
+
+    def is_visible_and_showing(self, handle: WindowHandle) -> bool:
+        """Return whether ``handle``'s window is currently on-screen and not minimized.
+
+        Raises:
+            WindowActionFailedError: If ``handle`` is unknown to this
+                adapter instance.
+        """
+        app = self._resolve(handle)
+        return self._is_visible_and_showing_fn(app)
 
     def _resolve(self, handle: WindowHandle) -> object:
         """Look ``handle`` up in this instance's own handle table.

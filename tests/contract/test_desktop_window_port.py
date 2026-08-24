@@ -18,10 +18,10 @@ def test_atspi_desktop_window_adapter_satisfies_desktop_window_port() -> None:
     assert isinstance(adapter, DesktopWindowPort)
 
 
-def test_an_object_missing_the_four_methods_does_not_satisfy_desktop_window_port() -> None:
+def test_an_object_missing_the_six_methods_does_not_satisfy_desktop_window_port() -> None:
     """The isinstance check is meaningful: it actually rejects non-conforming objects."""
 
     class NotADesktopWindowSource:
-        """Deliberately lacks find_or_launch()/focus()/type_text()/read_visible_text()."""
+        """Deliberately lacks all six of this port's real methods."""
 
     assert isinstance(NotADesktopWindowSource(), DesktopWindowPort) is False

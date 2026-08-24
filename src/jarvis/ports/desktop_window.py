@@ -123,3 +123,40 @@ class DesktopWindowPort(Protocol):
                 a real window.
         """
         ...
+
+    def is_focused(self, handle: WindowHandle) -> bool:
+        """Return whether ``handle``'s window currently reports AT-SPI2 focus.
+
+        Added in ADR-0047 (WP-56) for ``SyntheticInputPort``'s
+        per-character focus-verification loop -- see that ADR's own
+        extended discussion of what this can and cannot prove: this is
+        toolkit-level accessibility focus (``Atspi.StateType.FOCUSED``),
+        a genuinely different signal from compositor-level keyboard
+        focus, maintained by a separate subsystem with no atomic
+        coupling to it. A ``True`` result is real, live evidence, not a
+        guarantee -- callers requiring a fail-closed guarantee (as
+        ADR-0047's own orchestration does) must treat this as the best
+        available check immediately before an action, not as proof the
+        action is safe.
+
+        Raises:
+            WindowActionFailedError: If ``handle`` is unknown to this
+                adapter instance.
+        """
+        ...
+
+    def is_visible_and_showing(self, handle: WindowHandle) -> bool:
+        """Return whether ``handle``'s window is currently on-screen and not minimized.
+
+        Added in ADR-0047 (WP-56) as the real-time indicator's
+        hard-abort precondition: a window that is not visible cannot
+        make its own visual marking legible to anyone, regardless of
+        what it was launched with. ``True`` only if the window's
+        AT-SPI2 state set includes both ``VISIBLE`` and ``SHOWING``, and
+        excludes ``ICONIFIED``.
+
+        Raises:
+            WindowActionFailedError: If ``handle`` is unknown to this
+                adapter instance.
+        """
+        ...

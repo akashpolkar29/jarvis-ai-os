@@ -35,6 +35,28 @@ correctness is proven by manual verification instead (a real secret
 was created, searched for, read back byte-for-byte, and deleted again
 against this machine's real gnome-keyring during WP-32).
 
+:meth:`SecretServiceAdapter.set_secret` (ADR-0047, WP-56) writes via
+``Collection.CreateItem`` on the default collection's real alias
+object path (``/org/freedesktop/secrets/aliases/default`` -- confirmed
+live via ``gdbus introspect`` before writing this, not assumed from the
+spec: ``CreateItem(properties: a{sv}, secret: (oayays), replace: b) ->
+(item: o, prompt: o)``). Matches ``get_secret``'s own testability seam
+exactly: the real wire call lives in one small, injectable,
+untested-by-design function (:func:`_create_item`); this one *was*
+manually verified for real against this machine's live gnome-keyring
+before being written up here (a real value was set, read back
+byte-for-byte via the existing ``get_secret`` path, overwritten, and
+read back again to confirm ``replace=True`` genuinely replaces rather
+than duplicates) -- unlike the RemoteDesktop portal calls ADR-0047 also
+needed, this one required no interactive dialog, so real, live
+verification was safe to do in this pass. ``prompt`` is not acted on:
+on this machine's normal, already-unlocked default collection it comes
+back as the null object path ``"/"``, matching ``get_secret``'s own
+"no ``Prompt``-flow built, not needed on a normal already-unlocked
+desktop session" precedent (ADR-0042) -- a real, non-null prompt (a
+locked default collection) is not handled here, the same documented gap
+``_find_secret_value`` already carries for reads.
+
 :func:`_find_secret_value`, by contrast, is deliberately factored out
 as its own pure, I/O-free function specifically so it CAN be unit-
 tested directly, with fake search/secrets results, no bus required --
@@ -58,11 +80,17 @@ if TYPE_CHECKING:
     # (unlocked item paths, locked item paths, secrets-by-item for the unlocked ones)
     SearchResult = tuple[list[str], list[str], "SecretsByItem"]
     SearchAndGetSecrets = Callable[[str], SearchResult]
+    CreateItem = Callable[[str, str], None]
 
 _SERVICE = DBusAddress(
     object_path="/org/freedesktop/secrets",
     bus_name="org.freedesktop.secrets",
     interface="org.freedesktop.Secret.Service",
+)
+_DEFAULT_COLLECTION = DBusAddress(
+    object_path="/org/freedesktop/secrets/aliases/default",
+    bus_name="org.freedesktop.secrets",
+    interface="org.freedesktop.Secret.Collection",
 )
 _CALL_TIMEOUT_SECONDS = 5.0
 
@@ -99,6 +127,42 @@ def _search_and_get_secrets(reference: str) -> SearchResult:
         return unlocked, locked, secrets
 
 
+def _create_item(reference: str, value: str) -> None:
+    """Open one session and create/replace an item under ``reference`` on the default collection.
+
+    The one real, untested-by-design-by-CI piece of the write path --
+    manually verified live against this machine's real gnome-keyring
+    instead (see the module docstring). ``OpenSession`` is repeated
+    here rather than shared with ``_search_and_get_secrets``, matching
+    that function's own "a session is scoped to the connection that
+    opened it, never split across two" finding -- this is a second,
+    independent connection for a second, independent operation, not an
+    optimization opportunity.
+    """
+    with open_dbus_connection(bus="SESSION") as connection:
+        open_session_msg = new_method_call(_SERVICE, "OpenSession", "sv", ("plain", ("s", "")))
+        open_session_reply = connection.send_and_get_reply(
+            open_session_msg, timeout=_CALL_TIMEOUT_SECONDS
+        )
+        _output, session_path = open_session_reply.body
+
+        secret_struct = (session_path, b"", value.encode("utf-8"), "text/plain")
+        # get_secret() (ADR-0042) resolves via a search keyed on Attributes,
+        # not Label -- set here so a value this writes is actually findable
+        # by the existing read path, not just visible in a keyring UI.
+        properties = {
+            "org.freedesktop.Secret.Item.Label": ("s", reference),
+            "org.freedesktop.Secret.Item.Attributes": ("a{ss}", {"reference": reference}),
+        }
+        create_item_msg = new_method_call(
+            _DEFAULT_COLLECTION,
+            "CreateItem",
+            "a{sv}(oayays)b",
+            (properties, secret_struct, True),
+        )
+        connection.send_and_get_reply(create_item_msg, timeout=_CALL_TIMEOUT_SECONDS)
+
+
 def _find_secret_value(
     reference: str, unlocked: list[str], locked: list[str], secrets: SecretsByItem
 ) -> str:
@@ -129,8 +193,12 @@ def _find_secret_value(
 class SecretServiceAdapter:
     """Resolves secret references against whatever Secret Service is on the session bus."""
 
-    def __init__(self, search_and_get_secrets: SearchAndGetSecrets | None = None) -> None:
-        """Store the function used to actually search for and fetch a reference's secrets.
+    def __init__(
+        self,
+        search_and_get_secrets: SearchAndGetSecrets | None = None,
+        create_item: CreateItem | None = None,
+    ) -> None:
+        """Store the functions used to actually search/fetch and create/replace secrets.
 
         Args:
             search_and_get_secrets: Given a reference, returns
@@ -139,10 +207,16 @@ class SecretServiceAdapter:
                 for tests, matching ``MprisMediaPlayerAdapter``'s
                 ``send_method_call`` constructor argument -- no I/O
                 happens at construction time either way.
+            create_item: Given a reference and a value, creates or
+                replaces the corresponding item on the default
+                collection. Defaults to a real implementation talking
+                to the session bus. Overridable for tests, same
+                reasoning as ``search_and_get_secrets``.
         """
         self._search_and_get_secrets: SearchAndGetSecrets = (
             search_and_get_secrets or _search_and_get_secrets
         )
+        self._create_item: CreateItem = create_item or _create_item
 
     def get_secret(self, reference: str) -> str:
         """Resolve ``reference`` to its real secret value.
@@ -152,3 +226,7 @@ class SecretServiceAdapter:
         """
         unlocked, locked, secrets = self._search_and_get_secrets(reference)
         return _find_secret_value(reference, unlocked, locked, secrets)
+
+    def set_secret(self, reference: str, value: str) -> None:
+        """Store ``value`` under ``reference`` on the default collection, creating or replacing."""
+        self._create_item(reference, value)
