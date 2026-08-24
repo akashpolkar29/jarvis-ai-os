@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     RunSubprocessFn = Callable[[tuple[str, ...]], CommandResult]
+    LaunchSubprocessFn = Callable[[tuple[str, ...]], int]
 
 _BASE_ARGV: tuple[str, ...] = (
     "bwrap",
@@ -112,18 +113,44 @@ def _run_subprocess(argv: tuple[str, ...]) -> CommandResult:
     return CommandResult(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
 
 
+def _launch_subprocess(argv: tuple[str, ...]) -> int:
+    """Launch ``argv`` as a real, detached, long-running subprocess and return its pid.
+
+    Added in WP-52 for :meth:`BwrapSandboxAdapter.launch` -- never
+    waits for completion, matching every other real GUI-process launch
+    in this project (``adapters/desktop_window.py``/``brave.py``/
+    ``vscode.py``'s own ``_launch_subprocess`` functions), unlike
+    :func:`_run_subprocess` above.
+    """
+    process = subprocess.Popen(  # noqa: S603 -- argv is built entirely from fixed flags plus
+        # typed Path values (bind_paths) and a caller-supplied argv tuple, never shell text.
+        argv,
+        start_new_session=True,
+    )
+    return process.pid
+
+
 class BwrapSandboxAdapter:
     """Runs a command inside a real, kernel-enforced sandbox via a real ``bwrap`` subprocess."""
 
-    def __init__(self, run_subprocess: RunSubprocessFn | None = None) -> None:
-        """Store the function used to actually run the built argv. No I/O at construction time.
+    def __init__(
+        self,
+        run_subprocess: RunSubprocessFn | None = None,
+        launch_subprocess: LaunchSubprocessFn | None = None,
+    ) -> None:
+        """Store the functions used to actually run/launch the built argv. No I/O at construction.
 
         Args:
             run_subprocess: Given a real argv, runs it and returns its
                 outcome. Defaults to a real subprocess call. Overridable
                 for tests that don't need a real sandbox spun up.
+            launch_subprocess: Given a real argv, launches it as a
+                long-running background process and returns its pid.
+                Defaults to a real subprocess launch. Overridable for
+                tests, exactly as ``run_subprocess`` is.
         """
         self._run_subprocess: RunSubprocessFn = run_subprocess or _run_subprocess
+        self._launch_subprocess: LaunchSubprocessFn = launch_subprocess or _launch_subprocess
 
     def run(
         self,
@@ -135,3 +162,17 @@ class BwrapSandboxAdapter:
         """Run ``command`` inside a real ``bwrap`` sandbox and return its real outcome."""
         argv = _build_bwrap_argv(command, bind_paths=bind_paths, allow_network=allow_network)
         return self._run_subprocess(argv)
+
+    def launch(
+        self,
+        command: tuple[str, ...],
+        *,
+        bind_paths: tuple[Path, ...] = (),
+        allow_network: bool = False,
+    ) -> int:
+        """Launch ``command`` inside a real ``bwrap`` sandbox as a long-running background process.
+
+        Never waits for completion -- see :meth:`~jarvis.ports.sandbox.SandboxPort.launch`.
+        """
+        argv = _build_bwrap_argv(command, bind_paths=bind_paths, allow_network=allow_network)
+        return self._launch_subprocess(argv)

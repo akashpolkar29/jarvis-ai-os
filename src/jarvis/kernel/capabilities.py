@@ -51,6 +51,7 @@ DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
 DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file")
 DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.claude_app_send_text")
 DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.chatgpt_app_send_text")
+TERMINAL_RUN_CAPABILITY_ID = CapabilityId("terminal.run")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -150,6 +151,18 @@ def build_default_registry() -> CapabilityRegistry:
             description=(
                 "Launch or focus the ChatGPT desktop app and type text into its input box. "
                 "Ordinary control only -- never reads the app's response (ADR-0045)."
+            ),
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=TERMINAL_RUN_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.EXECUTE,
+            description=(
+                "Type a command into a freshly launched, sandboxed terminal emulator. "
+                "A deliberate, narrow exception to this project's no-shell principle "
+                "(ADR-0046) -- always MANUAL_ONLY, never a standing grant."
             ),
         )
     )

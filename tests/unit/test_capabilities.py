@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from jarvis.domain.capability import Effect
+from jarvis.domain.capability import Effect, Tier
 from jarvis.kernel.capabilities import (
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
@@ -14,10 +14,11 @@ from jarvis.kernel.capabilities import (
     MUSIC_PREVIOUS_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
+    TERMINAL_RUN_CAPABILITY_ID,
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 10
+_EXPECTED_CAPABILITY_COUNT = 11
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -47,6 +48,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
         DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
         DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
+        TERMINAL_RUN_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -77,6 +79,20 @@ def test_desktop_chatgpt_app_send_text_has_execute_effects() -> None:
     registry = build_default_registry()
 
     assert registry.get(DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID).effects == Effect.EXECUTE
+
+
+def test_terminal_run_has_destructive_and_execute_effects() -> None:
+    """terminal.run is registered with DESTRUCTIVE | EXECUTE -- floors Tier.MANUAL_ONLY.
+
+    Unconditionally, per ADR-0046: this is the one capability this
+    milestone registers whose real command execution is genuinely
+    open-ended, and it must never be satisfiable below MANUAL_ONLY.
+    """
+    registry = build_default_registry()
+
+    descriptor = registry.get(TERMINAL_RUN_CAPABILITY_ID)
+    assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
 
 
 def test_ping_has_read_local_effects() -> None:

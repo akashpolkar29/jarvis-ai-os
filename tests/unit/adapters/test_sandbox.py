@@ -1,6 +1,6 @@
 """Unit tests for jarvis.adapters.sandbox.
 
-Two kinds of test, matching the module's own two seams:
+Three groups of test, matching the module's own seams:
 
 * ``_build_bwrap_argv`` is pure -- tested directly, no subprocess
   involved, covering exactly what real argv results from each option
@@ -13,10 +13,15 @@ Two kinds of test, matching the module's own two seams:
   dependency, test for real" precedent, now extended to ``bwrap``. A
   couple of dispatch-only cases use an injected fake instead, where a
   real sandboxed process would add nothing a fake doesn't already prove.
+* ``BwrapSandboxAdapter.launch`` (added WP-52, ADR-0046) is tested the
+  same way, plus one test proving it is genuinely non-blocking against
+  a real, running sandboxed process -- the exact property Terminal's
+  own flow depends on.
 """
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from jarvis.adapters.sandbox import BwrapSandboxAdapter, _build_bwrap_argv
@@ -160,3 +165,55 @@ def test_run_delegates_the_built_argv_to_the_injected_subprocess_runner() -> Non
     adapter.run(("echo", "hi"))
 
     assert seen == [_build_bwrap_argv(("echo", "hi"), bind_paths=(), allow_network=False)]
+
+
+# ---------------------------------------------------------------------------
+# BwrapSandboxAdapter.launch: real bwrap subprocess, WP-52 (Terminal, ADR-0046).
+# ---------------------------------------------------------------------------
+
+
+def test_launch_delegates_the_built_argv_to_the_injected_launch_subprocess_runner() -> None:
+    """launch() passes _build_bwrap_argv's exact output to the injected launcher, unmodified."""
+    seen: list[tuple[str, ...]] = []
+    fake_pid = 999
+
+    def fake_launch_subprocess(argv: tuple[str, ...]) -> int:
+        seen.append(argv)
+        return fake_pid
+
+    adapter = BwrapSandboxAdapter(launch_subprocess=fake_launch_subprocess)
+
+    pid = adapter.launch(("gnome-terminal",))
+
+    assert seen == [_build_bwrap_argv(("gnome-terminal",), bind_paths=(), allow_network=False)]
+    assert pid == fake_pid
+
+
+def test_launch_returns_immediately_and_the_real_process_completes_its_work_afterward(
+    tmp_path: Path,
+) -> None:
+    """launch() genuinely does not wait: a real sandboxed process keeps running after it returns.
+
+    Proves launch() is real (a real bwrap subprocess actually starts
+    and can write to a bound path) and non-blocking (the call returns
+    before the launched process's own work is necessarily done) --
+    the exact property Terminal's flow (WP-52) depends on: launch a
+    real terminal emulator without blocking on it exiting, since an
+    interactive terminal never exits on its own.
+    """
+    adapter = BwrapSandboxAdapter()
+    marker = tmp_path / "marker.txt"
+    probe = f"import time; time.sleep(0.3); open('{marker}', 'w').write('done')"
+
+    pid = adapter.launch(("python3", "-c", probe), bind_paths=(tmp_path,))
+
+    assert pid > 0
+    assert not marker.exists()  # real proof launch() did not wait for completion
+
+    max_poll_attempts = 100
+    for _ in range(max_poll_attempts):
+        if marker.exists():
+            break
+        time.sleep(0.05)
+
+    assert marker.read_text() == "done"

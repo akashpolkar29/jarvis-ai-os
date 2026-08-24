@@ -17,16 +17,22 @@ and ``storage.save(chain)`` runs in a ``finally`` block so a granted
 decision is never lost from disk even if the subsequent real-world
 action raises.
 
-Terminal's real multi-step flow (WP-52) is expected to need
-``application/desktop/`` orchestration beyond this module's simple
-authorize-then-call-one-port-method shape -- not built here, since
-nothing in this module yet needs it (the same "don't build ahead of a
-real need" reasoning WP-46's own consolidation into this work package
-already applied once).
+Terminal's own composition function, ``authorize_and_run_terminal_command``,
+delegates its real multi-step flow to
+``jarvis.application.desktop.run_in_sandboxed_terminal`` rather than
+inlining it here, for a second, real reason beyond "genuinely more
+complex than one port call": that function's own body is the one place
+``DesktopWindowPort.read_visible_text`` is legitimately called, and
+this module must never reference that identifier at all (ADR-0045,
+``tests/meta/test_no_response_scraping.py``, an AST scan of this whole
+file). Calling a differently-named function that itself calls
+``read_visible_text`` satisfies that guarantee; importing the
+identifier directly into this module would not.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -34,13 +40,15 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.brave import BraveCliAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.vscode import VsCodeCliAdapter
+from jarvis.application.desktop import run_in_sandboxed_terminal
 from jarvis.application.policy import AuthorizationOrchestrator
-from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.capabilities import (
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
+    TERMINAL_RUN_CAPABILITY_ID,
     build_default_registry,
 )
 
@@ -51,6 +59,7 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision
     from jarvis.ports.brave import BravePort
     from jarvis.ports.desktop_window import DesktopWindowPort
+    from jarvis.ports.sandbox import SandboxPort
     from jarvis.ports.vscode import VsCodePort
 
 
@@ -303,3 +312,123 @@ def authorize_and_send_text_to_chat_app(  # noqa: PLR0913
         storage.save(chain)
 
     return decision
+
+
+@dataclass(frozen=True)
+class TerminalRunOutcome:
+    """The result of one authorize_and_run_terminal_command() call.
+
+    Mirrors ``kernel.files``'s ``FileReadOutcome`` precedent exactly:
+    a capability whose real value is data it produced, not just a
+    grant/deny, returns both the ``Decision`` and that data together.
+
+    Attributes:
+        decision: The Decision for this call -- durably appended to
+            the chain regardless of outcome.
+        output: The sandboxed terminal's visible output after the
+            command ran, tagged ``Trust.UNTRUSTED_EXTERNAL`` per
+            ADR-0011 (this process did not generate it and must not
+            implicitly trust it, regardless of how trustworthy the
+            command itself seemed). ``None`` if denied, or if granted
+            but the terminal emulator's output could not be read back
+            (best-effort, per ``DesktopWindowPort.read_visible_text``'s
+            own contract) -- these two ``None`` cases are not
+            distinguished by this type; ``decision.granted`` tells them
+            apart.
+    """
+
+    decision: Decision
+    output: Tainted[str] | None
+
+
+# Nine keyword-mostly arguments: matches this module's other authorize_and_*
+# functions' shape, plus the sandbox/bind_paths seams this, the highest-risk
+# capability in this milestone, genuinely needs -- not accidental bloat.
+def authorize_and_run_terminal_command(  # noqa: PLR0913
+    command_text: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    sandbox: SandboxPort,
+    desktop_window: DesktopWindowPort,
+    bind_paths: tuple[Path, ...] = (),
+) -> TerminalRunOutcome:
+    """Wire up the stack, authorize ``command_text``, and run it in a sandboxed terminal if granted.
+
+    ``terminal.run`` floors ``Tier.MANUAL_ONLY`` unconditionally
+    (``Effect.DESTRUCTIVE | Effect.EXECUTE``) -- unlike every other
+    function in this module, ``remote_confirmation_available`` alone
+    can never grant this call; only ``physical_confirmation_available``
+    can (ADR-0013, ``domain/policy.py``'s own ``evaluate()``).
+
+    Both ``sandbox`` and ``desktop_window`` are **required, with no
+    default** -- unlike ``browser``/``editor`` above. Partly the same
+    GLib/C6 reason ``desktop_window`` already has no default on
+    ``authorize_and_send_text_to_chat_app`` (importing
+    ``AtspiDesktopWindowAdapter`` into ``jarvis.kernel`` would break
+    C6), and partly a deliberate, proportional choice for this
+    milestone's single riskiest capability: no implicit default
+    construction at all for the one capability where getting the
+    sandbox wrong has the highest real consequence, requiring an
+    explicit, visible wiring decision at every call site instead.
+
+    Args:
+        command_text: The text typed into the sandboxed terminal's
+            shell, passed straight through to
+            ``run_in_sandboxed_terminal`` if granted.
+        physical_confirmation_available: Whether a human is physically
+            present. The only channel that can grant this call.
+        remote_confirmation_available: Threaded through for interface
+            consistency with every other function here, but cannot by
+            itself grant a MANUAL_ONLY capability -- see above.
+        chain_path: Where the audit chain is persisted. Loaded before
+            the call and saved again after, unconditionally -- see the
+            module docstring's audit-save guarantee.
+        sandbox: Launches the real, contained terminal emulator
+            process. No default -- see above.
+        desktop_window: Finds/focuses/types into/reads the launched
+            terminal's window. No default -- see above.
+        bind_paths: Host directories the sandboxed terminal can
+            access. Empty by default -- a fully isolated shell with
+            nothing granted, per ``SandboxPort``'s own default
+            (ADR-0044).
+
+    Returns:
+        A ``TerminalRunOutcome`` -- see its own docstring.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        TERMINAL_RUN_CAPABILITY_ID,
+        Tainted({"command_text": command_text}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    output: Tainted[str] | None = None
+    try:
+        if decision.granted:
+            raw_output = run_in_sandboxed_terminal(
+                command_text,
+                sandbox=sandbox,
+                desktop_window=desktop_window,
+                bind_paths=bind_paths,
+            )
+            if raw_output is not None:
+                output = Tainted.external(
+                    raw_output,
+                    source="sandboxed terminal",
+                    classification=Classification.SENSITIVE,
+                )
+    finally:
+        storage.save(chain)
+
+    return TerminalRunOutcome(decision=decision, output=output)

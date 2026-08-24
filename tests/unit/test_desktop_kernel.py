@@ -19,6 +19,7 @@ from jarvis.kernel.desktop import (
     ChatApp,
     authorize_and_open_brave_url,
     authorize_and_open_vscode_file,
+    authorize_and_run_terminal_command,
     authorize_and_send_text_to_chat_app,
 )
 from jarvis.ports.brave import BrowserLaunchFailedError
@@ -27,7 +28,10 @@ from jarvis.ports.vscode import EditorLaunchFailedError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from jarvis.domain.process import CommandResult
+
 _GRANTED_CALLS = 1
+_FAKE_PID = 12345
 
 
 class _StubBrowser:
@@ -341,3 +345,175 @@ def test_vscode_audit_record_is_saved_even_when_the_editor_raises(tmp_path: Path
     chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert len(chain) == _GRANTED_CALLS
     assert chain[0].decision.granted is True
+
+
+class _StubSandbox:
+    """A SandboxPort test double that records launch() calls, in order."""
+
+    def __init__(self) -> None:
+        """Start with an empty call log."""
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(
+        self,
+        command: tuple[str, ...],
+        *,
+        bind_paths: tuple[object, ...] = (),
+        allow_network: bool = False,
+    ) -> CommandResult:
+        """Not used by authorize_and_run_terminal_command -- present to satisfy SandboxPort."""
+        raise NotImplementedError
+
+    def launch(
+        self,
+        command: tuple[str, ...],
+        *,
+        bind_paths: tuple[object, ...] = (),  # noqa: ARG002
+        allow_network: bool = False,  # noqa: ARG002
+    ) -> int:
+        """Record a launch() call and return a fake pid."""
+        self.calls.append(("launch", *command))
+        return _FAKE_PID
+
+
+class _StubTerminalWindow:
+    """A DesktopWindowPort test double for terminal.run's own composition-root tests."""
+
+    def __init__(self, *, read_result: str | None = "$ done") -> None:
+        """Start with an empty call log; configure what read_visible_text returns."""
+        self.calls: list[tuple[str, ...]] = []
+        self._read_result = read_result
+
+    def find_or_launch(
+        self, app_id: str, launch_command: tuple[str, ...] | None = None
+    ) -> WindowHandle:
+        """Record a find_or_launch() call and return a fake handle immediately."""
+        self.calls.append(("find_or_launch", app_id, str(launch_command)))
+        return WindowHandle(value=f"{app_id}:1", app_id=app_id)
+
+    def focus(self, handle: WindowHandle) -> None:
+        """Record a focus() call."""
+        self.calls.append(("focus", handle.app_id))
+
+    def type_text(self, handle: WindowHandle, text: str) -> None:
+        """Record a type_text() call."""
+        self.calls.append(("type_text", handle.app_id, text))
+
+    def read_visible_text(self, handle: WindowHandle) -> str | None:
+        """Record a read_visible_text() call and return the configured result."""
+        self.calls.append(("read_visible_text", handle.app_id))
+        return self._read_result
+
+
+def test_granted_terminal_call_runs_the_command_and_wraps_output(tmp_path: Path) -> None:
+    """A granted call runs the sandboxed flow and wraps its output as Tainted/UNTRUSTED_EXTERNAL."""
+    sandbox = _StubSandbox()
+    window = _StubTerminalWindow(read_result="$ pytest\n5 passed")
+
+    outcome = authorize_and_run_terminal_command(
+        "pytest\n",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        sandbox=sandbox,
+        desktop_window=window,
+    )
+
+    assert outcome.decision.granted is True
+    assert sandbox.calls == [("launch", "gnome-terminal")]
+    assert outcome.output is not None
+    assert outcome.output.value == "$ pytest\n5 passed"
+    assert outcome.output.provenance.is_tainted is True
+
+
+def test_denied_terminal_call_never_touches_sandbox_or_window(tmp_path: Path) -> None:
+    """With no physical confirmation, MANUAL_ONLY-tier terminal.run is denied, nothing touched."""
+    sandbox = _StubSandbox()
+    window = _StubTerminalWindow()
+
+    outcome = authorize_and_run_terminal_command(
+        "rm -rf /\n",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        sandbox=sandbox,
+        desktop_window=window,
+    )
+
+    assert outcome.decision.granted is False
+    assert outcome.output is None
+    assert sandbox.calls == []
+    assert window.calls == []
+
+
+def test_remote_confirmation_alone_cannot_grant_terminal_run(tmp_path: Path) -> None:
+    """Unlike Brave/VS Code/chat-app CONFIRM tier, MANUAL_ONLY terminal.run needs physical presence.
+
+    ADR-0013: voice/remote confirmation is a convenience filter, never
+    an authorization boundary for MANUAL_ONLY. This is the same real
+    guarantee domain/policy.py's own evaluate() enforces -- exercised
+    here through the real kernel composition root, not just at the
+    domain layer in isolation.
+    """
+    sandbox = _StubSandbox()
+    window = _StubTerminalWindow()
+
+    outcome = authorize_and_run_terminal_command(
+        "ls\n",
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=tmp_path / "audit_chain.json",
+        sandbox=sandbox,
+        desktop_window=window,
+    )
+
+    assert outcome.decision.granted is False
+    assert sandbox.calls == []
+
+
+def test_terminal_audit_record_is_saved_even_when_the_sandbox_raises(tmp_path: Path) -> None:
+    """A granted decision is persisted even if the subsequent real-world action fails."""
+    chain_path = tmp_path / "audit_chain.json"
+
+    class _RaisingSandbox(_StubSandbox):
+        def launch(
+            self,
+            command: tuple[str, ...],  # noqa: ARG002
+            *,
+            bind_paths: tuple[object, ...] = (),  # noqa: ARG002
+            allow_network: bool = False,  # noqa: ARG002
+        ) -> int:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        authorize_and_run_terminal_command(
+            "ls\n",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            sandbox=_RaisingSandbox(),
+            desktop_window=_StubTerminalWindow(),
+        )
+
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == _GRANTED_CALLS
+    assert chain[0].decision.granted is True
+
+
+def test_terminal_output_is_none_when_read_visible_text_is_unavailable(tmp_path: Path) -> None:
+    """A granted call whose output can't be read back returns output=None, not an error."""
+    sandbox = _StubSandbox()
+    window = _StubTerminalWindow(read_result=None)
+
+    outcome = authorize_and_run_terminal_command(
+        "ls\n",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        sandbox=sandbox,
+        desktop_window=window,
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.output is None

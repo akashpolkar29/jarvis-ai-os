@@ -54,3 +54,39 @@ class SandboxPort(Protocol):
             already returns for unsandboxed commands.
         """
         ...
+
+    def launch(
+        self,
+        command: tuple[str, ...],
+        *,
+        bind_paths: tuple[Path, ...] = (),
+        allow_network: bool = False,
+    ) -> int:
+        """Launch ``command`` inside a real, isolated sandbox as a long-running process.
+
+        Unlike :meth:`run`, never waits for completion -- for a
+        long-running, foreground process this milestone's Terminal
+        capability needs to interact with afterward (WP-52, ADR-0046),
+        not a one-shot command whose exit code/output is the point.
+        Added in WP-52 alongside :meth:`run`'s original WP-45 shape,
+        the same "Popen vs. run" distinction
+        ``adapters/desktop_window.py``/``adapters/brave.py``/
+        ``adapters/vscode.py`` already draw between a real GUI launch
+        and a real batch command.
+
+        Args:
+            command: As in :meth:`run`.
+            bind_paths: As in :meth:`run`.
+            allow_network: As in :meth:`run`.
+
+        Returns:
+            The real process id of the sandboxed process itself (the
+            outer containment process, not necessarily ``command``'s
+            own pid if the sandbox technology execs through an
+            intermediary) -- an opaque handle a caller can use to,
+            e.g., terminate the sandbox later. This milestone's own
+            Terminal capability does not use the returned value for
+            anything yet; returned for completeness and because
+            discarding a real pid silently would be a worse default.
+        """
+        ...
