@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.brave import BraveCliAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
+from jarvis.adapters.docker import DockerCliAdapter
 from jarvis.adapters.vscode import VsCodeCliAdapter
 from jarvis.application.desktop import run_in_sandboxed_terminal
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -48,6 +49,10 @@ from jarvis.kernel.capabilities import (
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
+    DOCKER_BUILD_IMAGE_CAPABILITY_ID,
+    DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
+    DOCKER_RUN_CONTAINER_CAPABILITY_ID,
+    DOCKER_STOP_CONTAINER_CAPABILITY_ID,
     TERMINAL_RUN_CAPABILITY_ID,
     build_default_registry,
 )
@@ -59,6 +64,7 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision
     from jarvis.ports.brave import BravePort
     from jarvis.ports.desktop_window import DesktopWindowPort
+    from jarvis.ports.docker import DockerPort
     from jarvis.ports.sandbox import SandboxPort
     from jarvis.ports.vscode import VsCodePort
 
@@ -432,3 +438,251 @@ def authorize_and_run_terminal_command(  # noqa: PLR0913
         storage.save(chain)
 
     return TerminalRunOutcome(decision=decision, output=output)
+
+
+@dataclass(frozen=True)
+class DockerListContainersOutcome:
+    """The result of one authorize_and_list_docker_containers() call.
+
+    Attributes:
+        decision: The Decision for this call -- durably appended to
+            the chain regardless of outcome.
+        containers: The real container names, if granted. ``()`` if
+            denied (impossible in practice, since this capability
+            floors ``Tier.ALLOW`` -- kept for structural consistency
+            with every other ``*Outcome`` type in this module, the same
+            reasoning ``kernel.files``'s own always-True granted check
+            documents).
+    """
+
+    decision: Decision
+    containers: tuple[str, ...]
+
+
+def authorize_and_list_docker_containers(
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    docker: DockerPort | None = None,
+) -> DockerListContainersOutcome:
+    """Wire up the stack, authorize listing containers, and list them if granted.
+
+    ``docker.list_containers`` is ``Effect.READ_LOCAL`` -- always
+    ``Tier.ALLOW``, always granted, matching ``ping``/``fs.read_file``'s
+    own precedent.
+
+    Args:
+        physical_confirmation_available: Threaded through for interface
+            consistency; does not affect the outcome at ``Tier.ALLOW``.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        docker: The port containers are listed through if granted.
+            Defaults to a real ``DockerCliAdapter``. No ``gi`` dependency
+            here, unlike ``desktop_window``, so a real default is safe
+            to construct directly in ``jarvis.kernel``.
+
+    Returns:
+        A ``DockerListContainersOutcome`` -- see its own docstring.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
+        Tainted({}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    containers: tuple[str, ...] = ()
+    try:
+        if decision.granted:
+            real_docker = docker if docker is not None else DockerCliAdapter()
+            containers = real_docker.list_containers()
+    finally:
+        storage.save(chain)
+
+    return DockerListContainersOutcome(decision=decision, containers=containers)
+
+
+def authorize_and_run_docker_container(
+    image: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    docker: DockerPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize running a container from ``image``, and run it if granted.
+
+    ``docker.run_container`` floors ``Tier.MANUAL_ONLY`` unconditionally
+    (``Effect.DESTRUCTIVE | Effect.EXECUTE``) -- Docker can consume host
+    disk/CPU/network unboundedly and, depending on mount flags, reach
+    host files directly, independent of Docker's own containment
+    (ADR-0044's own reasoning: a capability decides its own tier the
+    same way every other capability does, regardless of what runs
+    *inside* whatever it starts).
+
+    Args:
+        image: The image reference to run.
+        physical_confirmation_available: Whether a human is physically
+            present. The only channel that can grant this call.
+        remote_confirmation_available: Threaded through for interface
+            consistency; cannot by itself grant a MANUAL_ONLY capability.
+        chain_path: Where the audit chain is persisted.
+        docker: The port the container is run through if granted.
+            Defaults to a real ``DockerCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DOCKER_RUN_CONTAINER_CAPABILITY_ID,
+        Tainted({"image": image}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_docker = docker if docker is not None else DockerCliAdapter()
+            real_docker.run_container(image)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_stop_docker_container(
+    container: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    docker: DockerPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize stopping ``container``, and stop it if granted.
+
+    ``docker.stop_container`` is ``Effect.EXECUTE`` only -- floors
+    ``Tier.CONFIRM``, not ``MANUAL_ONLY``. Judgment call, logged: unlike
+    ``run_container``/``build_image``, stopping a container is a real
+    but recoverable action (``docker start`` reverses it) and cannot
+    itself consume unbounded new resources or reach new host paths --
+    the design doc's own text groups "creates, runs, or builds" as the
+    DESTRUCTIVE-floor actions, and stopping is none of those.
+
+    Args:
+        container: The container's name or id to stop.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        docker: The port the container is stopped through if granted.
+            Defaults to a real ``DockerCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DOCKER_STOP_CONTAINER_CAPABILITY_ID,
+        Tainted({"container": container}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_docker = docker if docker is not None else DockerCliAdapter()
+            real_docker.stop_container(container)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+# context_dir/tag are both required, unlike run_container/stop_container's one arg.
+def authorize_and_build_docker_image(  # noqa: PLR0913
+    context_dir: Path,
+    tag: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    docker: DockerPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize building an image, and build it if granted.
+
+    ``docker.build_image`` floors ``Tier.MANUAL_ONLY`` unconditionally
+    (``Effect.DESTRUCTIVE | Effect.EXECUTE``) -- a Dockerfile can run
+    arbitrary build-time instructions, the same real risk class as
+    Terminal's own open-ended execution, just expressed through a
+    build context instead of typed text.
+
+    Args:
+        context_dir: The real build context directory (must contain a
+            ``Dockerfile``).
+        tag: The tag to apply to the built image.
+        physical_confirmation_available: Whether a human is physically
+            present. The only channel that can grant this call.
+        remote_confirmation_available: Threaded through for interface
+            consistency; cannot by itself grant a MANUAL_ONLY capability.
+        chain_path: Where the audit chain is persisted.
+        docker: The port the image is built through if granted.
+            Defaults to a real ``DockerCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DOCKER_BUILD_IMAGE_CAPABILITY_ID,
+        Tainted({"context_dir": str(context_dir), "tag": tag}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_docker = docker if docker is not None else DockerCliAdapter()
+            real_docker.build_image(context_dir, tag)
+    finally:
+        storage.save(chain)
+
+    return decision

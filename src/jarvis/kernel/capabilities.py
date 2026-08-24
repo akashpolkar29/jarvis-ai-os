@@ -52,6 +52,10 @@ DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file"
 DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.claude_app_send_text")
 DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.chatgpt_app_send_text")
 TERMINAL_RUN_CAPABILITY_ID = CapabilityId("terminal.run")
+DOCKER_LIST_CONTAINERS_CAPABILITY_ID = CapabilityId("docker.list_containers")
+DOCKER_RUN_CONTAINER_CAPABILITY_ID = CapabilityId("docker.run_container")
+DOCKER_STOP_CONTAINER_CAPABILITY_ID = CapabilityId("docker.stop_container")
+DOCKER_BUILD_IMAGE_CAPABILITY_ID = CapabilityId("docker.build_image")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -163,6 +167,42 @@ def build_default_registry() -> CapabilityRegistry:
                 "Type a command into a freshly launched, sandboxed terminal emulator. "
                 "A deliberate, narrow exception to this project's no-shell principle "
                 "(ADR-0046) -- always MANUAL_ONLY, never a standing grant."
+            ),
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
+            effects=Effect.READ_LOCAL,
+            description="List every Docker container's name, read-only.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=DOCKER_RUN_CONTAINER_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.EXECUTE,
+            description=(
+                "Run a new detached Docker container from an image. Unbounded host "
+                "resource consumption and, depending on mount flags, host file access "
+                "-- always MANUAL_ONLY, independent of what runs inside the container."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=DOCKER_STOP_CONTAINER_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description="Stop a running Docker container -- recoverable via docker start.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=DOCKER_BUILD_IMAGE_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.EXECUTE,
+            description=(
+                "Build a Docker image from a Dockerfile. Runs arbitrary build-time "
+                "instructions from that Dockerfile -- always MANUAL_ONLY."
             ),
         )
     )

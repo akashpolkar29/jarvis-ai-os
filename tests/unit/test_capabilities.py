@@ -8,6 +8,10 @@ from jarvis.kernel.capabilities import (
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
+    DOCKER_BUILD_IMAGE_CAPABILITY_ID,
+    DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
+    DOCKER_RUN_CONTAINER_CAPABILITY_ID,
+    DOCKER_STOP_CONTAINER_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
     MUSIC_PLAY_CAPABILITY_ID,
@@ -18,7 +22,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 11
+_EXPECTED_CAPABILITY_COUNT = 15
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -49,6 +53,10 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
         DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
         TERMINAL_RUN_CAPABILITY_ID,
+        DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
+        DOCKER_RUN_CONTAINER_CAPABILITY_ID,
+        DOCKER_STOP_CONTAINER_CAPABILITY_ID,
+        DOCKER_BUILD_IMAGE_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -91,6 +99,47 @@ def test_terminal_run_has_destructive_and_execute_effects() -> None:
     registry = build_default_registry()
 
     descriptor = registry.get(TERMINAL_RUN_CAPABILITY_ID)
+    assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_docker_list_containers_has_read_local_effects() -> None:
+    """docker.list_containers is registered with Effect.READ_LOCAL -- always Tier.ALLOW."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(DOCKER_LIST_CONTAINERS_CAPABILITY_ID)
+    assert descriptor.effects == Effect.READ_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_docker_run_container_has_destructive_and_execute_effects() -> None:
+    """docker.run_container is DESTRUCTIVE | EXECUTE -- floors Tier.MANUAL_ONLY unconditionally."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(DOCKER_RUN_CONTAINER_CAPABILITY_ID)
+    assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_docker_stop_container_has_execute_effects_only() -> None:
+    """docker.stop_container is EXECUTE only -- floors Tier.CONFIRM, not MANUAL_ONLY.
+
+    Judgment call (see kernel/desktop.py's own docstring): stopping is
+    recoverable via docker start and cannot itself consume unbounded
+    new resources, unlike run/build.
+    """
+    registry = build_default_registry()
+
+    descriptor = registry.get(DOCKER_STOP_CONTAINER_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EXECUTE
+    assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_docker_build_image_has_destructive_and_execute_effects() -> None:
+    """docker.build_image is DESTRUCTIVE | EXECUTE -- floors Tier.MANUAL_ONLY unconditionally."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(DOCKER_BUILD_IMAGE_CAPABILITY_ID)
     assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
     assert descriptor.required_tier == Tier.MANUAL_ONLY
 
