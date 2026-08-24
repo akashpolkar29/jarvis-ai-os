@@ -47,13 +47,14 @@ MUSIC_PAUSE_CAPABILITY_ID = CapabilityId("music.pause")
 MUSIC_NEXT_CAPABILITY_ID = CapabilityId("music.next")
 MUSIC_PREVIOUS_CAPABILITY_ID = CapabilityId("music.previous")
 READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
+DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
 
 
 def build_default_registry() -> CapabilityRegistry:
     """Register every capability jarvis currently knows about, in one place.
 
     Returns:
-        A fresh ``CapabilityRegistry`` with all six capabilities
+        A fresh ``CapabilityRegistry`` with every known capability
         registered. ``CapabilityRegistry.register()`` raises
         ``CapabilityAlreadyRegistered`` on a duplicate id (WP-07), so
         this function completing without raising is itself the proof
@@ -109,6 +110,14 @@ def build_default_registry() -> CapabilityRegistry:
             id=READ_FILE_CAPABILITY_ID,
             effects=Effect.EGRESS_LOCAL,
             description="Read a local file's contents, scoped to the allowed root.",
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description="Launch or focus Brave, navigated to a URL.",
         )
     )
 

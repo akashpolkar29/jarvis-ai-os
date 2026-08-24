@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from jarvis.domain.capability import Effect
 from jarvis.kernel.capabilities import (
+    DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
     MUSIC_PLAY_CAPABILITY_ID,
@@ -13,7 +14,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 6
+_EXPECTED_CAPABILITY_COUNT = 7
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -27,7 +28,7 @@ def test_build_default_registry_does_not_raise() -> None:
 
 
 def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
-    """The registry contains exactly the six known capability ids, no more, no fewer."""
+    """The registry contains exactly the known capability ids, no more, no fewer."""
     registry = build_default_registry()
 
     ids = {descriptor.id for descriptor in registry}
@@ -39,8 +40,16 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         MUSIC_NEXT_CAPABILITY_ID,
         MUSIC_PREVIOUS_CAPABILITY_ID,
         READ_FILE_CAPABILITY_ID,
+        DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
+
+
+def test_desktop_brave_open_url_has_execute_effects() -> None:
+    """desktop.brave_open_url is registered with Effect.EXECUTE (floors Tier.CONFIRM)."""
+    registry = build_default_registry()
+
+    assert registry.get(DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID).effects == Effect.EXECUTE
 
 
 def test_ping_has_read_local_effects() -> None:
