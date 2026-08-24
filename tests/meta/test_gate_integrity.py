@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-CURRENT_WORK_PACKAGE = 42
+CURRENT_WORK_PACKAGE = 55
 
 # Work package at which each import-linter contract becomes configurable.
 # A contract can only be added once every package it names exists on
@@ -45,13 +45,15 @@ CONTRACT_SCHEDULE: dict[str, int] = {
     "C7 plugin_api depends only on domain": 1,
     "C5 ui privilege": 24,
     "C4 adapter independence": 32,
-    # Still a placeholder, pushed forward from 30 now that WP-32 has
-    # passed and plugins/* still does not exist on disk -- M2 (through
-    # WP-42) never creates it (see m2-reasoning-layer.md section 8:
-    # "individual agent capability sets" are explicitly M5+). 50 is a
-    # round, deliberately-past-M2 guess, correct this again once a real
-    # milestone plan places plugins/* concretely.
-    "C3 plugin isolation": 50,
+    # Pushed forward again at M3's own closeout (WP-55): M3 (through
+    # WP-54) built eight new adapters (desktop_window, sandbox, brave,
+    # vscode, docker, git) but none of them are a real plugins/*
+    # workspace member either -- m3-desktop-control.md's own scope never
+    # named one, and no future milestone plan places plugins/*
+    # concretely yet. 70 is a round, deliberately-past-M3 guess,
+    # correct this again once a real milestone plan places plugins/*
+    # concretely.
+    "C3 plugin isolation": 70,
 }
 
 
