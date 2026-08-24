@@ -58,8 +58,8 @@ CLAUDE.md's "Current Status" line, which reflects the same state.
 |---|---|---|---|---|---|
 | **M0** | Capability-based agent kernel core: ports & adapters layering, four-tier policy engine (ALLOW/CONFIRM/MANUAL_ONLY/DENY), provenance/taint tracking (`Tainted[T]`), hash-chained tamper-evident audit log, two real capabilities (MPRIS music control, scoped file read), CLI entrypoint. | None — foundational. | All 7 gates pass; threat-model v0 documented honestly, including its own gaps. | Not estimated in any surviving planning material. | **Complete.** Tagged `v0.1.0`, then `v0.1.1` (closed an audit-log privacy gap — raw argument values were briefly persisted, contradicting ADR-0027; fixed to digest-only, a breaking one-way change to the chain format). 32 ADRs (`0001`–`0032`). |
 | **M1** | Voice interaction: wake-word detection, VAD, STT, speaker-id (audit/UX signal only, never authorization), a genuine physical-keypress GTK4 confirmation dialog closing threat-model Finding 2, TTS — wired end to end via `jarvis listen`, calling the *unmodified* M0 `AuthorizationOrchestrator`. | M0 tagged `v0.1.1`, complete. | All 7 gates pass; Finding 2 closed for voice-triggered invocation; `jarvis listen` runs the full pipeline. | Not estimated in any surviving planning material. | **Code-complete**, tagged `v0.2.0`, all 7 gates pass (CI green on `ubuntu-latest`, both Python 3.12/3.13). 5 further ADRs (`0033`–`0037`). **Live, end-to-end pipeline verification is still an open item** (tracker `#19`): wake-word triggering and the confirmation dialog are each separately verified on real hardware; a bug isolated to the capture code's own audio path (not the OS/PipeWire layer, confirmed working independently) still blocks a real utterance completing the full loop. Not rounding this up to "done." |
-| **M2** | Multi-model reasoning layer: a `ReasoningPort` abstraction over multiple trusted providers, no vendor names in `domain`/`application`/`ports` (ADR-0021), an escalation ladder trying deterministic fixes and self-repair before consulting a second provider (ADR-0022), an arbiter that selects one candidate unmodified rather than merging (ADR-0023), a reviewing model that must produce a failing test rather than a verdict (ADR-0024), and zero weight for a provider's own test scoring its own candidate (ADR-0025). | M1. | Not specified in surviving planning material — see `m2-reasoning-layer.md`. | Not specified. | **Not started.** The *principles* above are real and already decided (ADRs 0020–0025, written during M0). A detailed design document, `m2-reasoning-layer.md`, has now been recovered from the original architecture-phase conversation and reconstructed (2026-08-18) — but it is **not yet re-validated** against what M0 actually became; that reconciliation pass is separate, upcoming planning work, not something this recovery did. |
-| **M3** | Desktop control: portal + libei, X11 fallback, AT-SPI2. Out-of-process plugin host + `bwrap` sandboxing. | M0, M1. | `DesktopControlPortContract` green on both Wayland and X11; moving plugins out-of-process requires zero plugin changes. | XL, 25–35 ideal-days. | Not started. See `docs/architecture/m3-desktop-control.md` (placeholder — objective/gates only). |
+| **M2** | Multi-model reasoning layer: a `ReasoningPort` abstraction over multiple trusted providers, no vendor names in `domain`/`application`/`ports` (ADR-0021), an escalation ladder trying deterministic fixes and self-repair before consulting a second provider (ADR-0022), an arbiter that selects one candidate unmodified rather than merging (ADR-0023), a reviewing model that must produce a failing test rather than a verdict (ADR-0024), and zero weight for a provider's own test scoring its own candidate (ADR-0025). | M1. | All 7 gates pass, including the new `application/reasoning` 100%-branch-coverage gate (ADR-0041). | Not specified. | **Code-complete**, tagged `v0.3.0`. 6 further ADRs (`0038`–`0043`). `docs/threat-model/v0.md` carries a "Milestone 2 additions" section, including a real, explicitly-accepted gap (candidate execution is not sandboxed) and a live-verification tracker mirroring M1's `#19` (local fully verified; cloud providers partially/not verified — real account/API constraints, not code bugs). |
+| **M3** | Desktop control: portal + libei, X11 fallback, AT-SPI2. Out-of-process plugin host + `bwrap` sandboxing. Eight apps: Brave, VS Code, Spotify, Terminal, Docker, Git, the Claude desktop app, the ChatGPT desktop app. | M0, M1. | `DesktopControlPortContract` green on both Wayland and X11; moving plugins out-of-process requires zero plugin changes. | XL, 25–35 ideal-days. | **Design complete, implementation not started.** `docs/architecture/m3-desktop-control.md` is now a real design (written 2026-08-21), not a placeholder — see that document for the full scope, a WP-43+ breakdown, and its own non-goals (Claude/ChatGPT apps get ordinary control only, never response-scraping; Brave/VS Code get ordinary control only, deep CDP/LSP work stays M5's). |
 | **M4** | Memory, hybrid retrieval, retrieval eval set. Vision via ScreenCast/PipeWire. | M2, M3. | Retrieval measured against a fixed eval set; brute-force-vs-ANN decision made by benchmark, not preference. | XL, 25–35 ideal-days. | Not started. See `docs/architecture/m4-memory-retrieval.md` (placeholder). |
 | **M5** | Browser via CDP. Coding capabilities via LSP + git. Console UI. | M3, M4. | Coding agent passes the M2 escalation ladder end-to-end on a real repo; test files provably write-protected. | XL, 30–40 ideal-days. | Not started. See `docs/architecture/m5-browser-coding.md` (placeholder). |
 | **M6+** | Email, calendar, research, job assistance (research + drafting only, no auto-apply), Docker, ROS2. | M5. | Per-plugin conformance to the M0 capability/policy/audit model. | Not specified. | Not started. See `docs/architecture/m6-integrations.md` (placeholder). |
@@ -83,11 +83,12 @@ approval" months after being fully implemented and tagged. All of that
 was corrected in place (commit `bde285d`) rather than left silently
 wrong — but the fact that a *single* milestone's worth of pre-written
 detail drifted that much in the time it took to build is exactly why
-M3 through M6+ below are deliberately left as gate-only stubs, not
-speculative designs: writing `m3-desktop-control.md`'s actual port
-signatures, package layout, and work-package breakdown today would
-mean writing something guaranteed to need the same kind of correction
-before M3 ever starts, for a milestone that is not even next.
+M4 through M6+ below remain deliberately left as gate-only stubs, not
+speculative designs — the same reasoning that kept M3 a stub through
+M0, M1, and M2. M3's real design (`m3-desktop-control.md`, written
+2026-08-21) was written only once M3 genuinely became the next
+milestone, with M2 complete and tagged, not ahead of that point — the
+rolling-wave principle in action, not an exception carved out of it.
 
 ## Per-milestone documents
 
@@ -100,15 +101,21 @@ before M3 ever starts, for a milestone that is not even next.
 - **M1**: [`docs/architecture/m1-voice-architecture.md`](architecture/m1-voice-architecture.md) —
   current, corrected against what was actually built as of commit `bde285d`.
 - **M2**: [`docs/architecture/m2-reasoning-layer.md`](architecture/m2-reasoning-layer.md) —
-  recovered 2026-08-18 from the original design conversation. Explicitly
-  **not yet re-validated** against what M0 actually became — see the
-  M2 row above and the document's own status note.
+  recovered 2026-08-18 from the original design conversation, reconciled
+  against real M0 state during the WP-28 planning pass and implemented
+  through WP-31–WP-42 (`v0.3.0`). The recovered fragments themselves are
+  not rewritten; deviations found along the way are recorded in real
+  ADRs (`0038`–`0043`) and in `docs/threat-model/v0.md`'s "Milestone 2
+  additions" instead — see the M2 row above.
 - **System design**: [`docs/architecture/system-design.md`](architecture/system-design.md) —
   reconciliation of the original system-design decisions (plugin ABI,
   event bus, IPC transport, persistence, secrets, D-Bus library choice,
   the confirmation dialog) against real repo state, reconstructed
   2026-08-18.
-- **M3**: [`docs/architecture/m3-desktop-control.md`](architecture/m3-desktop-control.md) — placeholder.
+- **M3**: [`docs/architecture/m3-desktop-control.md`](architecture/m3-desktop-control.md) —
+  real design, written 2026-08-21 against real post-M2 repo state, not
+  a reconciliation of recovered material (none was ever found for M3) —
+  see the M3 row above and the document's own status note.
 - **M4**: [`docs/architecture/m4-memory-retrieval.md`](architecture/m4-memory-retrieval.md) — placeholder.
 - **M5**: [`docs/architecture/m5-browser-coding.md`](architecture/m5-browser-coding.md) — placeholder.
 - **M6+**: [`docs/architecture/m6-integrations.md`](architecture/m6-integrations.md) — placeholder.
