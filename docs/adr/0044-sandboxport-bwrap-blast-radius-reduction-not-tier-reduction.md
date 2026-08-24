@@ -31,7 +31,13 @@ The separate, real design question this ADR exists to settle: does running a cap
 Add `jarvis.ports.sandbox.SandboxPort`, a one-method `Protocol`:
 
 ```python
-def run(self, command: tuple[str, ...], *, bind_paths: tuple[Path, ...] = (), allow_network: bool = False) -> CommandResult: ...
+def run(
+    self,
+    command: tuple[str, ...],
+    *,
+    bind_paths: tuple[Path, ...] = (),
+    allow_network: bool = False,
+) -> CommandResult: ...
 ```
 
 Reusing `CommandResult` from `jarvis.adapters.validation._command` (exit code, stdout, stderr) rather than inventing a second shape for the same concept -- the same reuse `adapters/workspace.py` and the validation adapters already share.
