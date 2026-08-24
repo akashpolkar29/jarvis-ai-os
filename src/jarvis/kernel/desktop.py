@@ -40,6 +40,7 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.brave import BraveCliAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.docker import DockerCliAdapter
+from jarvis.adapters.git import GitCliAdapter
 from jarvis.adapters.vscode import VsCodeCliAdapter
 from jarvis.application.desktop import run_in_sandboxed_terminal
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -53,6 +54,11 @@ from jarvis.kernel.capabilities import (
     DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
     DOCKER_RUN_CONTAINER_CAPABILITY_ID,
     DOCKER_STOP_CONTAINER_CAPABILITY_ID,
+    GIT_COMMIT_CAPABILITY_ID,
+    GIT_CREATE_BRANCH_CAPABILITY_ID,
+    GIT_FORCE_PUSH_CAPABILITY_ID,
+    GIT_PUSH_CAPABILITY_ID,
+    GIT_STATUS_CAPABILITY_ID,
     TERMINAL_RUN_CAPABILITY_ID,
     build_default_registry,
 )
@@ -65,6 +71,7 @@ if TYPE_CHECKING:
     from jarvis.ports.brave import BravePort
     from jarvis.ports.desktop_window import DesktopWindowPort
     from jarvis.ports.docker import DockerPort
+    from jarvis.ports.git import GitPort
     from jarvis.ports.sandbox import SandboxPort
     from jarvis.ports.vscode import VsCodePort
 
@@ -682,6 +689,316 @@ def authorize_and_build_docker_image(  # noqa: PLR0913
         if decision.granted:
             real_docker = docker if docker is not None else DockerCliAdapter()
             real_docker.build_image(context_dir, tag)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+@dataclass(frozen=True)
+class GitStatusOutcome:
+    """The result of one authorize_and_get_git_status() call.
+
+    Attributes:
+        decision: The Decision for this call -- durably appended to
+            the chain regardless of outcome.
+        status: The repository's real ``git status`` output, if
+            granted. ``None`` if denied (impossible in practice, since
+            this capability floors ``Tier.ALLOW`` -- kept for
+            structural consistency with every other ``*Outcome`` type
+            in this module).
+    """
+
+    decision: Decision
+    status: str | None
+
+
+def authorize_and_get_git_status(
+    repo_dir: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    git: GitPort | None = None,
+) -> GitStatusOutcome:
+    """Wire up the stack, authorize reading ``repo_dir``'s status, and read it if granted.
+
+    ``git.status`` is ``Effect.READ_LOCAL`` -- always ``Tier.ALLOW``,
+    always granted, matching ``docker.list_containers``'s own precedent.
+
+    Args:
+        repo_dir: The real git repository to check.
+        physical_confirmation_available: Threaded through for interface
+            consistency; does not affect the outcome at ``Tier.ALLOW``.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        git: The port status is read through if granted. Defaults to a
+            real ``GitCliAdapter``. No ``gi`` dependency here, so a real
+            default is safe to construct directly in ``jarvis.kernel``.
+
+    Returns:
+        A ``GitStatusOutcome`` -- see its own docstring.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        GIT_STATUS_CAPABILITY_ID,
+        Tainted({"repo_dir": str(repo_dir)}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    status: str | None = None
+    try:
+        if decision.granted:
+            real_git = git if git is not None else GitCliAdapter()
+            status = real_git.status(repo_dir)
+    finally:
+        storage.save(chain)
+
+    return GitStatusOutcome(decision=decision, status=status)
+
+
+# repo_dir/branch_name are both required -- one more than status's single argument.
+def authorize_and_create_git_branch(  # noqa: PLR0913
+    repo_dir: Path,
+    branch_name: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    git: GitPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize creating ``branch_name``, and create it if granted.
+
+    ``git.create_branch`` is ``Effect.WRITE_LOCAL`` -- floors
+    ``Tier.CONFIRM``, cheap and reversible (deleting a local branch
+    that was never pushed loses nothing).
+
+    Args:
+        repo_dir: The real git repository to create the branch in.
+        branch_name: The new branch's name.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        git: The port the branch is created through if granted.
+            Defaults to a real ``GitCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        GIT_CREATE_BRANCH_CAPABILITY_ID,
+        Tainted({"repo_dir": str(repo_dir), "branch_name": branch_name}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_git = git if git is not None else GitCliAdapter()
+            real_git.create_branch(repo_dir, branch_name)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+# repo_dir/message are both required -- one more than status's single argument.
+def authorize_and_commit_git(  # noqa: PLR0913
+    repo_dir: Path,
+    message: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    git: GitPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize committing in ``repo_dir``, and commit if granted.
+
+    ``git.commit`` is ``Effect.WRITE_LOCAL`` -- floors ``Tier.CONFIRM``.
+    A local commit is reversible via ``git reset``/``--amend`` as long
+    as it is never shared (pushing is a separate, later capability).
+
+    Args:
+        repo_dir: The real git repository to commit in.
+        message: The commit message.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        git: The port the commit is made through if granted. Defaults
+            to a real ``GitCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        GIT_COMMIT_CAPABILITY_ID,
+        Tainted({"repo_dir": str(repo_dir), "message": message}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_git = git if git is not None else GitCliAdapter()
+            real_git.commit(repo_dir, message)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+# repo_dir/remote/branch are all required for a push -- one more than
+# create_branch/commit's two positional arguments, not accidental bloat.
+def authorize_and_push_git(  # noqa: PLR0913
+    repo_dir: Path,
+    remote: str,
+    branch: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    git: GitPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize an ordinary push, and push if granted.
+
+    ``git.push`` is ``Effect.WRITE_LOCAL`` -- floors ``Tier.CONFIRM``,
+    for an ordinary fast-forward push to a branch the user already
+    owns. A force-push is a wholly separate capability
+    (:func:`authorize_and_force_push_git`), never a flag here.
+
+    Args:
+        repo_dir: The real git repository to push from.
+        remote: The remote name to push to (e.g. ``"origin"``).
+        branch: The branch name to push.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        git: The port the push is made through if granted. Defaults to
+            a real ``GitCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        GIT_PUSH_CAPABILITY_ID,
+        Tainted({"repo_dir": str(repo_dir), "remote": remote, "branch": branch}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_git = git if git is not None else GitCliAdapter()
+            real_git.push(repo_dir, remote, branch)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+# Mirrors authorize_and_push_git's own shape exactly -- see its own PLR0913 note.
+def authorize_and_force_push_git(  # noqa: PLR0913
+    repo_dir: Path,
+    remote: str,
+    branch: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    git: GitPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize a force-push, and force-push if granted.
+
+    ``git.force_push`` floors ``Tier.MANUAL_ONLY`` unconditionally
+    (``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``) -- it can discard a
+    remote's history in a way nothing else in this registry can undo.
+    Deliberately its own capability id, not a boolean flag on
+    :func:`authorize_and_push_git`: a dangerous variant of an
+    otherwise-safe operation gets its own id, so the capability
+    registry itself makes the real risk visible, rather than hiding a
+    ``--force``-shaped argument inside a safer-looking call.
+
+    Args:
+        repo_dir: The real git repository to push from.
+        remote: The remote name to push to.
+        branch: The branch name to force-push.
+        physical_confirmation_available: Whether a human is physically
+            present. The only channel that can grant this call.
+        remote_confirmation_available: Threaded through for interface
+            consistency; cannot by itself grant a MANUAL_ONLY capability.
+        chain_path: Where the audit chain is persisted.
+        git: The port the force-push is made through if granted.
+            Defaults to a real ``GitCliAdapter``.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        GIT_FORCE_PUSH_CAPABILITY_ID,
+        Tainted({"repo_dir": str(repo_dir), "remote": remote, "branch": branch}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_git = git if git is not None else GitCliAdapter()
+            real_git.force_push(repo_dir, remote, branch)
     finally:
         storage.save(chain)
 

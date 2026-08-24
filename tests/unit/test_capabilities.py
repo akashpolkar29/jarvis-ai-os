@@ -12,6 +12,11 @@ from jarvis.kernel.capabilities import (
     DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
     DOCKER_RUN_CONTAINER_CAPABILITY_ID,
     DOCKER_STOP_CONTAINER_CAPABILITY_ID,
+    GIT_COMMIT_CAPABILITY_ID,
+    GIT_CREATE_BRANCH_CAPABILITY_ID,
+    GIT_FORCE_PUSH_CAPABILITY_ID,
+    GIT_PUSH_CAPABILITY_ID,
+    GIT_STATUS_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
     MUSIC_PLAY_CAPABILITY_ID,
@@ -22,7 +27,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 15
+_EXPECTED_CAPABILITY_COUNT = 20
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -57,6 +62,11 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         DOCKER_RUN_CONTAINER_CAPABILITY_ID,
         DOCKER_STOP_CONTAINER_CAPABILITY_ID,
         DOCKER_BUILD_IMAGE_CAPABILITY_ID,
+        GIT_STATUS_CAPABILITY_ID,
+        GIT_CREATE_BRANCH_CAPABILITY_ID,
+        GIT_COMMIT_CAPABILITY_ID,
+        GIT_PUSH_CAPABILITY_ID,
+        GIT_FORCE_PUSH_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -141,6 +151,42 @@ def test_docker_build_image_has_destructive_and_execute_effects() -> None:
 
     descriptor = registry.get(DOCKER_BUILD_IMAGE_CAPABILITY_ID)
     assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_git_status_has_read_local_effects() -> None:
+    """git.status is registered with Effect.READ_LOCAL -- always Tier.ALLOW."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(GIT_STATUS_CAPABILITY_ID)
+    assert descriptor.effects == Effect.READ_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_git_create_branch_and_commit_and_push_have_write_local_effects() -> None:
+    """git.create_branch/commit/push are all WRITE_LOCAL -- floor Tier.CONFIRM."""
+    registry = build_default_registry()
+
+    for capability_id in (
+        GIT_CREATE_BRANCH_CAPABILITY_ID,
+        GIT_COMMIT_CAPABILITY_ID,
+        GIT_PUSH_CAPABILITY_ID,
+    ):
+        descriptor = registry.get(capability_id)
+        assert descriptor.effects == Effect.WRITE_LOCAL
+        assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_git_force_push_has_destructive_and_irreversible_effects() -> None:
+    """git.force_push is DESTRUCTIVE | IRREVERSIBLE -- floors Tier.MANUAL_ONLY unconditionally.
+
+    Its own capability id, deliberately never a flag on git.push (see
+    kernel/desktop.py's own docstring for the full reasoning).
+    """
+    registry = build_default_registry()
+
+    descriptor = registry.get(GIT_FORCE_PUSH_CAPABILITY_ID)
+    assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.IRREVERSIBLE)
     assert descriptor.required_tier == Tier.MANUAL_ONLY
 
 

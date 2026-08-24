@@ -56,6 +56,11 @@ DOCKER_LIST_CONTAINERS_CAPABILITY_ID = CapabilityId("docker.list_containers")
 DOCKER_RUN_CONTAINER_CAPABILITY_ID = CapabilityId("docker.run_container")
 DOCKER_STOP_CONTAINER_CAPABILITY_ID = CapabilityId("docker.stop_container")
 DOCKER_BUILD_IMAGE_CAPABILITY_ID = CapabilityId("docker.build_image")
+GIT_STATUS_CAPABILITY_ID = CapabilityId("git.status")
+GIT_CREATE_BRANCH_CAPABILITY_ID = CapabilityId("git.create_branch")
+GIT_COMMIT_CAPABILITY_ID = CapabilityId("git.commit")
+GIT_PUSH_CAPABILITY_ID = CapabilityId("git.push")
+GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -203,6 +208,49 @@ def build_default_registry() -> CapabilityRegistry:
             description=(
                 "Build a Docker image from a Dockerfile. Runs arbitrary build-time "
                 "instructions from that Dockerfile -- always MANUAL_ONLY."
+            ),
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=GIT_STATUS_CAPABILITY_ID,
+            effects=Effect.READ_LOCAL,
+            description="Show a git repository's working-tree status, read-only.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=GIT_CREATE_BRANCH_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description="Create and switch to a new git branch. Cheap and reversible.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=GIT_COMMIT_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description=(
+                "Commit already-tracked, modified files. Reversible via git reset/--amend "
+                "as long as it is never shared."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=GIT_PUSH_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description="An ordinary fast-forward push to a branch the user already owns.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=GIT_FORCE_PUSH_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.IRREVERSIBLE,
+            description=(
+                "A force-push, which can discard a remote's history in a way nothing "
+                "else in this registry can undo -- always MANUAL_ONLY, its own capability "
+                "id rather than a flag on git.push."
             ),
         )
     )
