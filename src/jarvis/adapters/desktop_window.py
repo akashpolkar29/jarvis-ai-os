@@ -58,12 +58,21 @@ WP-56), each requiring a live accessibility bus and a real target
 application neither CI nor this unattended pass can rely on. Unit
 tests fake all seven and exercise only this adapter's own dispatch
 logic (handle-token bookkeeping, which error type each failure mode
-becomes) -- real, but real about what "real" covers here: **live
-focus/type_text/read_visible_text/is_focused/is_visible_and_showing
-against an actual running application window was never exercised in
-this pass**, matching M1 tracker #19's and M2's ``family_b``'s own
-honesty pattern for a real capability that is code-complete but not
-live-verified.
+becomes) -- real, but real about what "real" covers here: at the time
+WP-56 shipped, live focus/type_text/read_visible_text/is_focused/
+is_visible_and_showing against an actual running application window
+had never been exercised. **A later overnight pass (still WP-56's own
+scope, live-reality audit) did exercise them all live, for real**,
+against a real, running ``gnome-terminal`` and Brave -- and found a
+real, reproducible bug in the original ``is_focused``/
+``is_visible_and_showing``/``focus`` implementations (all three
+checked only ``app`` itself, never a descendant; live-confirmed that
+AT-SPI2's root ``application`` node never carries the interfaces or
+state these methods need -- see :func:`_find_frame_descendant`'s own
+docstring for the full finding), fixed the same pass, and
+re-confirmed live afterward. ``read_text``'s own root-only-vs-descendant
+history already had one instance of this exact category of bug (the
+VS Code finding); this is the second, now both fixed the same way.
 """
 
 from __future__ import annotations
@@ -138,17 +147,29 @@ def _launch_subprocess(command: tuple[str, ...]) -> None:
 
 
 def _atspi_focus(app: object) -> bool:
-    """Try Component.grab_focus(), then Action "activate", on the real accessible ``app``.
+    """Try Component.grab_focus(), then Action "activate", on ``app``'s own frame descendant.
 
-    Real, untested-by-design (see module docstring). Returns ``False``
-    rather than raising when neither interface is available or the
-    call itself fails -- the adapter's own dispatch logic converts a
-    ``False`` into :class:`~jarvis.ports.desktop_window.WindowActionFailedError`.
+    Real, untested-by-design (see module docstring). Targets
+    :func:`_find_frame_descendant`'s result (falling back to ``app``
+    itself if none is found), not ``app`` directly -- **fixed in the
+    WP-56 overnight live-reality audit**: this originally checked
+    ``app`` only, and live testing against a real, running
+    ``gnome-terminal`` found that call structurally could never
+    succeed (the root ``application`` node has neither interface at
+    all; its ``frame`` child has a real, working ``Component``) --
+    reproducible, not a fluke: five consecutive real attempts against a
+    real window all failed identically before this fix, confirmed
+    fixed by the same live method afterward. See
+    :func:`_find_frame_descendant`'s own docstring for the full finding.
+    Returns ``False`` rather than raising when neither interface is
+    available or the call itself fails -- the adapter's own dispatch
+    logic converts a ``False`` into
+    :class:`~jarvis.ports.desktop_window.WindowActionFailedError`.
     """
     import gi  # noqa: PLC0415
 
     gi.require_version("Atspi", "2.0")
-    node: Any = app
+    node: Any = _find_frame_descendant(app) or app
 
     try:
         component = node.get_component_iface()
@@ -221,16 +242,56 @@ def _atspi_type_text(app: object, text: str) -> bool:
     return True
 
 
-_READ_TEXT_MAX_NODES_VISITED = 500
-"""Bounds the descendant walk in _atspi_read_text against pathologically large/deep trees.
+_DESCENDANT_WALK_MAX_NODES_VISITED = 500
+"""Bounds every descendant walk in this module against pathologically large/deep trees.
 
 A real, deliberate scope decision, not exhaustive: a full Electron app
 (VS Code, confirmed live during post-M3 verification to have far more
 nodes than a terminal emulator's own ~90) could otherwise make this
 walk slow or open-ended. 500 was not tuned against a real worst case --
 flagged as a real, adjustable constant if a genuine app is found where
-the content node sits deeper than this bound reaches.
+the content node sits deeper than this bound reaches. Originally
+``_atspi_read_text``'s own constant; shared by ``_find_frame_descendant``/
+``_atspi_is_focused`` (WP-56 overnight pass) once those needed the same
+kind of bounded walk for the same reason.
 """
+
+
+def _find_frame_descendant(app: object) -> object | None:
+    """Depth-first search for the first descendant with AT-SPI2 role ``frame`` or ``window``.
+
+    Real, live-confirmed finding (WP-56 overnight live-reality audit,
+    not assumed): AT-SPI2's root ``application`` node -- the object
+    ``find_or_launch`` actually returns a handle for -- never itself
+    carries a ``Component`` interface or meaningful window-visibility
+    state. A live tree dump against a real, running ``gnome-terminal``
+    found its root ``application`` node reporting ``VISIBLE=False``,
+    ``SHOWING=False``, no ``Component``, no ``Action`` interface at
+    all, while its one ``frame``-role child (one level down) correctly
+    reported ``VISIBLE=True``, ``SHOWING=True``, ``ACTIVE=True``, and a
+    real, working ``Component`` interface. This is the same category of
+    bug ``_atspi_read_text``'s own root-only-vs-descendant history
+    already has one instance of (the VS Code finding) -- checking only
+    the top-level object was an unverified assumption, not a
+    live-confirmed design choice, until this pass actually checked it.
+    """
+    stack: list[Any] = [app]
+    visited = 0
+    while stack and visited < _DESCENDANT_WALK_MAX_NODES_VISITED:
+        current = stack.pop()
+        visited += 1
+        try:
+            role = current.get_role_name()
+        except Exception:
+            role = None
+        if role in ("frame", "window"):
+            return cast("object", current)
+        try:
+            child_count = current.get_child_count()
+        except Exception:
+            child_count = 0
+        stack.extend(current.get_child_at_index(i) for i in range(child_count))
+    return None
 
 
 def _atspi_read_text(app: object) -> str | None:
@@ -240,7 +301,7 @@ def _atspi_read_text(app: object) -> str | None:
     itself first (the fast path gnome-terminal's own live verification
     confirmed works -- VTE exposes ``Text`` at the top-level accessible
     object), then walks descendants depth-first (bounded by
-    ``_READ_TEXT_MAX_NODES_VISITED``) if that comes back empty --
+    ``_DESCENDANT_WALK_MAX_NODES_VISITED``) if that comes back empty --
     added post-M3, live-verified against a real, running VS Code: the
     editor's actual buffer content lives on a descendant node, not the
     application root, which the original, root-only implementation
@@ -278,7 +339,7 @@ def _atspi_read_text(app: object) -> str | None:
         child_count = 0
     stack: list[Any] = [node.get_child_at_index(i) for i in range(child_count)]
     visited = 0
-    while stack and visited < _READ_TEXT_MAX_NODES_VISITED:
+    while stack and visited < _DESCENDANT_WALK_MAX_NODES_VISITED:
         current = stack.pop()
         visited += 1
         try:
@@ -301,45 +362,74 @@ def _atspi_read_text(app: object) -> str | None:
 
 
 def _atspi_is_focused(app: object) -> bool:
-    """Return whether ``app``'s own accessible object currently reports AT-SPI2 FOCUSED state.
+    """Return whether any descendant of ``app`` currently reports AT-SPI2 FOCUSED state.
 
     Real, untested-by-design (see module docstring). Added in
     ADR-0047 (WP-56) for ``SyntheticInputPort``'s per-character
-    focus-verification loop -- checks ``app`` itself, not descendants:
-    ``find_or_launch``'s own handle is issued against a top-level
-    accessible application/window object, which is the node whose
-    focus state actually matters for "is the compositor's keyboard
-    focus plausibly still on this window" (a descendant walk would
-    answer a different, narrower question -- "is some specific control
-    inside it focused" -- not needed here).
+    focus-verification loop.
+
+    **Corrected in the WP-56 overnight live-reality audit**: originally
+    checked ``app`` itself only, reasoning (wrongly, and without live
+    verification at the time) that a descendant walk would answer a
+    narrower, unneeded question. Live testing against a real, running
+    ``gnome-terminal`` proved the opposite: the root ``application``
+    node never reports ``FOCUSED`` at all, while the actual VTE
+    ``terminal``-role widget -- several levels deep, inside frame,
+    panel, and filler ancestors -- correctly reported ``FOCUSED=True``
+    while real keyboard focus was genuinely there. Bounded, depth-first
+    walk, matching :func:`_find_focused_editable`'s own established
+    pattern for the identical "focus can live arbitrarily deep" shape.
     """
     import gi  # noqa: PLC0415
 
     gi.require_version("Atspi", "2.0")
     from gi.repository import Atspi  # noqa: PLC0415
 
-    node: Any = app
-    try:
-        states = node.get_state_set()
-        return bool(states is not None and states.contains(Atspi.StateType.FOCUSED))
-    except Exception:
-        return False
+    stack: list[Any] = [app]
+    visited = 0
+    while stack and visited < _DESCENDANT_WALK_MAX_NODES_VISITED:
+        node = stack.pop()
+        visited += 1
+        try:
+            states = node.get_state_set()
+            if states is not None and states.contains(Atspi.StateType.FOCUSED):
+                return True
+        except Exception:  # noqa: S112 -- keep walking past a node that errors on state check
+            continue
+        try:
+            child_count = node.get_child_count()
+        except Exception:
+            child_count = 0
+        stack.extend(node.get_child_at_index(i) for i in range(child_count))
+    return False
 
 
 def _atspi_is_visible_and_showing(app: object) -> bool:
-    """Return whether ``app`` is on-screen: VISIBLE and SHOWING, and not ICONIFIED.
+    """Return whether ``app``'s frame is on-screen: VISIBLE and SHOWING, and not ICONIFIED.
 
     Real, untested-by-design (see module docstring). Added in
     ADR-0047 (WP-56) as the real-time indicator's hard-abort
     precondition -- a minimized or otherwise not-actually-on-screen
     window cannot make its own visual marking legible to anyone.
+
+    **Corrected in the WP-56 overnight live-reality audit**: originally
+    checked ``app`` itself only. Live-confirmed (see
+    :func:`_find_frame_descendant`'s own docstring for the full
+    finding) that the root ``application`` node always reports
+    ``VISIBLE=False``/``SHOWING=False`` regardless of the real window's
+    actual on-screen state -- this method would have returned ``False``
+    unconditionally, permanently failing ADR-0047's hard-abort
+    precondition for every real window, never just correctly-minimized
+    ones. Targets :func:`_find_frame_descendant`'s result (falling back
+    to ``app`` if none is found) -- the ``frame``-role node is where
+    real ``VISIBLE``/``SHOWING``/``ICONIFIED`` state actually lives.
     """
     import gi  # noqa: PLC0415
 
     gi.require_version("Atspi", "2.0")
     from gi.repository import Atspi  # noqa: PLC0415
 
-    node: Any = app
+    node: Any = _find_frame_descendant(app) or app
     try:
         states = node.get_state_set()
         if states is None:
