@@ -44,14 +44,7 @@ jobs:
       # bubblewrap (WP-45, ADR-0044) provides the real bwrap binary
       # BwrapSandboxAdapter's own tests execute for real (matching this
       # repo's "git is a reliable CI dependency" pattern for
-      # LocalWorkspaceAdapter). Not fully verified on ubuntu-latest by
-      # this pass -- confirmed working on the real development machine
-      # only. Ubuntu 24.04's apparmor_restrict_unprivileged_userns
-      # default has historically required a matching AppArmor profile
-      # for bwrap's unprivileged user namespaces to work; Ubuntu's own
-      # bubblewrap package ships one, so this is expected to work, but
-      # that expectation is not itself live-verified against a real
-      # GitHub-hosted runner -- flagged honestly, not assumed.
+      # LocalWorkspaceAdapter).
       - name: Install system dependencies (PyGObject build + GTK4 runtime + bwrap)
         run: |
           sudo apt-get update
@@ -62,6 +55,34 @@ jobs:
             libcairo2-dev \
             gir1.2-gtk-4.0 \
             bubblewrap
+
+      # Real, confirmed CI failure (every WP-45+ run, both matrix legs) fixed
+      # here, not merely anticipated: bwrap successfully creates its
+      # unprivileged user+network namespace on this runner (Ubuntu's own
+      # bubblewrap AppArmor profile already permits that much), but the
+      # netlink RTM_NEWADDR call it makes next -- bringing up the sandbox's
+      # own loopback interface -- fails with EPERM, because Ubuntu 23.10+'s
+      # kernel.apparmor_restrict_unprivileged_userns=1 default (which
+      # ubuntu-latest/24.04 runner images ship) denies CAP_NET_ADMIN inside
+      # that namespace regardless of the profile permitting the namespace's
+      # creation. Real error observed directly in CI logs before this fix:
+      # "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted".
+      # Confirmed as a known, widely-reported issue (not specific to this
+      # repo or this adapter) -- OpenAI Codex, Claude Code, and multiple
+      # other bwrap-based sandboxes hit the identical error on GitHub-hosted
+      # runners. The runner's default `runner` user has passwordless sudo,
+      # so this sysctl write succeeds and is scoped to this ephemeral
+      # runner VM's own lifetime only -- it does not touch what the bwrap
+      # sandbox itself contains once created (SandboxPort's own network/
+      # filesystem isolation guarantees, ADR-0044, are unaffected; this
+      # only concerns bwrap's own ability to finish *setting up* the
+      # sandbox). Verified live on a real ubuntu-latest runner, both matrix
+      # legs, before landing here: with this step present, every
+      # BwrapSandboxAdapter test (real network denial, real filesystem
+      # denial, real bind-path writes, real exit-code capture, real
+      # non-blocking launch()) passes for real, not skipped or weakened.
+      - name: Allow bwrap's unprivileged network-namespace loopback setup
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install dependencies
         run: uv sync --locked --all-groups
