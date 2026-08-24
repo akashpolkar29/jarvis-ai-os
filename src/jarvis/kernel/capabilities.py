@@ -48,6 +48,7 @@ MUSIC_NEXT_CAPABILITY_ID = CapabilityId("music.next")
 MUSIC_PREVIOUS_CAPABILITY_ID = CapabilityId("music.previous")
 READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
 DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
+DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -118,6 +119,14 @@ def build_default_registry() -> CapabilityRegistry:
             id=DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
             effects=Effect.EXECUTE,
             description="Launch or focus Brave, navigated to a URL.",
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description="Launch or focus VS Code, opened to a file.",
         )
     )
 

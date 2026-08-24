@@ -32,10 +32,12 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.brave import BraveCliAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
+from jarvis.adapters.vscode import VsCodeCliAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
+    DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
     build_default_registry,
 )
 
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
 
     from jarvis.domain.policy import Decision
     from jarvis.ports.brave import BravePort
+    from jarvis.ports.vscode import VsCodePort
 
 
 def authorize_and_open_brave_url(
@@ -96,6 +99,62 @@ def authorize_and_open_brave_url(
         if decision.granted:
             real_browser = browser if browser is not None else BraveCliAdapter()
             real_browser.open_url(url)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_open_vscode_file(
+    path: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    editor: VsCodePort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize opening ``path`` in VS Code, and run it only if granted.
+
+    Args:
+        path: The file path to open, passed straight through to
+            ``editor.open_file`` if granted.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted. Loaded before
+            the call and saved again after, unconditionally -- see the
+            module docstring's audit-save guarantee.
+        editor: The port ``path`` is sent to if granted. Defaults to a
+            real ``VsCodeCliAdapter``. Overridable for tests, exactly
+            as ``authorize_and_open_brave_url``'s ``browser`` is.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the chain
+        regardless of outcome. If granted, ``editor`` has already
+        received ``open_file(path)`` by the time this returns (barring
+        an exception it raised); if denied, it was never touched at all.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
+        Tainted({"path": path}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            real_editor = editor if editor is not None else VsCodeCliAdapter()
+            real_editor.open_file(path)
     finally:
         storage.save(chain)
 
