@@ -40,7 +40,19 @@ jobs:
       # build-time headers above. No display/xvfb is needed: no test in
       # this project instantiates a GTK widget or opens a display (see
       # jarvis.ui.confirm.dialog's own module docstring).
-      - name: Install system dependencies (PyGObject build + GTK4 runtime)
+      #
+      # bubblewrap (WP-45, ADR-0044) provides the real bwrap binary
+      # BwrapSandboxAdapter's own tests execute for real (matching this
+      # repo's "git is a reliable CI dependency" pattern for
+      # LocalWorkspaceAdapter). Not fully verified on ubuntu-latest by
+      # this pass -- confirmed working on the real development machine
+      # only. Ubuntu 24.04's apparmor_restrict_unprivileged_userns
+      # default has historically required a matching AppArmor profile
+      # for bwrap's unprivileged user namespaces to work; Ubuntu's own
+      # bubblewrap package ships one, so this is expected to work, but
+      # that expectation is not itself live-verified against a real
+      # GitHub-hosted runner -- flagged honestly, not assumed.
+      - name: Install system dependencies (PyGObject build + GTK4 runtime + bwrap)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -48,7 +60,8 @@ jobs:
             pkg-config \
             libgirepository-2.0-dev \
             libcairo2-dev \
-            gir1.2-gtk-4.0
+            gir1.2-gtk-4.0 \
+            bubblewrap
 
       - name: Install dependencies
         run: uv sync --locked --all-groups

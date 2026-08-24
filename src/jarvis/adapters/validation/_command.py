@@ -7,16 +7,23 @@ logic. ``pytest_validator.py`` reuses :func:`run_command` too, but
 layers its own exit-code interpretation on top (pytest's exit code 5
 means "no tests collected," a genuinely different outcome from
 ``FAILED`` -- see that module's own docstring).
+
+``CommandResult`` itself now lives in ``jarvis.domain.process`` (M3,
+WP-45) -- re-exported here under its original name so nothing in M2
+had to change. See that module's docstring for why: ``ports.sandbox``
+(M3's ``SandboxPort``) needed the identical shape but cannot import
+from ``adapters`` under C1's layering, so the definition moved to
+``domain`` rather than being duplicated.
 """
 
 from __future__ import annotations
 
 import asyncio
 import subprocess
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jarvis.domain.evidence import Evidence, EvidenceKind, Verdict
+from jarvis.domain.process import CommandResult
 from jarvis.ports.workspace import PatchApplicationFailedError
 
 if TYPE_CHECKING:
@@ -25,14 +32,12 @@ if TYPE_CHECKING:
     from jarvis.domain.evidence import Candidate
     from jarvis.ports.workspace import WorkspacePort
 
-
-@dataclass(frozen=True)
-class CommandResult:
-    """The real outcome of running one command: its exit code and captured output."""
-
-    exit_code: int
-    stdout: str
-    stderr: str
+__all__ = [
+    "CommandResult",
+    "apply_candidate_or_report_unverifiable",
+    "judge_by_exit_code",
+    "run_command",
+]
 
 
 def _run_command_sync(command: tuple[str, ...], root: Path) -> CommandResult:
