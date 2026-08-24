@@ -21,8 +21,11 @@ Three groups of test, matching the module's own seams:
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
+
+import pytest
 
 from jarvis.adapters.sandbox import BwrapSandboxAdapter, _build_bwrap_argv
 from jarvis.domain.process import CommandResult
@@ -217,3 +220,122 @@ def test_launch_returns_immediately_and_the_real_process_completes_its_work_afte
         time.sleep(0.05)
 
     assert marker.read_text() == "done"
+
+
+def test_launch_with_allow_display_appends_the_injected_display_bind_paths() -> None:
+    """allow_display=True merges display_bind_paths()'s real output into the built argv.
+
+    Real, post-M3 finding (live-verified during M3's own supervised
+    verification pass): BwrapSandboxAdapter.launch() could not display
+    any real GUI application at all before this, since nothing under
+    /run was ever bound. See _display_bind_paths's own docstring for
+    the full finding, including the false-positive lead (--unshare-net)
+    that was ruled out by live retesting before this fix was written.
+    """
+    seen: list[tuple[str, ...]] = []
+    display_socket = Path("/run/user/1000/wayland-0")
+
+    def fake_launch_subprocess(argv: tuple[str, ...]) -> int:
+        seen.append(argv)
+        return 1
+
+    adapter = BwrapSandboxAdapter(
+        launch_subprocess=fake_launch_subprocess,
+        display_bind_paths=lambda: (display_socket,),
+    )
+
+    adapter.launch(("gnome-terminal",), allow_display=True)
+
+    expected = _build_bwrap_argv(
+        ("gnome-terminal",), bind_paths=(display_socket,), allow_network=False
+    )
+    assert seen == [expected]
+
+
+def test_launch_without_allow_display_never_calls_display_bind_paths() -> None:
+    """allow_display=False (the default) never even calls display_bind_paths()."""
+    calls = []
+    adapter = BwrapSandboxAdapter(
+        launch_subprocess=lambda _argv: 1,
+        display_bind_paths=lambda: calls.append(1) or (),  # type: ignore[func-returns-value]
+    )
+
+    adapter.launch(("echo",))
+
+    assert calls == []
+
+
+def test_launch_with_allow_display_merges_with_explicit_bind_paths_too() -> None:
+    """allow_display=True's display sockets are appended after any explicit bind_paths."""
+    seen: list[tuple[str, ...]] = []
+    explicit_path = Path("/home/user/project")
+    display_socket = Path("/run/user/1000/wayland-0")
+
+    def fake_launch_subprocess(argv: tuple[str, ...]) -> int:
+        seen.append(argv)
+        return 1
+
+    adapter = BwrapSandboxAdapter(
+        launch_subprocess=fake_launch_subprocess,
+        display_bind_paths=lambda: (display_socket,),
+    )
+
+    adapter.launch(("gnome-terminal",), bind_paths=(explicit_path,), allow_display=True)
+
+    expected = _build_bwrap_argv(
+        ("gnome-terminal",), bind_paths=(explicit_path, display_socket), allow_network=False
+    )
+    assert seen == [expected]
+
+
+_HAS_REAL_WAYLAND_SESSION = bool(
+    os.environ.get("XDG_RUNTIME_DIR")
+    and os.environ.get("WAYLAND_DISPLAY")
+    and Path(os.environ.get("XDG_RUNTIME_DIR", ""))
+    .joinpath(os.environ.get("WAYLAND_DISPLAY", ""))
+    .exists()
+)
+
+
+@pytest.mark.skipif(
+    not _HAS_REAL_WAYLAND_SESSION,
+    reason=(
+        "Requires a real Wayland session (XDG_RUNTIME_DIR + WAYLAND_DISPLAY socket) -- "
+        "not present on headless CI runners. Live-verified on the real development "
+        "machine during M3's supervised verification pass; see docs/threat-model/v0.md's "
+        "Milestone 3 section for what was actually confirmed."
+    ),
+)
+def test_launch_with_allow_display_can_really_display_a_real_gui_app(tmp_path: Path) -> None:
+    """The real _display_bind_paths() output really lets a sandboxed GUI app display itself.
+
+    Definitive, not just "did the process exit": gnome-terminal
+    (--wait) only runs its inner command if it successfully opened a
+    real window first -- a real display failure (e.g. "Cannot open
+    display") makes it exit before the inner command, and no marker
+    file, tagged UNTRUSTED_EXTERNAL-worthy, ever appears.
+
+    Skipped, not weakened or deleted, in headless environments (CI) --
+    this is a genuine environment dependency, the same class of gap
+    tests/unit/test_workspace_adapter.py's own "git is a reliable CI
+    dependency" reasoning exists to distinguish from an actual bug.
+    """
+    adapter = BwrapSandboxAdapter()
+    marker = tmp_path / "displayed.txt"
+
+    adapter.launch(
+        ("gnome-terminal", "--wait", "--", "touch", str(marker)),
+        bind_paths=(tmp_path,),
+        allow_display=True,
+    )
+
+    deadline_attempts = 100
+    for _ in range(deadline_attempts):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+
+    assert marker.exists(), (
+        "gnome-terminal never ran its inner command -- it failed to display "
+        "a real window (regression in _display_bind_paths / allow_display)"
+    )

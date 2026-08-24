@@ -28,17 +28,19 @@ may not be present. Two seams:
 
 from __future__ import annotations
 
+import os
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.domain.process import CommandResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     RunSubprocessFn = Callable[[tuple[str, ...]], CommandResult]
     LaunchSubprocessFn = Callable[[tuple[str, ...]], int]
+    DisplayBindPathsFn = Callable[[], "tuple[Path, ...]"]
 
 _BASE_ARGV: tuple[str, ...] = (
     "bwrap",
@@ -113,6 +115,55 @@ def _run_subprocess(argv: tuple[str, ...]) -> CommandResult:
     return CommandResult(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
 
 
+def _display_bind_paths() -> tuple[Path, ...]:
+    """Return the real host socket paths a GUI app needs to connect to the current display.
+
+    Added post-M3, during live verification (WP-52's own Terminal
+    launch): confirmed live that ``BwrapSandboxAdapter.launch()`` could
+    not display any real GUI application at all -- ``_BASE_ARGV`` never
+    binds anything under ``/run``, so the Wayland compositor socket
+    (and the D-Bus session socket many GTK apps, including
+    ``gnome-terminal``'s own D-Bus-activation wrapper, need even for an
+    otherwise-Wayland-only launch) was unreachable inside the sandbox.
+    This is a real, narrow bug fix, not a security-posture change:
+    binding these two specific socket files does not touch any of
+    ``SandboxPort``'s filesystem/network isolation guarantees (ADR-0044)
+    -- it only lets a launched process *display* something, the same
+    way any other explicitly-requested ``bind_paths`` entry works.
+
+    A real, separate, initially-suspected cause was ruled out by live
+    testing, not assumed: ``--unshare-net`` (network namespace
+    isolation) does **not** by itself block Wayland socket access on
+    this machine -- an earlier test run that appeared to show this was
+    a false positive caused by this verification session's own shell
+    environment (``GTK_PATH``/``GIO_MODULE_DIR`` pointing at a
+    snap-confined VS Code installation's own GTK stack), not a genuine
+    compositor security restriction. Re-tested with a clean
+    environment: full ``--unshare-all``, network included, launches a
+    real GUI application successfully once the sockets below are bound.
+
+    Real, still-open, honestly-flagged limitation: only Wayland (via
+    ``$XDG_RUNTIME_DIR``/``$WAYLAND_DISPLAY``) and the D-Bus session
+    bus are handled. X11 (``/tmp/.X11-unix``, relevant for the X11
+    fallback the original M3 objective named) is not -- untested,
+    since this development machine is a real Wayland session
+    (confirmed via ``$XDG_SESSION_TYPE``) with no real X11 session
+    available to verify against.
+    """
+    paths: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    wayland_display = os.environ.get("WAYLAND_DISPLAY")
+    if runtime_dir and wayland_display:
+        wayland_socket = Path(runtime_dir) / wayland_display
+        if wayland_socket.exists():
+            paths.append(wayland_socket)
+    if runtime_dir:
+        dbus_socket = Path(runtime_dir) / "bus"
+        if dbus_socket.exists():
+            paths.append(dbus_socket)
+    return tuple(paths)
+
+
 def _launch_subprocess(argv: tuple[str, ...]) -> int:
     """Launch ``argv`` as a real, detached, long-running subprocess and return its pid.
 
@@ -137,6 +188,7 @@ class BwrapSandboxAdapter:
         self,
         run_subprocess: RunSubprocessFn | None = None,
         launch_subprocess: LaunchSubprocessFn | None = None,
+        display_bind_paths: DisplayBindPathsFn | None = None,
     ) -> None:
         """Store the functions used to actually run/launch the built argv. No I/O at construction.
 
@@ -148,9 +200,15 @@ class BwrapSandboxAdapter:
                 long-running background process and returns its pid.
                 Defaults to a real subprocess launch. Overridable for
                 tests, exactly as ``run_subprocess`` is.
+            display_bind_paths: Returns the real host socket paths a
+                GUI app needs bound to display anything (Wayland/D-Bus
+                session sockets). Defaults to the real, environment-
+                reading implementation. Overridable for tests that
+                don't need a real display session present.
         """
         self._run_subprocess: RunSubprocessFn = run_subprocess or _run_subprocess
         self._launch_subprocess: LaunchSubprocessFn = launch_subprocess or _launch_subprocess
+        self._display_bind_paths: DisplayBindPathsFn = display_bind_paths or _display_bind_paths
 
     def run(
         self,
@@ -169,10 +227,25 @@ class BwrapSandboxAdapter:
         *,
         bind_paths: tuple[Path, ...] = (),
         allow_network: bool = False,
+        allow_display: bool = False,
     ) -> int:
         """Launch ``command`` inside a real ``bwrap`` sandbox as a long-running background process.
 
         Never waits for completion -- see :meth:`~jarvis.ports.sandbox.SandboxPort.launch`.
+
+        Args:
+            command: As in :meth:`run`.
+            bind_paths: As in :meth:`run`.
+            allow_network: As in :meth:`run`.
+            allow_display: If ``True``, additionally binds the real
+                Wayland/D-Bus session sockets this process's own
+                environment reports, so a launched GUI application can
+                actually display something. See
+                :func:`_display_bind_paths` for what this does and does
+                not cover.
         """
-        argv = _build_bwrap_argv(command, bind_paths=bind_paths, allow_network=allow_network)
+        real_bind_paths = bind_paths
+        if allow_display:
+            real_bind_paths = (*bind_paths, *self._display_bind_paths())
+        argv = _build_bwrap_argv(command, bind_paths=real_bind_paths, allow_network=allow_network)
         return self._launch_subprocess(argv)

@@ -122,7 +122,7 @@ def run_in_sandboxed_terminal(
         function runs for real -- see WP-43's own honesty note on this
         in ``adapters/desktop_window.py``).
     """
-    sandbox.launch(_TERMINAL_LAUNCH_COMMAND, bind_paths=bind_paths)
+    sandbox.launch(_TERMINAL_LAUNCH_COMMAND, bind_paths=bind_paths, allow_display=True)
     handle = _find_the_sandboxed_terminal_window(desktop_window, sleep_fn or time.sleep)
     desktop_window.focus(handle)
     desktop_window.type_text(handle, command_text)

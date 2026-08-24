@@ -370,6 +370,7 @@ class _StubSandbox:
         *,
         bind_paths: tuple[object, ...] = (),  # noqa: ARG002
         allow_network: bool = False,  # noqa: ARG002
+        allow_display: bool = False,  # noqa: ARG002
     ) -> int:
         """Record a launch() call and return a fake pid."""
         self.calls.append(("launch", *command))
@@ -482,6 +483,7 @@ def test_terminal_audit_record_is_saved_even_when_the_sandbox_raises(tmp_path: P
             *,
             bind_paths: tuple[object, ...] = (),  # noqa: ARG002
             allow_network: bool = False,  # noqa: ARG002
+            allow_display: bool = False,  # noqa: ARG002
         ) -> int:
             msg = "boom"
             raise RuntimeError(msg)

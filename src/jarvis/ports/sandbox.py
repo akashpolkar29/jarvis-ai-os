@@ -61,6 +61,7 @@ class SandboxPort(Protocol):
         *,
         bind_paths: tuple[Path, ...] = (),
         allow_network: bool = False,
+        allow_display: bool = False,
     ) -> int:
         """Launch ``command`` inside a real, isolated sandbox as a long-running process.
 
@@ -78,6 +79,14 @@ class SandboxPort(Protocol):
             command: As in :meth:`run`.
             bind_paths: As in :meth:`run`.
             allow_network: As in :meth:`run`.
+            allow_display: Whether the launched process may connect to
+                the real display server (needed for any real GUI
+                app -- confirmed live, post-M3, that without this a
+                sandboxed terminal emulator cannot display anything at
+                all). ``False`` by default, matching this port's
+                existing least-privilege defaults; a real implementation
+                grants only the specific socket(s) needed, not broad
+                filesystem access.
 
         Returns:
             The real process id of the sandboxed process itself (the

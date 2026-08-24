@@ -48,6 +48,7 @@ class _StubSandbox:
         *,
         bind_paths: tuple[object, ...] = (),  # noqa: ARG002
         allow_network: bool = False,  # noqa: ARG002
+        allow_display: bool = False,  # noqa: ARG002
     ) -> int:
         """Record a launch() call and return a fake pid."""
         self.calls.append(("launch", *command))
