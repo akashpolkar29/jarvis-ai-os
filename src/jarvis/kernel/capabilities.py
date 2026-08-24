@@ -49,6 +49,8 @@ MUSIC_PREVIOUS_CAPABILITY_ID = CapabilityId("music.previous")
 READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
 DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
 DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file")
+DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.claude_app_send_text")
+DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.chatgpt_app_send_text")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -127,6 +129,28 @@ def build_default_registry() -> CapabilityRegistry:
             id=DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
             effects=Effect.EXECUTE,
             description="Launch or focus VS Code, opened to a file.",
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Launch or focus the Claude desktop app and type text into its input box. "
+                "Ordinary control only -- never reads the app's response (ADR-0045)."
+            ),
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Launch or focus the ChatGPT desktop app and type text into its input box. "
+                "Ordinary control only -- never reads the app's response (ADR-0045)."
+            ),
         )
     )
 
