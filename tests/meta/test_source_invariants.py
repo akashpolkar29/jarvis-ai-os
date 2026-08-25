@@ -38,9 +38,14 @@ _BANNED_CLOCK_AND_ID_CALLS = frozenset(
     }
 )
 
-# Future ClockPort/IdPort adapter implementations are the one place these
-# calls are legitimate. Empty for now — no adapters exist yet.
-_CLOCK_ID_ADAPTER_ALLOWLIST: frozenset[Path] = frozenset()
+# ClockPort/IdPort adapter implementations (ADR-0054) are the one place
+# these calls are legitimate.
+_CLOCK_ID_ADAPTER_ALLOWLIST: frozenset[Path] = frozenset(
+    {
+        SRC_ROOT / "jarvis" / "adapters" / "clock.py",
+        SRC_ROOT / "jarvis" / "adapters" / "identifier.py",
+    }
+)
 
 
 def test_domain_imports_stdlib_only() -> None:
