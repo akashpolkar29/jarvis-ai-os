@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted
+
+**Acceptance note (2026-08-26):** accepted by the user directly, authorizing full M4 implementation (WP-57 through WP-64) in the same overnight pass. Accepted as drafted -- no changes to this ADR's own Decision were made as part of acceptance.
 
 ## Date
 
