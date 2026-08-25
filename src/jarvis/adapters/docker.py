@@ -8,20 +8,29 @@ invocation is already a bounded, typed subprocess call, not free text,
 so the containment ``SandboxPort`` exists for is not a gap here the
 way Terminal's genuinely open-ended text injection is.
 
-**Never exercised for real during this pass, deliberately, per this
-run's own hard-stop rule**: ``docker.run_container``/
-``stop_container``/``build_image`` can create, mutate, or consume real
-host resources via a real Docker daemon -- exactly the class of action
-this run's rules say not to execute automatically. Even
-``docker.list_containers`` (read-only) is tested only via an injected
-fake here, for consistency, and because this run has no way to
-distinguish "safe to run for real" from "not" without a human
-confirming the target Docker daemon/environment is actually a
-disposable one. Live verification against a real Docker daemon is
-deferred to when the user is present to supervise it directly
-(matching M2's own ``local``/``family_a`` live-verification deferral
-pattern) -- a real, tracked gap, not silently assumed covered by these
-unit tests.
+Not exercised for real during WP-45's own unattended implementation
+pass, deliberately, per that run's own hard-stop rule:
+``docker.run_container``/``stop_container``/``build_image`` can
+create, mutate, or consume real host resources via a real Docker
+daemon -- exactly the class of action that run's rules said not to
+execute automatically, and this remains true today -- these three
+stay deliberately unexercised, tested only via an injected fake, real
+verification deliberately deferred to a session with the user present
+to supervise it directly (matching M2's own ``local``/``family_a``
+live-verification deferral pattern), not silently assumed covered by
+unit tests alone.
+
+**`docker.list_containers` (read-only) has since been live-verified
+for real**, in a later, explicitly-scoped M3 live-verification pass:
+``authorize_and_list_docker_containers()``, called for real against
+this machine's real, active Docker daemon, returned ``granted=True``,
+``Tier.ALLOW``, and real container names -- see
+``docs/threat-model/v0.md``'s "Milestone 3 additions" section
+("Docker: real, read-only call verified"). Automated tests still
+exercise this adapter's own dispatch logic only via an injected fake,
+matching the read/write distinction this module already draws --
+``list_containers``'s real correctness is now proven live, not merely
+asserted; the three DESTRUCTIVE-tier methods' is not, correctly.
 """
 
 from __future__ import annotations
@@ -41,9 +50,9 @@ if TYPE_CHECKING:
 def _run_docker(argv: tuple[str, ...]) -> str:
     """Run a real ``docker`` subprocess call and return its stdout, stripped.
 
-    The one real, untested-by-design piece of this module -- requires
-    a real, running Docker daemon this pass never invokes (see the
-    module docstring).
+    The one real, untested-by-design-by-CI piece of this module --
+    requires a real, running Docker daemon (see the module docstring
+    for which real calls have and haven't exercised it for real).
 
     Raises:
         DockerCommandFailedError: If the command exits non-zero.
@@ -73,8 +82,8 @@ class DockerCliAdapter:
             run_docker: Given a docker subcommand argv (without the
                 leading ``"docker"``), runs it and returns stdout.
                 Defaults to a real subprocess call. Overridable for
-                tests -- this run never exercises the real default
-                (see the module docstring).
+                tests (see the module docstring for which real calls
+                have and haven't exercised the real default).
         """
         self._run_docker: RunDockerFn = run_docker or _run_docker
 

@@ -9,13 +9,22 @@ already-running instance reuses the existing window via the editor's
 own IPC, no LSP dependency for this milestone's bounded scope (see
 ``docs/architecture/m3-desktop-control.md``'s "Relationship to M5").
 
-**Never exercised for real during this unattended pass, deliberately**
--- see ``adapters/brave.py``'s own docstring for the identical
-reasoning (a real, visible editor window on the user's live desktop is
-exactly the uninvited real-environment side effect this work package's
-hard-stop rule exists to avoid). The real launch function is a small,
-injectable, untested-by-design seam; every automated test injects a
-fake and exercises only this adapter's own dispatch logic.
+Not exercised for real during WP-43's own unattended implementation
+pass, deliberately -- see ``adapters/brave.py``'s own docstring for the
+identical reasoning (a real, visible editor window on the user's live
+desktop was, at the time, exactly the uninvited real-environment side
+effect that work package's hard-stop rule existed to avoid). **Since
+live-verified for real**, in a later, explicitly-scoped pass that
+authorized app-launching actions (overnight live-reality audit,
+2026-08-25): a real ``open_file(".../CLAUDE.md")`` call completed
+without exception, and a separate, independent AT-SPI2 check
+afterward confirmed VS Code's window genuinely exists and is
+discoverable -- see ``docs/threat-model/v0.md``'s "Overnight
+live-reality audit" section. The real launch function remains a
+small, injectable, untested-by-design-by-CI seam; automated tests
+still inject a fake and exercise only this adapter's own dispatch
+logic -- its correctness beyond that is now proven by the real, live
+verification above, not merely asserted.
 """
 
 from __future__ import annotations

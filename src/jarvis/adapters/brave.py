@@ -15,16 +15,25 @@ call, ADR-0043, already established "shell out to a well-known CLI
 with a fixed, non-shell-injectable argument list" as an accepted
 pattern here).
 
-**Never exercised for real during this unattended pass, deliberately**:
-actually launching a real, visible browser window on the user's live
-desktop is exactly the kind of uninvited real-environment side effect
-this work package's hard-stop rule exists to avoid. The real launch
-function is a small, injectable, untested-by-design seam (matching
-``adapters/media_player.py``'s ``_send_method_call_over_dbus`` and
-``adapters/desktop_window.py``'s ``_launch_subprocess``); every
-automated test injects a fake in its place and exercises only this
-adapter's own dispatch logic (which argv gets built, which error type
-a launch failure becomes).
+Not exercised for real during WP-43's own unattended implementation
+pass, deliberately: actually launching a real, visible browser window
+on the user's live desktop was, at the time, exactly the kind of
+uninvited real-environment side effect that work package's hard-stop
+rule existed to avoid. **Since live-verified for real**, in a later,
+explicitly-scoped pass that authorized app-launching actions
+(overnight live-reality audit, 2026-08-25): a real
+``open_url("https://example.com")`` call completed without exception,
+and a separate, independent AT-SPI2 check afterward confirmed Brave's
+window genuinely exists and is discoverable -- see
+``docs/threat-model/v0.md``'s "Overnight live-reality audit" section.
+The real launch function remains a small, injectable,
+untested-by-design-by-CI seam (matching ``adapters/media_player.py``'s
+``_send_method_call_over_dbus`` and ``adapters/desktop_window.py``'s
+``_launch_subprocess``); automated tests still inject a fake in its
+place and exercise only this adapter's own dispatch logic (which argv
+gets built, which error type a launch failure becomes) -- its
+correctness beyond that is now proven by the real, live verification
+above, not merely asserted.
 """
 
 from __future__ import annotations

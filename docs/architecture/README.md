@@ -26,10 +26,17 @@ assumed correct.
   (or "no corresponding real ADR") table.
 - **`m2-reasoning-layer.md`** — recovered M2 design (summary judgement,
   validation-over-agreement, the cost-model worked example, scope
-  deliverables, acceptance criteria). Explicitly **not yet
-  re-validated** against what M0 actually became — that reconciliation
-  pass is separate, upcoming work, not done as part of recovering this
-  document.
+  deliverables, acceptance criteria). The reconciliation against what
+  M0 actually became happened during the real WP-28 planning pass
+  (2026-08-18) -- see ADR-0038 through ADR-0043 for what it actually
+  decided, and `docs/threat-model/v0.md`'s "Milestone 2 additions" for
+  the resulting deviations. **Real, outstanding inconsistency, not
+  fixed here**: the document's own status note (its own section 0 and
+  section 7) still describes this reconciliation as separate, upcoming
+  work tied to a not-yet-run WP-28 -- stale, since WP-28 has since run
+  for real; that document's own text was not edited as part of this
+  pass (out of this doc-consistency pass's explicit scope), flagged
+  here instead so it isn't silently missed.
 - **`m1-voice-architecture.md`** — current, corrected against what was
   actually built as of commit `bde285d`. Unlike M0/M2/system-design,
   this one was drafted close to its own implementation and kept in
