@@ -117,3 +117,64 @@ sensitive) is not addressed here -- no such reclassification mechanism
 exists anywhere in this codebase today, and this ADR does not invent
 one. Retrieval-time re-evaluation of an already-stored record's
 existing classification is ADR-0050's own, separate concern.
+
+**Required acceptance criterion, not yet named above: the single-path
+guarantee is not yet structurally enforced.** Everything above assumes
+`kernel/memory.py`'s composition root is the *only* code path that
+ever reaches the real vector store's write operation, and that it
+always calls `memory_effect_for()` before
+`AuthorizationOrchestrator.authorize_by_id()` runs. As drafted, that's
+true by convention only -- nothing stops a future adapter, migration
+script, or debug tool from constructing the real memory adapter
+directly and writing to it through a path that never touches
+`memory_effect_for()` at all. The regression test named above proves
+the classification function itself behaves correctly; it does not
+prove classification is unbypassable.
+
+Checked directly before choosing a mechanism, not assumed: this
+project's own `import-linter` contracts (`pyproject.toml`) are all
+`forbidden`/`layers`/`independence` type, each listing a small, fixed
+set of known `source_modules` forbidden from importing a target (e.g.
+C2: `jarvis.domain` forbidden from importing `jarvis.ports`/
+`jarvis.application`/etc.). None of them express "only *this one*
+module may import that" -- doing so would mean manually enumerating
+every other module in the tree as a forbidden source, a list that
+silently stops covering new code the moment a new module is added,
+exactly the kind of gap this criterion exists to close. **Decision:
+a reflection/AST-based meta-test, not a new import-linter contract**
+-- this project already has a directly comparable, proven precedent
+for exactly this shape of guarantee: `tests/meta/test_no_response_scraping.py`
+AST-scans `kernel/desktop.py`'s real source for any reference to
+`read_visible_text` outside the one module allowed to call it
+(ADR-0045), and `tests/meta/test_terminal_sandboxed_launch_only.py`
+checks a specific call ordering within one function's own body
+(ADR-0046). The required test here is the same shape, inverted: AST-scan
+every module under `src/jarvis` *except* `kernel/memory.py` and the
+real adapter's own defining module, asserting the adapter's concrete
+class is never referenced there -- a meta-test scanning everything
+present, rather than an allowlist that must be kept in sync by hand,
+matches this concern's own "must hold even against code not yet
+written" shape better than a fixed contract would. `tests/` is
+deliberately excluded from this scan, matching both precedents above:
+unit tests constructing the real adapter directly to test it in
+isolation is the normal, already-established pattern
+(`tests/unit/adapters/test_secret_adapter.py` does exactly this for
+`SecretServiceAdapter`), not a violation of the guarantee, which is
+about real, production code paths only.
+
+**A second, explicit limit, named rather than left implicit**: this
+ADR's DENY guarantee is only as good as the `Classification` it's
+given. `memory_effect_for()` trusts its own input -- it does not, and
+structurally cannot, independently verify that a value claiming
+`Classification.PERSONAL` isn't actually SECRET; that determination is
+made entirely upstream, by whatever assigns classification to the
+value before it ever reaches this function, out of this ADR's own
+scope. This is the same trust boundary every other classification-gated
+mechanism in this codebase already has (ADR-0038's own `egress_effect_for`
+is equally dependent on `task.provenance.classification` being correct
+upstream) -- not a new or special weakness introduced here, but worth
+stating plainly rather than implying this ADR validates classification
+correctness, which it does not. Real, worth re-examining specifically
+when the upstream logic that assigns classification to a to-be-memorized
+value is itself designed (not yet specified anywhere in this document
+or in `m4-memory-retrieval.md`).
