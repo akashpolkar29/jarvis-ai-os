@@ -15,23 +15,31 @@ AST-scan every module under ``src/jarvis`` *except* ``kernel/memory.py``
 and the real adapter's own defining module, asserting the adapter's
 concrete class is never referenced there.
 
-**Real, explicit sequencing note -- not a silent gap**: WP-58 (this
-work package) lands *before* WP-61, which is where the real vector-store
-adapter and ``kernel/memory.py`` are actually built (per
-``m4-memory-retrieval.md``'s own WP ordering: "the safety-critical
-piece lands first, not last"). There is therefore no real adapter
-class or ``kernel/memory.py`` module in the tree yet for the concrete,
-real-tree assertion to bind to -- exactly what the design doc's own
-phrase for this work package means by "gate-verified against fakes":
-the detection mechanism itself (:func:`_references_identifier_outside_allowed_modules`)
-is built and proven correct now, against synthetic fixtures, the same
-"predicate detects a real violation" / "predicate ignores docstrings"
-proof ``test_no_response_scraping.py`` and
-``test_speaker_id_isolation.py`` already established as this project's
-own precedent for a structural guarantee. The concrete, real-tree
-assertion -- naming the real adapter's actual class and module -- is
-added as a small, mechanical addition when WP-61 introduces that class,
-not before; that addition is explicitly tracked, not left implicit.
+**Real, explicit sequencing note -- not a silent gap**: this test
+module was first written in WP-58, *before* WP-61 (which is where the
+real vector-store adapter and ``kernel/memory.py`` are actually built,
+per ``m4-memory-retrieval.md``'s own WP ordering: "the safety-critical
+piece lands first, not last"). At that point there was no real adapter
+class in the tree yet for the concrete, real-tree assertion to bind
+to -- exactly what the design doc's own phrase for WP-58 meant by
+"gate-verified against fakes": the detection mechanism itself
+(:func:`_references_identifier_outside_allowed_modules`) was built and
+proven correct then, against synthetic fixtures, the same "predicate
+detects a real violation" / "predicate ignores docstrings" proof
+``test_no_response_scraping.py`` and ``test_speaker_id_isolation.py``
+already established as this project's own precedent for a structural
+guarantee.
+
+**Now real, added in WP-61**:
+:func:`test_no_module_under_src_references_sqlite_memory_adapter_outside_its_own_module_and_kernel`
+is the concrete assertion the WP-58 sequencing note tracked --
+``jarvis.adapters.memory.SqliteMemoryAdapter`` is the real adapter
+class ADR-0049's own guarantee protects. ``kernel/memory.py`` (the
+composition root that will construct it, WP-63) does not exist yet
+either, so today the only allowed module is the adapter's own defining
+module -- this assertion will need `kernel/memory.py` added to its own
+allowlist when WP-63 lands, the same small, tracked, mechanical
+addition this note itself was.
 """
 
 from __future__ import annotations
@@ -119,18 +127,36 @@ def test_the_scan_predicate_excludes_allowed_modules_by_path() -> None:
 def test_no_module_under_src_references_system_clock_adapter_outside_its_own_module() -> None:
     """Sanity-checks the real scan end-to-end against an already-real, already-narrow example.
 
-    ``SystemClockAdapter`` (``adapters/clock.py``) stands in here for
-    the not-yet-built memory adapter: it is likewise a concrete class
-    that only its own defining module (and, in its case, nothing
-    else -- it's constructed only in tests/kernel composition, never
-    referenced by name elsewhere in src/) should mention. This proves
-    the real scan machinery -- not just synthetic fixtures -- correctly
-    finds zero violations against real source today.
+    ``SystemClockAdapter`` (``adapters/clock.py``) is likewise a
+    concrete class that only its own defining module (and, in its
+    case, nothing else -- it's constructed only in tests/kernel
+    composition, never referenced by name elsewhere in src/) should
+    mention. This proves the real scan machinery -- not just synthetic
+    fixtures -- correctly finds zero violations against real source
+    today.
     """
     own_module = SRC_ROOT / "jarvis" / "adapters" / "clock.py"
 
     violations = _references_identifier_outside_allowed_modules(
         SRC_ROOT / "jarvis", "SystemClockAdapter", frozenset({own_module})
+    )
+
+    assert violations == []
+
+
+def test_no_module_under_src_references_sqlite_memory_adapter_outside_its_own_module() -> None:
+    """The real ADR-0049 guarantee: SqliteMemoryAdapter is never referenced outside its own module.
+
+    ``kernel/memory.py`` (WP-63) does not exist yet -- once it does and
+    legitimately constructs ``SqliteMemoryAdapter`` as the composition
+    root's own single write path, it must be added to
+    ``allowed_modules`` here, the same small, tracked addition this
+    module's own docstring names.
+    """
+    own_module = SRC_ROOT / "jarvis" / "adapters" / "memory.py"
+
+    violations = _references_identifier_outside_allowed_modules(
+        SRC_ROOT / "jarvis", "SqliteMemoryAdapter", frozenset({own_module})
     )
 
     assert violations == []

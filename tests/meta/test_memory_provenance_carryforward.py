@@ -39,6 +39,20 @@ exactly:
    re-export barrel legitimately names everything in its package
    together, which is aggregation, not construction.
 
+**One further, explicit, justified exception (added in WP-61)**:
+``jarvis.adapters.memory`` (``SqliteMemoryAdapter``) legitimately
+references both markers -- it is the real persistence boundary, and
+its own deserialization path (``_row_to_record_and_embedding``)
+*reconstructs* a ``MemoryRecord``'s exact original ``Provenance`` from
+that same record's own previously-persisted ``trust``/
+``classification``/``sources`` columns. This is not the violation
+ADR-0050 names: it is not discarding a real classification for a
+fresh, unclassified one (``Provenance.user()``/``.system()``); it is
+faithfully rebuilding the one that was already there, the same
+serialize/deserialize round-trip every persistence adapter must do for
+its own domain type. Named here explicitly, as its own allowlist
+entry, rather than silently narrowing the general rule.
+
 Deliberately AST-based, not a substring scan -- this very module's own
 docstring names both terms in prose to explain the rule, which a
 substring scan would incorrectly flag.
@@ -88,17 +102,24 @@ def test_memory_record_value_really_is_a_tainted_instance_at_runtime() -> None:
     assert record.value.provenance == Provenance.user()
 
 
+_ALLOWED_RECONSTRUCTION_MODULES = frozenset({SRC_ROOT / "jarvis" / "adapters" / "memory.py"})
+
+
 def test_no_module_under_src_references_both_memory_record_and_provenance() -> None:
     """No real source file's actual code mixes MemoryRecord-related code with fresh Provenance.
 
     See the module docstring for the full reasoning -- this is the
     real mechanical enforcement of ADR-0050's own carry-forward rule.
-    __init__.py files are excluded (aggregation, not construction).
+    __init__.py files are excluded (aggregation, not construction);
+    ``adapters/memory.py`` is excluded too (real, justified
+    deserialization round-trip, not the discard ADR-0050 forbids --
+    see the module docstring's own explicit exception).
     """
     violations = [
         py_file
         for py_file in iter_py_files(SRC_ROOT / "jarvis")
         if py_file.name != "__init__.py"
+        and py_file not in _ALLOWED_RECONSTRUCTION_MODULES
         and _references_both_memory_record_and_provenance(py_file.read_text(encoding="utf-8"))
     ]
 
