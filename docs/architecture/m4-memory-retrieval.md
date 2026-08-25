@@ -142,15 +142,12 @@ screen content," and this milestone does not blur the two.
 -- bundled with M5's own CDP-based in-browser vision as one coherent
 capability, not split across two milestones with two different
 mechanisms answering overlapping "what does the screen/page show"
-questions. `docs/ROADMAP.md`'s M5 row does not currently mention vision
-at all (`"Browser via CDP. Coding capabilities via LSP + git. Console
-UI."`) -- **a real, direct consequence of decision 1 this document
-surfaces but does not act on**: `docs/ROADMAP.md`'s M4 and M5 rows both
-need a real edit reflecting this move (M4's row still says "Vision via
-ScreenCast/PipeWire" today). Flagged here for the user's own review
-alongside this document, not silently changed as a side effect of
-drafting M4's own design -- that edit touches M5's row too, which is
-outside this pass's own scope of "M4's row only."
+questions. **Resolved** (M4 documentation closeout pass, 2026-08-25):
+`docs/ROADMAP.md`'s M4 row Objective column no longer mentions vision;
+M5's own Objective column now names it explicitly, with a pointer back
+to this section -- not yet designed, since M5 itself has not had its
+own real scoping pass, the same "objective-only until the milestone
+actually starts" discipline this project applies everywhere else.
 
 ## Non-goals
 
@@ -454,10 +451,6 @@ leaving it implicit until an agent runs into it mid-implementation.
 - The exact vector-store/embedding-model choice (deliverable 5) --
   real, benchmark-driven follow-up work, not decided here.
 - The real eval set's own contents -- separate, real work.
-- `docs/ROADMAP.md`'s M4 *and* M5 row text both need updating to
-  reflect decision 1 (vision's move) -- flagged under "Relationship to
-  M5" above; only M4's own status cell is touched by this pass (see
-  that file's own diff), not the objective text of either row.
 - The implementing work package's own operational response to a
   raised `MemoryIntegrityViolationError` (ADR-0050's own amendment) --
   a real alert, a log entry only, or something stronger -- genuinely

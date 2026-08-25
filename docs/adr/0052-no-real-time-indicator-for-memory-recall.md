@@ -73,18 +73,20 @@ trade this ADR makes explicitly, not an oversight: recall happening
 fast and silently is the whole point of the "conversationally
 self-correcting" reasoning above.
 
-**Real, explicitly-named open question this ADR does not resolve**:
-whether a memory *write* succeeding deserves its own legibility signal
--- a write is not read-only the way recall is; something durable now
-exists that didn't before, arguably closer in kind to a real,
-consequential action than a read is. `m4-memory-retrieval.md`'s own
-"Deferred, not forgotten" section names this explicitly as a real,
-separate, open question -- this ADR's own scope is recall specifically,
-per the scoping question it answers, and does not extend its
-reasoning to cover write by implication. A future ADR (or a revision
-of this one) is the right place to settle that, not a silent
-extension of this decision's own logic to a case it was not asked to
-cover.
+**Originally left as an explicit open question this ADR did not
+resolve, now answered elsewhere**: whether a memory *write* succeeding
+deserves its own legibility signal -- a write is not read-only the way
+recall is; something durable now exists that didn't before, arguably
+closer in kind to a real, consequential action than a read is. This
+ADR's own scope was, and remains, recall specifically, per the scoping
+question it answers -- it does not extend its own reasoning to cover
+write by implication, and still does not. **Resolved by ADR-0053**
+(drafted after this ADR, not a revision of it): also no dedicated
+indicator, but for write-specific reasons (reversibility via ADR-0051's
+retention mechanics; extending `kernel/voice_loop.py`'s existing
+response-announcement dispatch) independent of this ADR's own
+recall-specific reasoning above -- two separately-reasoned answers
+that happen to agree, not one conclusion stretched to cover both.
 
 **Not foreclosed, if the user's own answer changes later**: nothing
 here prevents a future milestone or ADR from adding a recall indicator

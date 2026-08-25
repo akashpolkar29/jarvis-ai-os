@@ -47,10 +47,16 @@ class MemoryWritePort(Protocol):
     def write(self, value: Tainted[object]) -> None:
         """Persist `value` to memory, provenance intact.
 
-        Raises:
-            MemoryWriteDeniedError: If Policy Engine evaluation
-                (via memory_effect_for, ADR-0049) denies the write --
-                most notably, unconditionally, for Classification.SECRET.
+        No authorization happens inside this method -- matching every
+        other port in this repo (`SecretPort`, `MediaPlayerPort`,
+        `DesktopWindowPort`), this is a pure mechanism. A SECRET-classified
+        value is never denied *by this call*: the composition root
+        resolves memory_effect_for (ADR-0049) and checks
+        AuthorizationOrchestrator's real Decision *before* ever calling
+        write() at all -- a denied write simply never reaches this
+        method, the same "port method only runs after a granted
+        Decision" shape every kernel/*.py composition function already
+        follows.
         """
         ...
 ```
