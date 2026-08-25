@@ -39,6 +39,7 @@ class Effect(Flag):
     EGRESS_LOCAL = auto()
     EGRESS_SENSITIVE = auto()
     EGRESS_SECRET = auto()
+    MEMORY_WRITE = auto()
 
 
 class Tier(IntEnum):
@@ -55,6 +56,7 @@ _EFFECT_TIER_FLOOR: dict[Effect, Tier] = {
     Effect.IRREVERSIBLE: Tier.MANUAL_ONLY,
     Effect.CREDENTIAL: Tier.MANUAL_ONLY,
     Effect.EGRESS_SECRET: Tier.DENY,
+    Effect.MEMORY_WRITE: Tier.DENY,
     Effect.EGRESS_SENSITIVE: Tier.CONFIRM,
     Effect.EXECUTE: Tier.CONFIRM,
     Effect.WRITE_LOCAL: Tier.CONFIRM,

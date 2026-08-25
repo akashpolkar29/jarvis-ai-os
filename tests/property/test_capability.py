@@ -96,6 +96,22 @@ def test_egress_secret_always_denies_unconditionally(other_members: set[Effect])
     assert minimum_tier_for(combined) == Tier.DENY
 
 
+@given(EFFECT_MEMBER_SET)
+def test_memory_write_always_denies_unconditionally(other_members: set[Effect]) -> None:
+    """MEMORY_WRITE always floors at DENY, regardless of what else is combined with it.
+
+    Mirrors test_egress_secret_always_denies_unconditionally exactly
+    (ADR-0049): MEMORY_WRITE is the memory-write analogue of
+    EGRESS_SECRET, a real, deliberately separate effect (not a reuse of
+    EGRESS_SECRET, which is specifically about leaving this machine --
+    ADR-0049's own Context section), given its own DENY property test
+    for the same reason EGRESS_SECRET has one: DENY is an absolute
+    ceiling, a stronger claim than ">= MANUAL_ONLY" alone would prove.
+    """
+    combined = _combine(other_members) | Effect.MEMORY_WRITE
+    assert minimum_tier_for(combined) == Tier.DENY
+
+
 @given(DESCRIPTOR, ARGUMENTS_VALUE, UNTAINTED_PROVENANCE | TAINTED_PROVENANCE)
 def test_effective_tier_never_below_required(
     descriptor: CapabilityDescriptor,

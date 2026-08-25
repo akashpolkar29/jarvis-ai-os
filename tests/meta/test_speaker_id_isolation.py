@@ -53,12 +53,11 @@ identical predicate against a deliberately-crafted violating snippet.
 
 from __future__ import annotations
 
-import ast
 import dataclasses
 from pathlib import Path
 
 from jarvis.domain.policy import PolicyContext
-from tests.meta.helpers import iter_py_files
+from tests.meta.helpers import iter_py_files, referenced_code_identifiers
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 
@@ -66,31 +65,9 @@ _POLICY_MARKERS = frozenset({"PolicyContext", "get_current_context"})
 _SPEAKER_MARKERS = frozenset({"SpeakerScore", "SpeakerIdPort"})
 
 
-def _referenced_code_identifiers(source: str) -> set[str]:
-    """Return every identifier referenced in actual code -- names, attributes, imports.
-
-    Deliberately excludes docstrings and comments: those are string
-    literals and stripped tokens to the AST, not ``ast.Name``/
-    ``ast.Attribute``/``ast.ImportFrom`` nodes, so prose discussing a
-    guarantee (like this very module's own docstring, or the ports/
-    adapters it describes) can never trip this scan -- only code that
-    actually imports, calls, or accesses the identifier can.
-    """
-    tree = ast.parse(source)
-    identifiers: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            identifiers.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            identifiers.add(node.attr)
-        elif isinstance(node, ast.ImportFrom):
-            identifiers.update(alias.asname or alias.name for alias in node.names)
-    return identifiers
-
-
 def _references_both_policy_and_speaker_id(source: str) -> bool:
     """Return whether ``source``'s real code (not docstrings) mentions both vocabularies."""
-    identifiers = _referenced_code_identifiers(source)
+    identifiers = referenced_code_identifiers(source)
     return bool(identifiers & _POLICY_MARKERS) and bool(identifiers & _SPEAKER_MARKERS)
 
 

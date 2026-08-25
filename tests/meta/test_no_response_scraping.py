@@ -29,36 +29,18 @@ that today's tree happens to be clean.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
+
+from tests.meta.helpers import referenced_code_identifiers
 
 KERNEL_DESKTOP = Path(__file__).resolve().parents[2] / "src/jarvis/kernel/desktop.py"
 
 _BANNED_IDENTIFIER = "read_visible_text"
 
 
-def _referenced_code_identifiers(source: str) -> set[str]:
-    """Return every identifier referenced in actual code -- names, attributes, imports.
-
-    Deliberately excludes docstrings and comments: those are string
-    literals and stripped tokens to the AST, not ``ast.Name``/
-    ``ast.Attribute``/``ast.ImportFrom`` nodes.
-    """
-    tree = ast.parse(source)
-    identifiers: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            identifiers.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            identifiers.add(node.attr)
-        elif isinstance(node, ast.ImportFrom):
-            identifiers.update(alias.asname or alias.name for alias in node.names)
-    return identifiers
-
-
 def test_kernel_desktop_never_references_read_visible_text() -> None:
     """kernel/desktop.py's real code never references read_visible_text -- ADR-0045's guarantee."""
-    identifiers = _referenced_code_identifiers(KERNEL_DESKTOP.read_text(encoding="utf-8"))
+    identifiers = referenced_code_identifiers(KERNEL_DESKTOP.read_text(encoding="utf-8"))
 
     assert _BANNED_IDENTIFIER not in identifiers
 
@@ -67,7 +49,7 @@ def test_the_scan_predicate_actually_detects_a_violation() -> None:
     """The predicate genuinely fires on a real violation, not just passes on a clean tree."""
     violating_snippet = "def f(window):\n    return window.read_visible_text(1)\n"
 
-    identifiers = _referenced_code_identifiers(violating_snippet)
+    identifiers = referenced_code_identifiers(violating_snippet)
 
     assert _BANNED_IDENTIFIER in identifiers
 
@@ -88,6 +70,6 @@ def test_the_scan_predicate_ignores_docstrings_that_merely_discuss_the_guarantee
         "SOME_CONSTANT = 1\n"
     )
 
-    identifiers = _referenced_code_identifiers(documentation_only_snippet)
+    identifiers = referenced_code_identifiers(documentation_only_snippet)
 
     assert _BANNED_IDENTIFIER not in identifiers

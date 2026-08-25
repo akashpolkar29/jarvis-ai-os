@@ -149,3 +149,27 @@ def attribute_name_equality_comparisons(py_file: Path) -> list[int]:
 def iter_py_files(package_dir: Path) -> list[Path]:
     """Return every ``.py`` file under ``package_dir``, sorted for determinism."""
     return sorted(package_dir.rglob("*.py"))
+
+
+def referenced_code_identifiers(source: str) -> set[str]:
+    """Return every identifier referenced in actual code -- names, attributes, imports.
+
+    Deliberately excludes docstrings and comments: those are string
+    literals and stripped tokens to the AST, not ``ast.Name``/
+    ``ast.Attribute``/``ast.ImportFrom`` nodes. Shared by every
+    meta-test that bans a specific identifier from appearing in a
+    module's real code while still letting that module's own
+    docstrings name the identifier in prose to explain the rule
+    (``tests/meta/test_no_response_scraping.py``,
+    ``tests/meta/test_memory_adapter_isolation.py``).
+    """
+    tree = ast.parse(source)
+    identifiers: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            identifiers.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            identifiers.add(node.attr)
+        elif isinstance(node, ast.ImportFrom):
+            identifiers.update(alias.asname or alias.name for alias in node.names)
+    return identifiers
