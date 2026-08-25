@@ -47,16 +47,31 @@ assumed correct.
   (WP-43 through WP-56, ADR-0044–ADR-0047). This bullet used to group
   M3 with M4/M5/M6 below; that stopped being accurate once M3's own
   real scoping pass happened and is corrected here, not left to drift.
-- **`m4-memory-retrieval.md`, `m5-browser-coding.md`,
-  `m6-integrations.md`** — intentional gate-only placeholders
-  (objective, entry/exit gate, complexity, known risks only). Per this
-  project's rolling-wave planning principle (see `docs/ROADMAP.md`),
-  full architecture-level detail for these is written only once each
-  milestone actually starts — not before. Do not add ports, adapters,
-  work-package breakdowns, or ADRs to these until that milestone
-  begins. (`docs/architecture/m4-scoping-notes.md` is real-research
-  prep for M4's own eventual scoping pass, not the placeholder itself
-  and not a design — see that file's own header.)
+- **`m4-memory-retrieval.md`** — **no longer a placeholder**, as of
+  2026-08-25: the user answered `m4-scoping-notes.md`'s five open
+  questions directly, and this is now a real design citing each
+  answer back to its own scoping question, mirroring exactly how
+  `m3-desktop-control.md` stopped being a placeholder once M3's own
+  scoping happened. ADR-0048 through ADR-0052 record this milestone's
+  own real, pre-implementation decisions (the two new ports, the
+  SECRET-write DENY mechanism, retrieval-time re-evaluation, retention/
+  deletion, and the no-indicator-for-recall decision) — **all
+  Proposed, not Accepted**; no M4 code exists, and none should until
+  the user marks them Accepted. This bullet used to group M4 with
+  M5/M6 below; that stopped being accurate the same way it did for M3,
+  corrected here rather than left to drift.
+- **`m5-browser-coding.md`, `m6-integrations.md`** — intentional
+  gate-only placeholders (objective, entry/exit gate, complexity, known
+  risks only). Per this project's rolling-wave planning principle (see
+  `docs/ROADMAP.md`), full architecture-level detail for these is
+  written only once each milestone actually starts — not before. Do
+  not add ports, adapters, work-package breakdowns, or ADRs to these
+  until that milestone begins. **Real, direct consequence of M4's own
+  scoping, not yet acted on**: vision moves to M5 in full (M4's own
+  design doc, "Relationship to M5" section) — `m5-browser-coding.md`'s
+  own placeholder text does not reflect this yet, flagged rather than
+  silently edited into a placeholder document ahead of M5's own real
+  scoping pass.
 
 See `docs/ROADMAP.md` for the full milestone table and the rolling-wave
 planning rationale.
