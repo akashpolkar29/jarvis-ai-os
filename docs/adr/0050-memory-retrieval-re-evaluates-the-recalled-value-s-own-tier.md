@@ -72,6 +72,52 @@ own AST-based enforcement style) is required to check this
 mechanically where practical -- named as a real acceptance criterion,
 not left to code review alone.
 
+**Amended, resolving what was originally left as an open gap: a real
+`Classification.SECRET` filter at the retrieval boundary itself,
+independent of and redundant with ADR-0049's write-time guarantee.**
+Per-caller re-evaluation (above) is the right, sufficient mechanism
+for `PERSONAL`/`SENSITIVE` records -- those are legitimately memorized,
+and the question is only "does the *next* use re-check the right
+tier." `SECRET` is different in kind, not degree: per ADR-0049, a
+SECRET value should structurally never reach storage at all, so a
+SECRET-classified `MemoryRecord` existing in the real store at all is
+not a normal case retrieval needs to gate correctly -- it is evidence
+that ADR-0049's own write-time guarantee already failed somewhere
+upstream, a real integrity violation, not a routine authorization
+decision. Relying on "the normal DENY floor applies to whatever tries
+to use it next" (the original text here) is not strong enough on its
+own: it assumes every future caller's own classification-to-effect
+mapping is SECRET-aware, the same generic-future-caller trust gap
+named below, applied to the one classification this project has
+already decided (ADR-0014/ADR-0038/ADR-0049) gets zero exception paths
+anywhere.
+
+**Decision**: `RetrievalPort`'s real adapter unconditionally excludes
+any record whose `Provenance.classification is Classification.SECRET`
+from its own returned results, before any ranking/relevance logic
+runs -- a SECRET record is never returned to any caller, full stop,
+regardless of query. This check does not replace ADR-0049's write-time
+DENY; it is deliberate, redundant defense-in-depth, matching this
+project's own established posture that a single point of enforcement
+is not treated as sufficient for its most sensitive classification
+(the same reasoning already visible in ADR-0038 requiring a real
+property test rather than trusting one code review of the effect
+table). **Encountering a SECRET record during a query is not silently
+filtered and forgotten**: it is a detectable anomaly indicating
+ADR-0049's own guarantee was bypassed somewhere, and must be surfaced
+loudly -- a new, real exception type
+(`MemoryIntegrityViolationError`, or equivalent, defined on
+`ports/retrieval.py`, matching this project's own "define errors on
+the port so any adapter raises the same type" convention) raised
+after the filtering/exclusion happens, not instead of it, so the
+caller's own query still completes safely (no SECRET content leaks
+through a crashed query) while the anomaly is not swallowed silently
+either. This mirrors the real, already-learned lesson
+`adapters/media_player.py`'s own docstring records: an AppArmor
+denial silently swallowed as success, caught only by manual
+verification -- this ADR chooses not to repeat that shape of mistake
+for the one classification this project can least afford it for.
+
 ## Consequences
 
 No `Effect`/`Tier` change is needed for this ADR specifically (unlike
@@ -91,13 +137,21 @@ of trust-the-future-caller gap this project already accepts elsewhere
 whatever reads them next). Named here rather than assumed solved by
 this ADR's own existence.
 
-**Also real, also open**: what happens to a retrieved record whose
-classification is `SECRET`? Per ADR-0049, a SECRET value should never
-have been written in the first place -- if one is ever found in
-storage regardless (a bug, a pre-ADR-0049 legacy write, a
-classification computed incorrectly at write time), this ADR does not
-specify `RetrievalPort`'s own behavior beyond "the normal DENY floor
-applies to whatever tries to use it next," which may not be a strong
-enough real answer given SECRET's own "should never even be
-retrievable" spirit -- flagged as a real open question for the
-implementing work package, not resolved here.
+**Previously left open, now resolved above (amended)**: what happens
+to a retrieved record whose classification is `SECRET` is no longer
+an open question -- see the Decision section's own amendment.
+`RetrievalPort` never returns one, and encountering one raises a real,
+distinct anomaly signal rather than either silently filtering it or
+silently returning it. **Still real, still open**: this ADR does not
+specify what the implementing work package's own operational response
+to a raised `MemoryIntegrityViolationError` should be beyond "surface
+it" -- whether that means a real alert to the user, a log entry only,
+or something stronger, is genuinely undecided and left for that work
+package, not pre-answered by this document.
+
+**Required acceptance criterion, added by this amendment**: a real
+test proving that a `MemoryRecord` carrying `Classification.SECRET`,
+if present in the underlying store by any means, is never included in
+`RetrievalPort.retrieve()`'s returned results, and that encountering
+one raises the real, distinct exception this ADR now names -- not
+silently dropped, not silently returned.

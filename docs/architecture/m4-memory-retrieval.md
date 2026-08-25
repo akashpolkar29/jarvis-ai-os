@@ -11,7 +11,7 @@ below traces back to one of five scoping questions the user answered
 directly, cited inline at each site -- this document does not invent
 new scope beyond those five answers plus their necessary technical
 consequences. **Not yet implemented, not yet Accepted**: the ADRs this
-document depends on (ADR-0048 through ADR-0052) are drafted alongside
+document depends on (ADR-0048 through ADR-0053) are drafted alongside
 it, Proposed, not Accepted -- per this project's own ADR process, only
 the user marks an ADR Accepted, and no work package below may start
 until that happens.
@@ -255,13 +255,26 @@ own ordering principle:
    names -- not asserted from general knowledge of the landscape
    (`m4-scoping-notes.md`'s own research is explicitly not a
    recommendation, per that document's own text).
-5. No real-time indicator is built for memory recall, and no future
-   work package under this milestone adds one without a fresh,
-   explicit decision revisiting decision 4 -- checkable the same way
-   ADR-0046's "no other capability may cite Terminal as precedent" is
-   checkable: by a human reading this document, not (yet) a mechanical
-   test, since there is no generic "indicator" abstraction in this
-   codebase to grep for the absence of.
+5. No real-time indicator is built for memory recall (ADR-0052) or
+   memory write (ADR-0053) -- two independently-reasoned decisions,
+   not one conclusion covering both -- and no future work package
+   under this milestone adds either without a fresh, explicit decision
+   revisiting the relevant ADR. Checkable the same way ADR-0046's "no
+   other capability may cite Terminal as precedent" is checkable: by a
+   human reading this document, not (yet) a mechanical test, since
+   there is no generic "indicator" abstraction in this codebase to
+   grep for the absence of.
+6. `RetrievalPort.retrieve()` never returns a `Classification.SECRET`
+   record, and encountering one raises a real, distinct
+   `MemoryIntegrityViolationError` (or equivalent) rather than
+   silently filtering or silently returning it -- ADR-0050's own
+   amended acceptance criterion, proven by a real, executed test, not
+   asserted from the write-side guarantee (ADR-0049) alone.
+7. Memory write's real response is announced back to the user through
+   `kernel/voice_loop.py`'s existing `_authorize_and_execute`/`_speak`
+   flow -- a new, real branch in that dispatch, proven by a real test
+   that a granted memory write produces a real, spoken confirmation,
+   not silently completing with no announcement at all (ADR-0053).
 
 **Incomplete, stated plainly rather than padded**: this list does not
 yet cover the real eval set's own contents (what queries/expected
@@ -344,13 +357,13 @@ established for cloud egress.
 
 ## "Always legible"
 
-No new indicator is built for memory recall -- decision 4, ADR-0052
-records the full reasoning. `TtsPort` remains available, unmodified,
-for any memory-related action a future work package decides is worth
-announcing (e.g., a real memory *write* succeeding, which does carry
-a form of real-world consequence -- something is now durably stored
-that wasn't before -- a real, open question this document does not
-resolve, flagged in ADR-0052 rather than silently decided either way).
+No new indicator is built for memory recall (decision 4, ADR-0052) or
+memory write (ADR-0053) -- two independently-reasoned decisions.
+`TtsPort` remains available, unmodified, for both: recall via
+whatever conversational response already embeds a recalled value;
+write via a new, real branch in `kernel/voice_loop.py`'s existing
+`_authorize_and_execute` dispatch (ADR-0053's own real, necessary
+follow-up work, not automatic).
 
 ## Work package sketch (WP-57 through WP-64)
 
@@ -369,17 +382,25 @@ reason to reorder.
   `DesktopWindowPort`/`SandboxPort` followed in M3.
 - **WP-58 — SECRET write-time denial.** `Effect.MEMORY_WRITE`,
   `application/memory/classification.py`'s `memory_effect_for`
-  (ADR-0049), and the required property test (a SECRET-classified
-  value never reaches a real adapter at any rung). Built and fully
-  gate-verified against fakes before any real vector store exists --
-  the safety-critical piece lands first, not last, matching this
-  project's own established discipline of proving the dangerous case
-  before the happy path.
+  (ADR-0049), the required property test (a SECRET-classified value
+  never reaches a real adapter at any rung), *and* the required
+  structural-enforcement meta-test (ADR-0049's own amendment): an
+  AST-based scan, mirroring `tests/meta/test_no_response_scraping.py`,
+  proving no module outside `kernel/memory.py` and the real adapter's
+  own defining module references the adapter's concrete class at all.
+  Built and fully gate-verified against fakes before any real vector
+  store exists -- the safety-critical piece lands first, not last,
+  matching this project's own established discipline of proving the
+  dangerous case before the happy path.
 - **WP-59 — Retrieval-time re-evaluation discipline.** The real
   convention plus meta-test (ADR-0050) proving no code path discards a
   `MemoryRecord`'s own provenance when constructing a new
-  `CapabilityInvocation` from it. Depends on WP-57's types existing;
-  does not depend on a real vector store existing yet either.
+  `CapabilityInvocation` from it, *and* the retrieval-side
+  `Classification.SECRET` filter plus the real
+  `MemoryIntegrityViolationError` path (ADR-0050's own amendment) --
+  both real, required tests, not just the convention-following one.
+  Depends on WP-57's types existing; does not depend on a real vector
+  store existing yet either.
 - **WP-60 — Retention and deletion mechanics.** `expires_at`/pin
   fields, `application/memory/retention.py` (ADR-0051), real
   `ClockPort`-based expiry (never `datetime.now()`), and the real
@@ -407,6 +428,11 @@ reason to reorder.
   `AuthorizationOrchestrator` choke point -- the first point real,
   end-to-end memory write/retrieve calls exist as actual, invocable
   capabilities, not just isolated, tested-in-parts infrastructure.
+  Also the real, small `_authorize_and_execute` branch in
+  `kernel/voice_loop.py` a granted memory write needs for its own
+  spoken confirmation (ADR-0053) -- an ordinary addition of the same
+  shape every existing branch there already needed, not new
+  architecture.
 - **WP-64 — M4 threat-model closeout.** `docs/threat-model/v0.md` gains
   a real "Milestone 4 additions" section; `CLAUDE.md`/`docs/ROADMAP.md`
   status updated to reflect what was actually built and verified --
@@ -428,10 +454,23 @@ leaving it implicit until an agent runs into it mid-implementation.
 - The exact vector-store/embedding-model choice (deliverable 5) --
   real, benchmark-driven follow-up work, not decided here.
 - The real eval set's own contents -- separate, real work.
-- Whether a memory *write* succeeding deserves its own "always legible"
-  signal (distinct from decision 4's recall-specific answer) -- named
-  as a real open question in ADR-0052, not pre-answered.
 - `docs/ROADMAP.md`'s M4 *and* M5 row text both need updating to
   reflect decision 1 (vision's move) -- flagged under "Relationship to
   M5" above; only M4's own status cell is touched by this pass (see
   that file's own diff), not the objective text of either row.
+- The implementing work package's own operational response to a
+  raised `MemoryIntegrityViolationError` (ADR-0050's own amendment) --
+  a real alert, a log entry only, or something stronger -- genuinely
+  undecided, left for that work package.
+- Whether 90 days (ADR-0051's own default TTL) is the right real
+  number in practice -- empirical, not settled by this document.
+
+**Resolved since the first draft of this document, no longer
+open**: whether memory write needs its own legibility signal -- no,
+per ADR-0053, for reasons specific to write (reversible; a small,
+ordinary extension of `kernel/voice_loop.py`'s existing dispatch
+covers it), independently reasoned from ADR-0052's own recall-specific
+answer, not inherited from it. What happens when a `SECRET` record is
+found during retrieval despite ADR-0049 -- ADR-0050's own amendment:
+never returned, and a real, distinct exception raised, not silently
+one or the other.

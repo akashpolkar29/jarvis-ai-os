@@ -52,12 +52,14 @@ assumed correct.
   questions directly, and this is now a real design citing each
   answer back to its own scoping question, mirroring exactly how
   `m3-desktop-control.md` stopped being a placeholder once M3's own
-  scoping happened. ADR-0048 through ADR-0052 record this milestone's
+  scoping happened. ADR-0048 through ADR-0053 record this milestone's
   own real, pre-implementation decisions (the two new ports, the
-  SECRET-write DENY mechanism, retrieval-time re-evaluation, retention/
-  deletion, and the no-indicator-for-recall decision) — **all
-  Proposed, not Accepted**; no M4 code exists, and none should until
-  the user marks them Accepted. This bullet used to group M4 with
+  SECRET-write DENY mechanism and its own structural-enforcement
+  requirement, retrieval-time re-evaluation and its retrieval-side
+  SECRET filter, retention/deletion, and the no-indicator decisions
+  for both recall and write) — **all Proposed, not Accepted**; no M4
+  code exists, and none should until the user marks them Accepted.
+  This bullet used to group M4 with
   M5/M6 below; that stopped being accurate the same way it did for M3,
   corrected here rather than left to drift.
 - **`m5-browser-coding.md`, `m6-integrations.md`** — intentional
