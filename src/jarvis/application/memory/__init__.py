@@ -1,4 +1,4 @@
-"""M4 memory-write authorization: the real ADR-0049 choke point.
+"""M4 memory write/retrieval authorization: the real ADR-0049/ADR-0050 choke points.
 
 :func:`~jarvis.application.memory.classification.memory_effect_for`
 maps a to-be-memorized value's real
@@ -17,15 +17,22 @@ authorizes one real memory-write invocation through the existing
 dynamically from the *value's own* real classification, not a fixed
 effect registered once -- the same reason ``ModelRouter`` does not use
 ``authorize_by_id()`` against a static registry entry.
+
+:func:`~jarvis.application.memory.retrieval_guard.exclude_secret_records`
+is ADR-0050's own amendment: an unconditional, adapter-independent
+exclusion of any ``Classification.SECRET`` record from a query's
+results, redundant with the write-time guarantee above on purpose.
 """
 
 from __future__ import annotations
 
 from .classification import memory_effect_for
+from .retrieval_guard import exclude_secret_records
 from .writer import MEMORY_WRITE_CAPABILITY_ID, MemoryWriteAuthorizer
 
 __all__ = [
     "MEMORY_WRITE_CAPABILITY_ID",
     "MemoryWriteAuthorizer",
+    "exclude_secret_records",
     "memory_effect_for",
 ]
