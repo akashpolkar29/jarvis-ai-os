@@ -150,10 +150,17 @@ entirely.** The recovered decision:
 > rebuildable cache behind `VectorIndexPort`. Start with brute force
 > and add an index only when a benchmark demands it."
 
-This belongs to M4 (Memory & Retrieval), which has not started — see
-`docs/architecture/m4-memory-retrieval.md`. Recorded here as real
-design history worth carrying forward when M4 actually starts, not as
-anything decided or built today.
+This belonged to M4 (Memory & Retrieval), now code-complete — see
+`docs/architecture/m4-memory-retrieval.md` and
+`docs/architecture/m4-benchmark-results.md`. Recorded here as real
+design history that was in fact carried forward: M4's own real
+benchmark (`poc/wp61_vector_store_benchmark.py`) reached the same
+conclusion this reconciliation note anticipated -- brute-force first,
+an index only if a real benchmark demands it -- and brute-force is
+what `jarvis.adapters.memory.SqliteMemoryAdapter` actually uses.
+Embeddings are stored as plain SQLite TEXT (JSON-encoded), not a
+dedicated BLOB format this note did not further specify; no
+`VectorIndexPort` was built, since the benchmark did not demand one.
 
 ## 8. D-Bus library choice: jeepney in the kernel
 
@@ -244,7 +251,7 @@ recovered fragment alone.
 | Audit chain: header/payload split | **ADR-0028** | **No** — not in the real code |
 | Secrets: keyring, referenced not stored | **ADR-0017** | Yes |
 | Secrets: FDE instead of SQLCipher | No corresponding ADR | N/A — no database exists yet |
-| Embeddings: canonical BLOBs + derived ANN | No corresponding ADR | N/A — M4 scope, not started |
+| Embeddings: canonical BLOBs + derived ANN | No corresponding ADR | Partially — canonical storage yes (JSON TEXT, not BLOB), no derived ANN index (brute-force benchmarked sufficient, see section 7) |
 | jeepney in the kernel, no GLib in core | No dedicated ADR (enforced via import-linter C6) | Yes |
 | Confirmation dialog as a separate process | **ADR-0035** (partial) | **No** — real dialog is in-process |
 | Injection interlock for MANUAL_ONLY | **ADR-0035** (partial) | Yes |

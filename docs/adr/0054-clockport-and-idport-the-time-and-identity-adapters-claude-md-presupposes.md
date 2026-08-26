@@ -4,7 +4,7 @@
 
 Accepted
 
-**Acceptance note (2026-08-26):** accepted directly during M4 implementation (WP-57) -- the gap below blocks WP-60's own retention mechanics (ADR-0051) from being written at all without violating an existing, tooling-enforced invariant, and the design is dictated almost entirely by that invariant's own text rather than requiring new debate. Accepted and built in the same pass, matching ADR-0042's own precedent for a comparable "already presupposed, never actually built" gap.
+**Acceptance note (2026-08-26):** accepted unilaterally by this unattended implementation pass itself -- **not by the user**, unlike ADR-0048 through ADR-0053, which the user did explicitly, directly accept before this pass began. The user was away from the machine and unreachable; the gap below blocked WP-60's own retention mechanics (ADR-0051) from being written at all without violating an existing, tooling-enforced invariant, and the design is dictated almost entirely by that invariant's own text rather than requiring new debate, matching ADR-0042's own precedent for a comparable "already presupposed, never actually built" gap. That reasoning is real, but it does not substitute for the user's own review -- flagged as a real, explicit deviation from this project's own "only the user marks ADRs Accepted" rule in `docs/threat-model/v0.md`'s "Milestone 4 additions" section; this document is the one ADR in the M4 set that may need the user's own retroactive sign-off, not assumed equivalent to the other six.
 
 ## Date
 
