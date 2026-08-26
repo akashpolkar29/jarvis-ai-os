@@ -39,19 +39,30 @@ exactly:
    re-export barrel legitimately names everything in its package
    together, which is aggregation, not construction.
 
-**One further, explicit, justified exception (added in WP-61)**:
-``jarvis.adapters.memory`` (``SqliteMemoryAdapter``) legitimately
-references both markers -- it is the real persistence boundary, and
-its own deserialization path (``_row_to_record_and_embedding``)
-*reconstructs* a ``MemoryRecord``'s exact original ``Provenance`` from
-that same record's own previously-persisted ``trust``/
-``classification``/``sources`` columns. This is not the violation
-ADR-0050 names: it is not discarding a real classification for a
-fresh, unclassified one (``Provenance.user()``/``.system()``); it is
-faithfully rebuilding the one that was already there, the same
-serialize/deserialize round-trip every persistence adapter must do for
-its own domain type. Named here explicitly, as its own allowlist
-entry, rather than silently narrowing the general rule.
+**Two further, explicit, justified exceptions**:
+
+- ``jarvis.adapters.memory`` (``SqliteMemoryAdapter``, WP-61)
+  legitimately references both markers -- it is the real persistence
+  boundary, and its own deserialization path
+  (``_row_to_record_and_embedding``) *reconstructs* a ``MemoryRecord``'s
+  exact original ``Provenance`` from that same record's own
+  previously-persisted ``trust``/``classification``/``sources``
+  columns. This is not the violation ADR-0050 names: it is not
+  discarding a real classification for a fresh, unclassified one
+  (``Provenance.user()``/``.system()``); it is faithfully rebuilding
+  the one that was already there, the same serialize/deserialize
+  round-trip every persistence adapter must do for its own domain type.
+- ``jarvis.kernel.memory`` (WP-63) references ``MemoryRecord`` only in
+  a return-type annotation (``MemoryRecallOutcome.records``) and
+  constructs ``Provenance.user()`` only for a freshly-typed/spoken
+  argument (the text to memorize, or the query string) -- the same
+  "wrap direct user input" pattern ``ping``/music commands/
+  ``fs.read_file``'s own path argument already use. It never unwraps
+  an existing ``MemoryRecord``'s value and re-wraps it with a fresh
+  ``Provenance`` -- the actual violation this test exists to catch.
+
+Named here explicitly, as their own allowlist entries, rather than
+silently narrowing the general rule.
 
 Deliberately AST-based, not a substring scan -- this very module's own
 docstring names both terms in prose to explain the rule, which a
@@ -102,7 +113,12 @@ def test_memory_record_value_really_is_a_tainted_instance_at_runtime() -> None:
     assert record.value.provenance == Provenance.user()
 
 
-_ALLOWED_RECONSTRUCTION_MODULES = frozenset({SRC_ROOT / "jarvis" / "adapters" / "memory.py"})
+_ALLOWED_RECONSTRUCTION_MODULES = frozenset(
+    {
+        SRC_ROOT / "jarvis" / "adapters" / "memory.py",
+        SRC_ROOT / "jarvis" / "kernel" / "memory.py",
+    }
+)
 
 
 def test_no_module_under_src_references_both_memory_record_and_provenance() -> None:
@@ -111,9 +127,8 @@ def test_no_module_under_src_references_both_memory_record_and_provenance() -> N
     See the module docstring for the full reasoning -- this is the
     real mechanical enforcement of ADR-0050's own carry-forward rule.
     __init__.py files are excluded (aggregation, not construction);
-    ``adapters/memory.py`` is excluded too (real, justified
-    deserialization round-trip, not the discard ADR-0050 forbids --
-    see the module docstring's own explicit exception).
+    ``adapters/memory.py`` and ``kernel/memory.py`` are excluded too
+    (real, justified exceptions -- see the module docstring's own).
     """
     violations = [
         py_file

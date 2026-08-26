@@ -50,6 +50,22 @@ downstream at authorization time exactly as it already is for the
 CLI's typed ``read`` argument. A fuzzy, voice-derived path string
 reaching that check unvalidated is the intended design, not an
 oversight.
+
+"remember" (M4, WP-63) mirrors "read"'s exact shape: everything after
+the keyword, verbatim, becomes the text to memorize -- resolved to
+``application.memory.writer.MEMORY_WRITE_CAPABILITY_ID``, not a
+``kernel.capabilities`` id (see ``kernel/memory.py``'s own module
+docstring for why memory.write is deliberately never registered in
+``build_default_registry()``). Added specifically because ADR-0053
+names the ``kernel/voice_loop.py`` dispatch branch a granted memory
+write needs for its own spoken confirmation as real, necessary work
+for this work package -- without a real way to resolve to that
+capability id, that branch would be unreachable dead code. No
+equivalent "recall"/"what do you know about" command is added: nothing
+in this milestone's ADRs names voice-triggered recall as required
+work, matching the same real, precedented scope boundary
+``docker.*``/``git.*``'s own kernel functions already have (real and
+tested, not voice- or CLI-wired).
 """
 
 from __future__ import annotations
@@ -57,6 +73,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import PING_CAPABILITY_ID, READ_FILE_CAPABILITY_ID
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, MUSIC_COMMAND_NAMES
@@ -101,6 +118,16 @@ def _resolve_read(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     )
 
 
+def _resolve_remember(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve the "remember" command: everything after the keyword is the text to memorize."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=MEMORY_WRITE_CAPABILITY_ID,
+        arguments=Tainted({"text": rest}, Provenance.user()),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -120,9 +147,9 @@ def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedInten
 
     Matching is case-insensitive (on the command word only) and
     whitespace-trimmed. The first word selects the command; for every
-    command except "read", any remaining text makes the match fail (a
-    zero-argument command does not silently ignore trailing words)
-    rather than resolving anyway.
+    command except "read"/"remember", any remaining text makes the
+    match fail (a zero-argument command does not silently ignore
+    trailing words) rather than resolving anyway.
     """
     words = transcript.text.strip().split(maxsplit=1)
     if not words:
@@ -133,6 +160,8 @@ def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedInten
 
     if command == "read":
         return _resolve_read(rest)
+    if command == "remember":
+        return _resolve_remember(rest)
     if rest:
         return _UNRECOGNIZED
     return _resolve_zero_argument_command(command)

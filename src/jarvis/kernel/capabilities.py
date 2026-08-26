@@ -61,6 +61,7 @@ GIT_CREATE_BRANCH_CAPABILITY_ID = CapabilityId("git.create_branch")
 GIT_COMMIT_CAPABILITY_ID = CapabilityId("git.commit")
 GIT_PUSH_CAPABILITY_ID = CapabilityId("git.push")
 GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
+MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -254,5 +255,19 @@ def build_default_registry() -> CapabilityRegistry:
             ),
         )
     )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_RETRIEVE_CAPABILITY_ID,
+            effects=Effect.READ_LOCAL,
+            description="Search previously-memorized content. The bare act of querying only.",
+        )
+    )
+    # memory.write (application/memory/writer.py's MEMORY_WRITE_CAPABILITY_ID) is
+    # deliberately NOT registered here -- see kernel/memory.py's own module
+    # docstring for why: its real Effect varies per invocation with the
+    # value's own classification (ADR-0049), the same reason
+    # jarvis.application.reasoning.router.ModelRouter's capability is never
+    # registered here either.
 
     return registry

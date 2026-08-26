@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.transcript import Transcript
 from jarvis.kernel.capabilities import (
     MUSIC_NEXT_CAPABILITY_ID,
@@ -91,6 +92,30 @@ def test_read_preserves_the_full_rest_of_the_text_including_spaces() -> None:
 def test_read_with_no_path_is_unrecognized() -> None:
     """ "read" alone, with nothing after it, is not a valid request -- never a guessed path."""
     result = resolve_intent(Transcript(text="read"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_remember_with_text_resolves_with_the_rest_of_the_text_as_the_text_argument() -> None:
+    """ "remember <text>" resolves to memory.write with the trailing text as the argument."""
+    result = resolve_intent(Transcript(text="remember I prefer tabs"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == MEMORY_WRITE_CAPABILITY_ID
+    assert result.arguments.value == {"text": "I prefer tabs"}
+
+
+def test_remember_preserves_the_full_rest_of_the_text_including_spaces() -> None:
+    """A multi-word phrase after "remember" is kept whole, not just the next single word."""
+    result = resolve_intent(Transcript(text="remember my favorite color is blue"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.arguments.value == {"text": "my favorite color is blue"}
+
+
+def test_remember_with_no_text_is_unrecognized() -> None:
+    """ "remember" alone, with nothing after it, is not a valid request -- never a guessed value."""
+    result = resolve_intent(Transcript(text="remember"))
 
     assert isinstance(result, UnrecognizedIntent)
 

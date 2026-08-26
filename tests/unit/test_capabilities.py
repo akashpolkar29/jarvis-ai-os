@@ -17,6 +17,7 @@ from jarvis.kernel.capabilities import (
     GIT_FORCE_PUSH_CAPABILITY_ID,
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
+    MEMORY_RETRIEVE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
     MUSIC_PLAY_CAPABILITY_ID,
@@ -27,7 +28,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 20
+_EXPECTED_CAPABILITY_COUNT = 21
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -67,6 +68,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         GIT_COMMIT_CAPABILITY_ID,
         GIT_PUSH_CAPABILITY_ID,
         GIT_FORCE_PUSH_CAPABILITY_ID,
+        MEMORY_RETRIEVE_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -215,6 +217,21 @@ def test_read_file_has_egress_local_effects() -> None:
     registry = build_default_registry()
 
     assert registry.get(READ_FILE_CAPABILITY_ID).effects == Effect.EGRESS_LOCAL
+
+
+def test_memory_retrieve_has_read_local_effects() -> None:
+    """memory.retrieve is registered with Effect.READ_LOCAL -- always Tier.ALLOW.
+
+    The bare act of querying, per ADR-0048's own worked example --
+    distinct from what a caller does with a recalled record
+    (ADR-0050's own separate concern, gated at the point of use, not
+    registered here).
+    """
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_RETRIEVE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.READ_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
 
 
 def test_every_descriptor_has_a_non_empty_description() -> None:

@@ -30,16 +30,15 @@ detects a real violation" / "predicate ignores docstrings" proof
 already established as this project's own precedent for a structural
 guarantee.
 
-**Now real, added in WP-61**:
-:func:`test_no_module_under_src_references_sqlite_memory_adapter_outside_its_own_module_and_kernel`
+**Now real, added in WP-61, completed in WP-63**:
+:func:`test_no_module_under_src_references_sqlite_memory_adapter_outside_its_own_module`
 is the concrete assertion the WP-58 sequencing note tracked --
 ``jarvis.adapters.memory.SqliteMemoryAdapter`` is the real adapter
-class ADR-0049's own guarantee protects. ``kernel/memory.py`` (the
-composition root that will construct it, WP-63) does not exist yet
-either, so today the only allowed module is the adapter's own defining
-module -- this assertion will need `kernel/memory.py` added to its own
-allowlist when WP-63 lands, the same small, tracked, mechanical
-addition this note itself was.
+class ADR-0049's own guarantee protects. ``kernel/memory.py`` (WP-63)
+is now the real composition root that legitimately constructs it as
+the single write path, and is the second, final entry in this
+assertion's own allowlist -- the small, tracked, mechanical addition
+this note itself predicted.
 """
 
 from __future__ import annotations
@@ -105,58 +104,21 @@ def test_the_scan_predicate_ignores_docstrings_that_merely_discuss_the_guarantee
     assert "RealVectorStoreAdapter" not in identifiers
 
 
-def test_the_scan_predicate_excludes_allowed_modules_by_path() -> None:
-    """A file listed in allowed_modules is never reported, even though it references the identifier.
-
-    The real assertion (added in WP-61, once the adapter exists) will
-    rely on this exclusion to let the adapter's own defining module
-    and kernel/memory.py freely reference the concrete class -- this
-    proves the exclusion mechanism itself works, independent of which
-    real files are eventually named.
-    """
-    scratch_root = SRC_ROOT / "jarvis"
-    allowed = scratch_root / "adapters" / "clock.py"
-    violations = _references_identifier_outside_allowed_modules(
-        scratch_root, "SystemClockAdapter", frozenset({allowed})
-    )
-
-    assert allowed not in violations
-    assert violations == []
-
-
-def test_no_module_under_src_references_system_clock_adapter_outside_its_own_module() -> None:
-    """Sanity-checks the real scan end-to-end against an already-real, already-narrow example.
-
-    ``SystemClockAdapter`` (``adapters/clock.py``) is likewise a
-    concrete class that only its own defining module (and, in its
-    case, nothing else -- it's constructed only in tests/kernel
-    composition, never referenced by name elsewhere in src/) should
-    mention. This proves the real scan machinery -- not just synthetic
-    fixtures -- correctly finds zero violations against real source
-    today.
-    """
-    own_module = SRC_ROOT / "jarvis" / "adapters" / "clock.py"
-
-    violations = _references_identifier_outside_allowed_modules(
-        SRC_ROOT / "jarvis", "SystemClockAdapter", frozenset({own_module})
-    )
-
-    assert violations == []
-
-
 def test_no_module_under_src_references_sqlite_memory_adapter_outside_its_own_module() -> None:
-    """The real ADR-0049 guarantee: SqliteMemoryAdapter is never referenced outside its own module.
+    """The real ADR-0049 guarantee: SqliteMemoryAdapter is referenced only where it must be.
 
-    ``kernel/memory.py`` (WP-63) does not exist yet -- once it does and
-    legitimately constructs ``SqliteMemoryAdapter`` as the composition
-    root's own single write path, it must be added to
-    ``allowed_modules`` here, the same small, tracked addition this
-    module's own docstring names.
+    ``kernel/memory.py`` (WP-63) is the composition root that
+    legitimately constructs ``SqliteMemoryAdapter`` as the single real
+    write path -- exactly the exception this module's own docstring
+    tracked in advance. No other module may reference it.
     """
     own_module = SRC_ROOT / "jarvis" / "adapters" / "memory.py"
+    kernel_composition_root = SRC_ROOT / "jarvis" / "kernel" / "memory.py"
 
     violations = _references_identifier_outside_allowed_modules(
-        SRC_ROOT / "jarvis", "SqliteMemoryAdapter", frozenset({own_module})
+        SRC_ROOT / "jarvis",
+        "SqliteMemoryAdapter",
+        frozenset({own_module, kernel_composition_root}),
     )
 
     assert violations == []

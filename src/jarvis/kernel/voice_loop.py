@@ -11,7 +11,11 @@ and ``authorize_and_read_file`` are called directly, exactly as
 ``AuthorizationOrchestrator`` a second time. This keeps
 ``AuthorizationOrchestrator``, the policy engine, the audit chain, and
 the two existing M0 capabilities genuinely untouched, per this work
-package's own instruction.
+package's own instruction. ``authorize_and_remember`` (M4, WP-63) joins
+this dispatch too -- ADR-0053 names this module's own "remember"
+branch as real, necessary work for that milestone, distinct from the
+"unchanged M0 code" framing above; unlike the M0 functions, it is
+new, not a pre-existing function this module merely wires in.
 
 Per utterance: a confirmed :class:`~jarvis.domain.wake_word.WakeEvent`
 (carrying its own audio, per ADR-0033) is handed to
@@ -111,12 +115,14 @@ from jarvis.adapters.stt import FasterWhisperAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
 from jarvis.adapters.vad import SileroVadAdapter
 from jarvis.adapters.wake_word import OpenWakeWordAdapter
+from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.kernel.capabilities import (
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
 )
 from jarvis.kernel.files import authorize_and_read_file
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
+from jarvis.kernel.memory import authorize_and_remember
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 
@@ -127,6 +133,7 @@ if TYPE_CHECKING:
     from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
     from jarvis.kernel.music import MusicCommand
+    from jarvis.ports.embedding import EmbeddingPort
     from jarvis.ports.file_system import FileSystemPort
     from jarvis.ports.media_player import MediaPlayerPort
     from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
@@ -180,6 +187,9 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:
     if resolved.capability_id == READ_FILE_CAPABILITY_ID:
         path_text = resolved.arguments.value.get("path")
         return f"JARVIS wants to: read {path_text}. Approve?"
+    if resolved.capability_id == MEMORY_WRITE_CAPABILITY_ID:
+        text = resolved.arguments.value.get("text")
+        return f"JARVIS wants to: remember '{text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -196,20 +206,26 @@ def _authorize_and_execute(  # noqa: PLR0913 -- one per composition-function pas
     allowed_root: Path | None,
     file_system: FileSystemPort | None,
     media_player: MediaPlayerPort | None,
+    database_path: Path | None,
+    embedding_port: EmbeddingPort | None,
 ) -> str:
     """Dispatch the resolved capability to its (unchanged, M0) composition function.
 
-    ``allowed_root``/``file_system``/``media_player`` are pass-throughs
-    to ``authorize_and_read_file``'s and
-    ``authorize_and_run_music_command``'s own existing, optional
+    ``allowed_root``/``file_system``/``media_player``/``database_path``/
+    ``embedding_port`` are pass-throughs to
+    ``authorize_and_read_file``'s, ``authorize_and_run_music_command``'s,
+    and ``authorize_and_remember``'s own existing, optional
     parameters -- each unused by the other commands -- included here
-    only so tests can override the real file reader/media player
-    exactly as ``test_files.py``/``test_music.py`` already do, without
-    this module inventing a second way to do so. Omitting
+    only so tests can override the real file reader/media player/
+    memory store exactly as ``test_files.py``/``test_music.py`` already
+    do, without this module inventing a second way to do so. Omitting
     ``media_player`` here specifically would mean any test resolving a
     *granted* music command reaches a real, currently-running MPRIS
     player over the session D-Bus -- a real mistake caught during this
-    work package's own test-writing, not a hypothetical one.
+    work package's own test-writing, not a hypothetical one. The same
+    reasoning applies to ``embedding_port``: a granted memory write
+    with no override reaches a real ``FastEmbedAdapter``, triggering a
+    real model download on first use (WP-61/62).
 
     Returns the text to speak back: a file's content on a granted
     read, otherwise a short granted/denied description.
@@ -236,6 +252,18 @@ def _authorize_and_execute(  # noqa: PLR0913 -- one per composition-function pas
             return outcome.content.value
         return _describe(outcome.decision)
 
+    if resolved.capability_id == MEMORY_WRITE_CAPABILITY_ID:
+        text = str(resolved.arguments.value["text"])
+        write_outcome = authorize_and_remember(
+            text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+        )
+        return _describe(write_outcome.decision)
+
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(
         music_command,
@@ -260,6 +288,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
     allowed_root: Path | None,
     file_system: FileSystemPort | None,
     media_player: MediaPlayerPort | None,
+    database_path: Path | None,
+    embedding_port: EmbeddingPort | None,
 ) -> None:
     """Transcribe, resolve, confirm, and authorize+execute one VAD-confirmed speech segment."""
     transcript = await stt.transcribe(segment)
@@ -290,6 +320,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         allowed_root=allowed_root,
         file_system=file_system,
         media_player=media_player,
+        database_path=database_path,
+        embedding_port=embedding_port,
     )
     await _speak(tts, play_fn, response_text)
 
@@ -308,6 +340,8 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
     allowed_root: Path | None = None,
     file_system: FileSystemPort | None = None,
     media_player: MediaPlayerPort | None = None,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
 ) -> None:
     """Run the voice pipeline until ``wake_word``'s stream ends (never, for the real adapter).
 
@@ -346,6 +380,16 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
             Overridable for tests -- important to override, in fact:
             a granted music command with no override reaches a real,
             currently-running media player.
+        database_path: Pass-through to ``authorize_and_remember``'s own
+            existing parameter of the same name, for a resolved
+            "remember" command. Defaults to that function's own
+            default. Overridable for tests.
+        embedding_port: Pass-through to ``authorize_and_remember``'s
+            own existing parameter of the same name. Defaults to that
+            function's own default (a real ``FastEmbedAdapter``).
+            Overridable for tests -- important to override, in fact: a
+            granted memory write with no override triggers a real
+            model download on first use.
     """
     wake_word = wake_word or OpenWakeWordAdapter()
     vad = vad or SileroVadAdapter()
@@ -369,4 +413,6 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
                 allowed_root=allowed_root,
                 file_system=file_system,
                 media_player=media_player,
+                database_path=database_path,
+                embedding_port=embedding_port,
             )
