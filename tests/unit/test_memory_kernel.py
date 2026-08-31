@@ -1,4 +1,4 @@
-"""Unit tests for jarvis.kernel.memory.authorize_and_remember/authorize_and_recall.
+"""Unit tests for jarvis.kernel.memory's real, invocable memory capabilities.
 
 A fake, deterministic EmbeddingPort stands in for the real
 FastEmbedAdapter, exactly as tests/unit/adapters/test_memory.py
@@ -12,8 +12,11 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import pytest
+
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
-from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
+from jarvis.kernel.memory import authorize_and_pin, authorize_and_recall, authorize_and_remember
+from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -199,3 +202,123 @@ def test_a_granted_write_sweeps_a_previously_expired_record_from_real_storage(
     finally:
         connection.close()
     assert rows == [("new fact",)]
+
+
+def test_granted_pin_keeps_the_record_past_its_original_expiry(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+    write_outcome = authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    pin_decision = authorize_and_pin(
+        write_outcome.identifier,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert pin_decision.granted is True
+
+    clock.set_now(_NOW + timedelta(days=36500))
+    recall = authorize_and_recall(
+        "prefers tabs",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert len(recall.records) == 1
+    assert recall.records[0].expires_at is None
+
+
+def test_denied_pin_never_reaches_the_store(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+    write_outcome = authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    pin_decision = authorize_and_pin(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert pin_decision.granted is False
+
+    clock.set_now(_NOW + timedelta(days=91))
+    recall = authorize_and_recall(
+        "prefers tabs",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+    assert recall.records == ()
+
+
+def test_granted_pin_of_an_unknown_identifier_raises(tmp_path: Path) -> None:
+    with pytest.raises(MemoryRecordNotFoundError):
+        authorize_and_pin(
+            "mem:does-not-exist",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+        )
+
+
+def test_pin_still_appends_a_verifiable_audit_record_even_when_denied(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+
+    authorize_and_pin(
+        "mem:1",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == _GRANTED_CALLS
+    assert chain.verify().valid is True

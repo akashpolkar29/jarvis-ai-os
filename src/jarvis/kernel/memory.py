@@ -28,18 +28,22 @@ ordinary ``authorize_by_id()`` path, exactly like ``ping``/
 ``fs.read_file``/``git.status``.
 
 **Real, deliberate scope boundary, matching this project's own M3
-precedent**: like ``docker.*``/``git.*``, neither capability is wired
-into ``jarvis.cli.main``'s argparse subcommands or
-``jarvis.kernel.intent``'s voice grammar for *recall* -- a real,
-tested composition function is "invocable" in the same sense Docker/
-Git's own kernel functions already are, without every capability
-needing a CLI flag or a voice phrase. ``memory.write`` is the one
-exception: ADR-0053 explicitly names the ``kernel/voice_loop.py``
-dispatch branch a granted memory write needs for its own spoken
-confirmation as real, necessary work for this work package -- see
-``kernel/voice_loop.py``'s own docstring for that wiring, and
-``kernel/intent.py``'s "remember " keyword, added alongside it,
-mirroring "read "'s exact existing shape.
+precedent**: neither capability is wired into ``jarvis.kernel.intent``'s
+voice grammar for *recall* -- a real, tested composition function is
+"invocable" without every capability needing a voice phrase.
+``memory.write`` is the one exception: ADR-0053 explicitly names the
+``kernel/voice_loop.py`` dispatch branch a granted memory write needs
+for its own spoken confirmation as real, necessary work for this work
+package -- see ``kernel/voice_loop.py``'s own docstring for that
+wiring, and ``kernel/intent.py``'s "remember " keyword, added
+alongside it, mirroring "read "'s exact existing shape.
+
+**``memory.pin`` (added in the M4-gap-closure pass) is also a static,
+fixed-effect capability** (``Effect.WRITE_LOCAL``, ``Tier.CONFIRM``),
+authorized via the same ``authorize_by_id()`` path as
+``memory.retrieve`` -- see :func:`authorize_and_pin`'s own docstring
+for why the dynamic ``MemoryWriteAuthorizer`` path does not apply to
+pinning an existing record by identifier.
 """
 
 from __future__ import annotations
@@ -57,7 +61,11 @@ from jarvis.adapters.memory import SqliteMemoryAdapter
 from jarvis.application.memory.writer import MemoryWriteAuthorizer
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
-from jarvis.kernel.capabilities import MEMORY_RETRIEVE_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.capabilities import (
+    MEMORY_PIN_CAPABILITY_ID,
+    MEMORY_RETRIEVE_CAPABILITY_ID,
+    build_default_registry,
+)
 
 if TYPE_CHECKING:
     from jarvis.domain.memory import MemoryRecord
@@ -284,3 +292,86 @@ def authorize_and_recall(  # noqa: PLR0913 -- one per composition-function pass-
         storage.save(chain)
 
     return MemoryRecallOutcome(decision=decision, records=records)
+
+
+def authorize_and_pin(  # noqa: PLR0913 -- one per composition-function pass-through
+    identifier: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize pinning ``identifier``, and pin it only if granted.
+
+    ``memory.pin`` (``Effect.WRITE_LOCAL``, ``Tier.CONFIRM`` -- see
+    ``kernel/capabilities.py``) is a static, fixed-effect capability,
+    the same shape as ``memory.retrieve``: unlike ``memory.write``,
+    pinning an existing record by identifier carries no per-invocation
+    content whose classification could vary the required effect
+    (ADR-0049 only governs *writing new content*), so the dynamic
+    ``MemoryWriteAuthorizer`` path ``authorize_and_remember`` uses does
+    not apply here -- the ordinary ``authorize_by_id()`` path
+    ``authorize_and_recall``/``authorize_and_read_file`` already
+    establish is the correct mirror instead. Returns the bare
+    ``Decision`` directly, matching ``authorize_ping``'s own shape:
+    a pin has no further output data worth wrapping in its own
+    outcome dataclass, unlike ``authorize_and_remember``'s identifier
+    or ``authorize_and_recall``'s records.
+
+    Args:
+        identifier: The real, existing record's identifier to pin.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Defaults to
+            ``_DEFAULT_MEMORY_DB_PATH``. Overridable for tests.
+        embedding_port: Defaults to a real ``FastEmbedAdapter``.
+            Overridable for tests -- unused by a pin, threaded through
+            only so ``_memory_adapter`` stays one shared helper.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by a pin.
+
+    Returns:
+        The real ``Decision`` for this pin call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
+
+    Raises:
+        MemoryRecordNotFoundError: If ``identifier`` does not match a
+            real, currently-stored record and the pin was granted.
+            Never raised for a denied pin -- the store is never
+            touched (matching ``authorize_and_remember``'s own
+            "denied write never reaches the store" convention).
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_PIN_CAPABILITY_ID,
+        Tainted({"identifier": identifier}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.pin(identifier)
+    finally:
+        storage.save(chain)
+
+    return decision

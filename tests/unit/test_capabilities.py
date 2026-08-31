@@ -17,6 +17,7 @@ from jarvis.kernel.capabilities import (
     GIT_FORCE_PUSH_CAPABILITY_ID,
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
+    MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
@@ -28,7 +29,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 21
+_EXPECTED_CAPABILITY_COUNT = 22
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -69,6 +70,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         GIT_PUSH_CAPABILITY_ID,
         GIT_FORCE_PUSH_CAPABILITY_ID,
         MEMORY_RETRIEVE_CAPABILITY_ID,
+        MEMORY_PIN_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -232,6 +234,15 @@ def test_memory_retrieve_has_read_local_effects() -> None:
     descriptor = registry.get(MEMORY_RETRIEVE_CAPABILITY_ID)
     assert descriptor.effects == Effect.READ_LOCAL
     assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_memory_pin_has_write_local_effects() -> None:
+    """memory.pin is registered with Effect.WRITE_LOCAL -- Tier.CONFIRM, not dynamic."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_PIN_CAPABILITY_ID)
+    assert descriptor.effects == Effect.WRITE_LOCAL
+    assert descriptor.required_tier == Tier.CONFIRM
 
 
 def test_every_descriptor_has_a_non_empty_description() -> None:

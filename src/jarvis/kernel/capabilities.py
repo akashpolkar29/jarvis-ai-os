@@ -62,6 +62,7 @@ GIT_COMMIT_CAPABILITY_ID = CapabilityId("git.commit")
 GIT_PUSH_CAPABILITY_ID = CapabilityId("git.push")
 GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
+MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -261,6 +262,16 @@ def build_default_registry() -> CapabilityRegistry:
             id=MEMORY_RETRIEVE_CAPABILITY_ID,
             effects=Effect.READ_LOCAL,
             description="Search previously-memorized content. The bare act of querying only.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_PIN_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description=(
+                "Mark a memorized record as pinned -- retained indefinitely, "
+                "never expires automatically (ADR-0051)."
+            ),
         )
     )
     # memory.write (application/memory/writer.py's MEMORY_WRITE_CAPABILITY_ID) is
