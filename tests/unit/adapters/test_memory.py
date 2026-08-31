@@ -233,6 +233,46 @@ def test_sweep_expired_only_deletes_expired_records_leaving_others_intact(
     assert _raw_row_count(database_path) == 1
 
 
+def test_forget_deletes_the_record_from_real_storage(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    identifier = adapter.write(_value("tabs"))
+
+    adapter.forget(identifier)
+
+    assert _raw_row_count(database_path) == 0
+
+
+def test_forget_raises_for_an_unknown_identifier() -> None:
+    adapter = _adapter()
+
+    with pytest.raises(MemoryRecordNotFoundError):
+        adapter.forget("mem:does-not-exist")
+
+
+def test_forget_deletes_a_pinned_record_too(tmp_path: Path) -> None:
+    """Pinning protects against automatic TTL expiry, not an explicit, targeted forget."""
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    identifier = adapter.write(_value("tabs"))
+    adapter.pin(identifier)
+
+    adapter.forget(identifier)
+
+    assert _raw_row_count(database_path) == 0
+
+
+def test_forget_leaves_other_records_intact(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    forgotten = adapter.write(_value("tabs"))
+    adapter.write(_value("rust"))
+
+    adapter.forget(forgotten)
+
+    assert _raw_row_count(database_path) == 1
+
+
 def test_expired_unpinned_record_is_not_returned() -> None:
     clock = _FakeClock(_NOW)
     adapter = _adapter(clock)

@@ -96,3 +96,19 @@ class MemoryWritePort(Protocol):
             was expired -- not an error.
         """
         ...
+
+    def forget(self, identifier: str) -> None:
+        """Permanently delete the record at ``identifier`` from the real store.
+
+        A real deletion, not marking-for-expiry: once this returns,
+        the record is gone and unreachable by any later
+        ``RetrievalPort.retrieve()`` call, the same bar
+        :meth:`sweep_expired` holds itself to. Deletes a pinned record
+        too -- pinning protects against *automatic* TTL expiry
+        (ADR-0051), not against an explicit, directly-targeted forget.
+
+        Raises:
+            MemoryRecordNotFoundError: If ``identifier`` does not
+                match a real, currently-stored record.
+        """
+        ...

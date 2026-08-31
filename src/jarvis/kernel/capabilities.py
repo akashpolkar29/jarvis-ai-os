@@ -63,6 +63,7 @@ GIT_PUSH_CAPABILITY_ID = CapabilityId("git.push")
 GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
 MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
+MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -271,6 +272,17 @@ def build_default_registry() -> CapabilityRegistry:
             description=(
                 "Mark a memorized record as pinned -- retained indefinitely, "
                 "never expires automatically (ADR-0051)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_FORGET_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.IRREVERSIBLE,
+            description=(
+                "Permanently delete a memorized record by identifier. No undo -- "
+                "once gone, the same 'no built-in recovery' finality as "
+                "git.force_push -- always MANUAL_ONLY."
             ),
         )
     )

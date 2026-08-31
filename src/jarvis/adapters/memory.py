@@ -181,6 +181,22 @@ class SqliteMemoryAdapter:
         self._connection.commit()
         return cursor.rowcount
 
+    def forget(self, identifier: str) -> None:
+        """Permanently delete the row at ``identifier`` from the real SQLite file.
+
+        Raises:
+            MemoryRecordNotFoundError: If ``identifier`` matches no
+                real, currently-stored record.
+        """
+        cursor = self._connection.execute(
+            "DELETE FROM memory_records WHERE identifier = ?",
+            (identifier,),
+        )
+        self._connection.commit()
+        if cursor.rowcount == 0:
+            msg = f"No memory record found with identifier {identifier!r}."
+            raise MemoryRecordNotFoundError(msg)
+
     def retrieve(self, query: str, *, limit: int) -> tuple[MemoryRecord, ...]:
         """Return up to ``limit`` real records ranked by cosine similarity to ``query``.
 

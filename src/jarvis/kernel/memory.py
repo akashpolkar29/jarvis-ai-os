@@ -38,12 +38,15 @@ package -- see ``kernel/voice_loop.py``'s own docstring for that
 wiring, and ``kernel/intent.py``'s "remember " keyword, added
 alongside it, mirroring "read "'s exact existing shape.
 
-**``memory.pin`` (added in the M4-gap-closure pass) is also a static,
-fixed-effect capability** (``Effect.WRITE_LOCAL``, ``Tier.CONFIRM``),
-authorized via the same ``authorize_by_id()`` path as
-``memory.retrieve`` -- see :func:`authorize_and_pin`'s own docstring
-for why the dynamic ``MemoryWriteAuthorizer`` path does not apply to
-pinning an existing record by identifier.
+**``memory.pin`` and ``memory.forget`` (both added in the M4-gap-closure
+pass) are likewise static, fixed-effect capabilities**, authorized via
+the same ``authorize_by_id()`` path as ``memory.retrieve`` -- see
+:func:`authorize_and_pin`'s and :func:`authorize_and_forget`'s own
+docstrings for why the dynamic ``MemoryWriteAuthorizer`` path does not
+apply to acting on an existing record by identifier. ``memory.forget``
+declares ``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`` (``Tier.MANUAL_ONLY``)
+-- a real, unrecoverable deletion, the same effect combination
+``git.force_push`` uses for the same "no built-in undo" reason.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from jarvis.application.memory.writer import MemoryWriteAuthorizer
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
+    MEMORY_FORGET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     build_default_registry,
@@ -371,6 +375,88 @@ def authorize_and_pin(  # noqa: PLR0913 -- one per composition-function pass-thr
         if decision.granted:
             adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
             adapter.pin(identifier)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_forget(  # noqa: PLR0913 -- one per composition-function pass-through
+    identifier: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize forgetting ``identifier``, and delete it only if granted.
+
+    ``memory.forget`` (``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``,
+    ``Tier.MANUAL_ONLY`` -- see ``kernel/capabilities.py``) is a
+    static, fixed-effect capability, the same authorization shape as
+    :func:`authorize_and_pin` (an identifier carries no classifiable
+    content of its own, so the dynamic ``MemoryWriteAuthorizer`` path
+    does not apply) -- only the required tier differs, following
+    directly from the effects this project's own taxonomy already
+    assigns to an unrecoverable deletion (the same ``DESTRUCTIVE |
+    IRREVERSIBLE`` combination ``git.force_push`` uses, for the same
+    "no built-in undo" reason).
+
+    Args:
+        identifier: The real, existing record's identifier to forget.
+        physical_confirmation_available: Whether a human is physically
+            present -- the only way a ``MANUAL_ONLY`` capability can
+            ever be granted (``evaluate()``'s own rule; remote
+            confirmation, even if available, never satisfies this
+            tier).
+        remote_confirmation_available: As above, threaded through for
+            consistency though it cannot grant this capability alone.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Defaults to
+            ``_DEFAULT_MEMORY_DB_PATH``. Overridable for tests.
+        embedding_port: Defaults to a real ``FastEmbedAdapter``.
+            Overridable for tests -- unused by a forget, threaded
+            through only so ``_memory_adapter`` stays one shared
+            helper.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by a forget.
+
+    Returns:
+        The real ``Decision`` for this forget call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
+
+    Raises:
+        MemoryRecordNotFoundError: If ``identifier`` does not match a
+            real, currently-stored record and the forget was granted.
+            Never raised for a denied forget -- the store is never
+            touched.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_FORGET_CAPABILITY_ID,
+        Tainted({"identifier": identifier}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.forget(identifier)
     finally:
         storage.save(chain)
 

@@ -17,6 +17,7 @@ from jarvis.kernel.capabilities import (
     GIT_FORCE_PUSH_CAPABILITY_ID,
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
+    MEMORY_FORGET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
@@ -29,7 +30,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 22
+_EXPECTED_CAPABILITY_COUNT = 23
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -71,6 +72,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         GIT_FORCE_PUSH_CAPABILITY_ID,
         MEMORY_RETRIEVE_CAPABILITY_ID,
         MEMORY_PIN_CAPABILITY_ID,
+        MEMORY_FORGET_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -243,6 +245,15 @@ def test_memory_pin_has_write_local_effects() -> None:
     descriptor = registry.get(MEMORY_PIN_CAPABILITY_ID)
     assert descriptor.effects == Effect.WRITE_LOCAL
     assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_memory_forget_has_destructive_and_irreversible_effects() -> None:
+    """memory.forget is DESTRUCTIVE | IRREVERSIBLE -- Tier.MANUAL_ONLY, same as git.force_push."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_FORGET_CAPABILITY_ID)
+    assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
 
 
 def test_every_descriptor_has_a_non_empty_description() -> None:

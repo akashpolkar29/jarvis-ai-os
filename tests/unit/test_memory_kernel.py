@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
-from jarvis.kernel.memory import authorize_and_pin, authorize_and_recall, authorize_and_remember
+from jarvis.kernel.memory import (
+    authorize_and_forget,
+    authorize_and_pin,
+    authorize_and_recall,
+    authorize_and_remember,
+)
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
 if TYPE_CHECKING:
@@ -322,3 +327,100 @@ def test_pin_still_appends_a_verifiable_audit_record_even_when_denied(tmp_path: 
     chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert len(chain) == _GRANTED_CALLS
     assert chain.verify().valid is True
+
+
+def test_granted_forget_permanently_deletes_the_record(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    forget_decision = authorize_and_forget(
+        write_outcome.identifier,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert forget_decision.granted is True
+
+    recall = authorize_and_recall(
+        "prefers tabs",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert recall.records == ()
+
+
+def test_forget_is_denied_without_physical_confirmation(tmp_path: Path) -> None:
+    """memory.forget is MANUAL_ONLY -- remote confirmation alone can never grant it."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    forget_decision = authorize_and_forget(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert forget_decision.granted is False
+
+    recall = authorize_and_recall(
+        "prefers tabs",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert len(recall.records) == 1
+
+
+def test_granted_forget_of_an_unknown_identifier_raises(tmp_path: Path) -> None:
+    with pytest.raises(MemoryRecordNotFoundError):
+        authorize_and_forget(
+            "mem:does-not-exist",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+        )
