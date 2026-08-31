@@ -30,12 +30,14 @@ import json
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.cli.main import main
 from jarvis.domain.capability import (
@@ -45,11 +47,14 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.media_player import NoMediaPlayerRunningError
+from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
 if TYPE_CHECKING:
     from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
@@ -546,3 +551,285 @@ def test_listen_verbose_emits_the_wake_word_score_diagnostic_line(
         main(["listen", "--verbose", "--chain-path", str(tmp_path / "audit_chain.json")])
 
     assert "score=0.7965" in caplog.text
+
+
+def _make_memory_record(identifier: str = "mem:1", text: str = "prefers tabs") -> MemoryRecord:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    return MemoryRecord(
+        identifier=identifier,
+        value=Tainted(text, Provenance.user()),
+        written_at=now,
+        expires_at=now,
+    )
+
+
+def test_memory_write_subcommand_routes_the_given_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`jarvis memory write <text>` calls authorize_and_remember with that text."""
+    received: list[str] = []
+
+    def fake_authorize_and_remember(
+        text: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        received.append(text)
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return MemoryWriteOutcome(decision=decision, identifier="mem:1")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_remember", fake_authorize_and_remember
+    )
+
+    exit_code = main(
+        ["memory", "write", "prefers tabs", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == ["prefers tabs"]
+    assert exit_code == 0
+
+
+def test_memory_write_subcommand_prints_the_command_label_and_identifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_remember(
+        text: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return MemoryWriteOutcome(decision=decision, identifier="mem:42")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_remember", fake_authorize_and_remember
+    )
+
+    exit_code = main(
+        ["memory", "write", "prefers tabs", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "memory write: GRANTED" in captured.out
+    assert "identifier: mem:42" in captured.out
+    assert exit_code == 0
+
+
+def test_memory_write_subcommand_reports_unsupported_value_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UnsupportedMemoryValueError from the kernel surfaces as a clean message, not a traceback."""
+
+    def fake_authorize_and_remember(
+        text: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        msg = "SqliteMemoryAdapter only persists str-valued memories."
+        raise UnsupportedMemoryValueError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_remember", fake_authorize_and_remember
+    )
+
+    exit_code = main(
+        ["memory", "write", "prefers tabs", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+
+
+def test_memory_retrieve_subcommand_routes_query_and_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[str, int]] = []
+
+    def fake_authorize_and_recall(
+        query: str,
+        *,
+        limit: int,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryRecallOutcome:
+        received.append((query, limit))
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return MemoryRecallOutcome(decision=decision, records=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_recall", fake_authorize_and_recall
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "retrieve",
+            "tabs",
+            "--limit",
+            "3",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [("tabs", 3)]
+    assert exit_code == 0
+
+
+def test_memory_retrieve_subcommand_prints_each_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_recall(
+        query: str,  # noqa: ARG001
+        *,
+        limit: int,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryRecallOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return MemoryRecallOutcome(
+            decision=decision, records=(_make_memory_record("mem:7", "prefers tabs"),)
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_recall", fake_authorize_and_recall
+    )
+
+    exit_code = main(
+        ["memory", "retrieve", "tabs", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "memory retrieve: GRANTED" in captured.out
+    assert "mem:7: prefers tabs" in captured.out
+    assert exit_code == 0
+
+
+def test_memory_forget_subcommand_routes_the_given_identifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_forget(
+        identifier: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(identifier)
+        return _make_decision(granted=True, capability_id="memory.forget")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_forget", fake_authorize_and_forget
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "forget",
+            "mem:1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["mem:1"]
+    assert exit_code == 0
+
+
+def test_memory_forget_subcommand_reports_record_not_found_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_forget(
+        identifier: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "No memory record found with identifier 'mem:does-not-exist'."
+        raise MemoryRecordNotFoundError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_forget", fake_authorize_and_forget
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "forget",
+            "mem:does-not-exist",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "No memory record found" in captured.err
+
+
+def test_memory_pin_subcommand_routes_the_given_identifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_pin(
+        identifier: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(identifier)
+        return _make_decision(granted=True, capability_id="memory.pin")
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "authorize_and_pin", fake_authorize_and_pin)
+
+    exit_code = main(
+        [
+            "memory",
+            "pin",
+            "mem:1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["mem:1"]
+    assert exit_code == 0
+
+
+def test_memory_pin_subcommand_prints_the_command_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_pin(
+        identifier: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False, capability_id="memory.pin")
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "authorize_and_pin", fake_authorize_and_pin)
+
+    exit_code = main(["memory", "pin", "mem:1", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "memory pin: DENIED" in captured.out
+    assert exit_code == 1

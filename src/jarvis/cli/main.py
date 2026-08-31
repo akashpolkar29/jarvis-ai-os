@@ -1,12 +1,32 @@
 """The CLI's argument parsing and result formatting -- no business logic.
 
 :func:`main` parses argv into a subcommand (``ping``, ``play``,
-``pause``, ``next``, ``previous``, ``read``, ``listen``) and the
-confirmation/chain-path flags most subcommands share, calls the
-matching ``jarvis.kernel`` composition function, and formats the
-returned ``Decision`` (and, for ``read``, the file content) for a
-terminal. It decides nothing about policy or capabilities itself --
-that is exactly the line this ring's own docstring draws.
+``pause``, ``next``, ``previous``, ``read``, ``memory``, ``listen``)
+and the confirmation/chain-path flags most subcommands share, calls
+the matching ``jarvis.kernel`` composition function, and formats the
+returned ``Decision`` (and, for ``read``/``memory retrieve``, the
+recalled content) for a terminal. It decides nothing about policy or
+capabilities itself -- that is exactly the line this ring's own
+docstring draws.
+
+``memory`` (M4-gap-closure pass) has its own nested subcommands --
+``write``/``retrieve``/``forget``/``pin`` -- each a thin wrapper
+around the matching ``jarvis.kernel.memory.authorize_and_*``
+function, mirroring this module's own existing ``ping``/``read``
+shape (parse, authorize, act only if granted, print the ``Decision``).
+**Real, deliberate correction to a claim this module's own history
+once made**: an earlier pass's docstring described "no CLI wiring for
+memory" as "mirroring M3's own ``docker.*``/``git.*`` precedent" --
+that was a misreading. Docker/Git's own kernel functions
+(``kernel/desktop.py``) were never wired into this module either, but
+not as a template meant to be replicated: nothing in this file's own
+history establishes a real "capabilities deliberately get no CLI"
+convention to mirror. The actual, only precedent this file has ever
+had for "what a CLI wrapper around a capability looks like" is
+``ping``/``play``/``pause``/``next``/``previous``/``read`` themselves
+-- ``memory``'s subcommands follow that shape instead. Docker/Git
+remain unwired for now, unrelated to this correction and out of this
+pass's own named scope.
 
 ``listen`` (WP-26) is the one subcommand that does not fit that
 shape: it runs ``jarvis.kernel.voice_loop.run_voice_loop`` as a
@@ -47,17 +67,28 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
+from jarvis.kernel.memory import (
+    authorize_and_forget,
+    authorize_and_pin,
+    authorize_and_recall,
+    authorize_and_remember,
+)
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
+from jarvis.ports.memory_write import MemoryRecordNotFoundError
+from jarvis.ports.retrieval import MemoryIntegrityViolationError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from jarvis.domain.memory import MemoryRecord
+    from jarvis.domain.policy import Decision
     from jarvis.domain.provenance import Tainted
 
 _DEFAULT_CHAIN_PATH = Path("audit_chain.json")
@@ -113,6 +144,34 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     read_parser.add_argument("path", type=Path, help="The file to read.")
     _add_common_flags(read_parser)
+
+    memory_parser = subparsers.add_parser("memory", help="Memory-related commands.")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+
+    memory_write_parser = memory_subparsers.add_parser("write", help="Memorize a piece of text.")
+    memory_write_parser.add_argument("text", help="The text to memorize.")
+    _add_common_flags(memory_write_parser)
+
+    memory_retrieve_parser = memory_subparsers.add_parser(
+        "retrieve", help="Search previously-memorized content."
+    )
+    memory_retrieve_parser.add_argument("query", help="The search text.")
+    memory_retrieve_parser.add_argument(
+        "--limit", type=int, default=5, help="Maximum records to return (default: 5)."
+    )
+    _add_common_flags(memory_retrieve_parser)
+
+    memory_forget_parser = memory_subparsers.add_parser(
+        "forget", help="Permanently delete a memorized record by identifier."
+    )
+    memory_forget_parser.add_argument("identifier", help="The record's identifier.")
+    _add_common_flags(memory_forget_parser)
+
+    memory_pin_parser = memory_subparsers.add_parser(
+        "pin", help="Mark a memorized record as pinned -- never expires automatically."
+    )
+    memory_pin_parser.add_argument("identifier", help="The record's identifier.")
+    _add_common_flags(memory_pin_parser)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -183,6 +242,53 @@ def _run_listen(chain_path: Path, *, verbose: bool) -> int:
     return 0
 
 
+def _run_memory_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, str | None, tuple[MemoryRecord, ...] | None]:
+    """Dispatch one ``memory`` subcommand, returning (decision, identifier, records).
+
+    Split out from :func:`main` purely to keep its own branch count
+    down -- one more subcommand family here would otherwise push
+    ``main`` past ruff's ``PLR0912`` threshold. Each branch is a thin
+    wrapper calling the matching ``jarvis.kernel.memory.authorize_and_*``
+    function, exactly mirroring ``main``'s own ``ping``/``read``
+    shape one level down.
+    """
+    if args.memory_command == "write":
+        write_outcome = authorize_and_remember(
+            args.text,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return write_outcome.decision, write_outcome.identifier, None
+    if args.memory_command == "retrieve":
+        recall_outcome = authorize_and_recall(
+            args.query,
+            limit=args.limit,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return recall_outcome.decision, None, recall_outcome.records
+    if args.memory_command == "forget":
+        decision = authorize_and_forget(
+            args.identifier,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return decision, None, None
+
+    decision = authorize_and_pin(
+        args.identifier,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return decision, None, None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse argv, authorize (and maybe run) the requested command, print the outcome.
 
@@ -200,6 +306,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_listen(args.chain_path, verbose=args.verbose)
 
     content: Tainted[str] | None = None
+    memory_identifier: str | None = None
+    memory_records: tuple[MemoryRecord, ...] | None = None
+    command_label = args.command
 
     try:
         if args.command == "ping":
@@ -217,6 +326,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             decision = outcome.decision
             content = outcome.content
+        elif args.command == "memory":
+            command_label = f"memory {args.memory_command}"
+            decision, memory_identifier, memory_records = _run_memory_subcommand(args)
         else:
             decision = authorize_and_run_music_command(
                 MUSIC_COMMAND_NAMES[args.command],
@@ -229,6 +341,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         NoMediaPlayerRunningError,
         MediaPlayerCommandFailedError,
         PathOutsideAllowedScopeError,
+        MemoryRecordNotFoundError,
+        UnsupportedMemoryValueError,
+        MemoryIntegrityViolationError,
         OSError,
         UnicodeDecodeError,
         KeyError,
@@ -238,7 +353,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     status = "GRANTED" if decision.granted else "DENIED"
-    print(f"{args.command}: {status} (tier={decision.tier.name}, reasons={decision.reasons})")
+    print(f"{command_label}: {status} (tier={decision.tier.name}, reasons={decision.reasons})")
     if content is not None:
         print(content.value)
+    if memory_identifier is not None:
+        print(f"identifier: {memory_identifier}")
+    if memory_records is not None:
+        for record in memory_records:
+            print(f"{record.identifier}: {record.value.value}")
     return 0 if decision.granted else 1
