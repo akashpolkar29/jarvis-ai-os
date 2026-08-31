@@ -32,6 +32,9 @@ class _FakeMemoryWriteAdapter:
     def pin(self, identifier: str) -> None:
         pass
 
+    def sweep_expired(self) -> int:
+        return 0
+
 
 class _FakeEmbeddingPort:
     def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
@@ -62,10 +65,10 @@ def test_sqlite_memory_adapter_satisfies_memory_write_port() -> None:
     assert isinstance(adapter, MemoryWritePort)
 
 
-def test_an_object_missing_the_two_methods_does_not_satisfy_memory_write_port() -> None:
+def test_an_object_missing_the_required_methods_does_not_satisfy_memory_write_port() -> None:
     """The isinstance check is meaningful: it actually rejects non-conforming objects."""
 
     class NotAMemoryWriteSource:
-        """Deliberately lacks write()/pin()."""
+        """Deliberately lacks write()/pin()/sweep_expired()."""
 
     assert isinstance(NotAMemoryWriteSource(), MemoryWritePort) is False

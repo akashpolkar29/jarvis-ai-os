@@ -152,6 +152,12 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
 
     Returns:
         A ``MemoryWriteOutcome`` -- see its own docstring.
+
+    Real trigger for ADR-0051's own owed sweep (closed here): every
+    granted write first calls ``adapter.sweep_expired()`` before
+    persisting the new value -- the simplest real hook this codebase
+    already calls on every write, not a new background scheduler this
+    milestone never asked for.
     """
     resolved_clock = clock or SystemClockAdapter()
     value: Tainted[object] = Tainted(text, Provenance.user())
@@ -174,6 +180,7 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
     try:
         if decision.granted:
             adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.sweep_expired()
             identifier = adapter.write(value)
     finally:
         storage.save(chain)

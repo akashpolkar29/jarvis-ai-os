@@ -78,3 +78,21 @@ class MemoryWritePort(Protocol):
                 match a real, currently-stored record.
         """
         ...
+
+    def sweep_expired(self) -> int:
+        """Permanently delete every expired, unpinned record from the real store.
+
+        ADR-0051 names this real sweep as separate, owed work beyond
+        ``RetrievalPort.retrieve()``'s own query-time exclusion (WP-60):
+        an expired record excluded from queries but never actually
+        deleted still occupies real disk space forever. This method is
+        that missing deletion -- a pinned record (``expires_at is
+        None``) is never eligible, matching
+        :meth:`~jarvis.domain.memory.MemoryRecord.is_expired`'s own
+        rule exactly.
+
+        Returns:
+            The number of records actually deleted. ``0`` if nothing
+            was expired -- not an error.
+        """
+        ...

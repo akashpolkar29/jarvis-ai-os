@@ -9,8 +9,9 @@ network/hardware-dependent adapters.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
@@ -18,6 +19,9 @@ from jarvis.adapters.memory import SqliteMemoryAdapter, UnsupportedMemoryValueEr
 from jarvis.domain.provenance import Classification, Provenance, Tainted, Trust
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -60,6 +64,29 @@ def _adapter(clock: _FakeClock | None = None) -> SqliteMemoryAdapter:
     return SqliteMemoryAdapter(
         ":memory:", _FakeEmbeddingPort(), clock or _FakeClock(_NOW), _SequentialIdPort()
     )
+
+
+def _file_adapter(database_path: Path, clock: _FakeClock | None = None) -> SqliteMemoryAdapter:
+    """A real, file-backed adapter -- needed to inspect raw storage via a second connection.
+
+    ``:memory:`` databases are private to their own connection, so
+    ``sweep_expired()``'s own "actually gone from storage, not just
+    excluded from queries" guarantee can only be checked from outside
+    the adapter by opening a second, real connection to a real file.
+    """
+    return SqliteMemoryAdapter(
+        str(database_path), _FakeEmbeddingPort(), clock or _FakeClock(_NOW), _SequentialIdPort()
+    )
+
+
+def _raw_row_count(database_path: Path) -> int:
+    """Query the real underlying table directly, bypassing the adapter entirely."""
+    connection = sqlite3.connect(database_path)
+    try:
+        (count,) = connection.execute("SELECT COUNT(*) FROM memory_records").fetchone()
+        return int(count)
+    finally:
+        connection.close()
 
 
 def _value(text: str, classification: Classification = Classification.PUBLIC) -> Tainted[object]:
@@ -142,6 +169,68 @@ def test_pin_raises_for_an_unknown_identifier() -> None:
 
     with pytest.raises(MemoryRecordNotFoundError):
         adapter.pin("mem:does-not-exist")
+
+
+def test_sweep_expired_deletes_an_expired_unpinned_record_from_real_storage(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+    adapter = _file_adapter(database_path, clock)
+    adapter.write(_value("tabs"))
+
+    clock.set_now(_NOW + timedelta(days=91))
+    deleted = adapter.sweep_expired()
+
+    assert deleted == 1
+    assert _raw_row_count(database_path) == 0
+
+
+def test_sweep_expired_leaves_a_pinned_record_in_real_storage(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+    adapter = _file_adapter(database_path, clock)
+    identifier = adapter.write(_value("tabs"))
+    adapter.pin(identifier)
+
+    clock.set_now(_NOW + timedelta(days=36500))
+    deleted = adapter.sweep_expired()
+
+    assert deleted == 0
+    assert _raw_row_count(database_path) == 1
+
+
+def test_sweep_expired_leaves_an_unexpired_record_in_real_storage(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path, _FakeClock(_NOW))
+    adapter.write(_value("tabs"))
+
+    deleted = adapter.sweep_expired()
+
+    assert deleted == 0
+    assert _raw_row_count(database_path) == 1
+
+
+def test_sweep_expired_returns_zero_when_nothing_is_expired() -> None:
+    adapter = _adapter()
+
+    assert adapter.sweep_expired() == 0
+
+
+def test_sweep_expired_only_deletes_expired_records_leaving_others_intact(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+    adapter = _file_adapter(database_path, clock)
+    adapter.write(_value("tabs"))
+    clock.set_now(_NOW + timedelta(days=91))
+    adapter.write(_value("rust"))
+
+    deleted = adapter.sweep_expired()
+
+    assert deleted == 1
+    assert _raw_row_count(database_path) == 1
 
 
 def test_expired_unpinned_record_is_not_returned() -> None:

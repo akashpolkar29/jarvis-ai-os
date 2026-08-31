@@ -163,6 +163,24 @@ class SqliteMemoryAdapter:
             msg = f"No memory record found with identifier {identifier!r}."
             raise MemoryRecordNotFoundError(msg)
 
+    def sweep_expired(self) -> int:
+        """Permanently delete every expired, unpinned row from the real SQLite file.
+
+        ADR-0051's own real sweep, owed beyond ``exclude_expired_records``'s
+        query-time-only exclusion: a ``NULL`` ``expires_at`` (pinned) is
+        never eligible.
+
+        Returns:
+            The number of rows actually deleted.
+        """
+        now = self._clock.now().isoformat()
+        cursor = self._connection.execute(
+            "DELETE FROM memory_records WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (now,),
+        )
+        self._connection.commit()
+        return cursor.rowcount
+
     def retrieve(self, query: str, *, limit: int) -> tuple[MemoryRecord, ...]:
         """Return up to ``limit`` real records ranked by cosine similarity to ``query``.
 

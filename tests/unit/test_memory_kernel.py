@@ -8,7 +8,8 @@ model download.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _GRANTED_CALLS = 1
+_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _FakeEmbeddingPort:
@@ -28,8 +30,14 @@ class _FakeEmbeddingPort:
 
 
 class _FakeClock:
+    def __init__(self, now: datetime = _NOW) -> None:
+        self._now = now
+
     def now(self) -> datetime:
-        return datetime(2026, 1, 1, tzinfo=UTC)
+        return self._now
+
+    def set_now(self, now: datetime) -> None:
+        self._now = now
 
 
 class _SequentialIdPort:
@@ -152,3 +160,42 @@ def test_recall_is_always_granted_regardless_of_confirmation(tmp_path: Path) -> 
 
     assert recall.decision.granted is True
     assert recall.records == ()
+
+
+def test_a_granted_write_sweeps_a_previously_expired_record_from_real_storage(
+    tmp_path: Path,
+) -> None:
+    """ADR-0051's owed sweep, closed: every granted write also deletes prior expired rows."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    clock = _FakeClock(_NOW)
+
+    authorize_and_remember(
+        "old fact",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+
+    clock.set_now(_NOW + timedelta(days=91))
+    authorize_and_remember(
+        "new fact",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=clock,
+        id_port=_SequentialIdPort(),
+    )
+
+    connection = sqlite3.connect(database_path)
+    try:
+        rows = connection.execute("SELECT text FROM memory_records").fetchall()
+    finally:
+        connection.close()
+    assert rows == [("new fact",)]
