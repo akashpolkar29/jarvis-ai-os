@@ -104,14 +104,74 @@ def test_write_returns_a_new_identifier() -> None:
     assert identifier == "mem:1"
 
 
-def test_write_rejects_a_non_string_value() -> None:
+def _provenance(classification: Classification = Classification.PUBLIC) -> Provenance:
+    return Provenance(trust=Trust.USER_DIRECT, classification=classification, sources=frozenset())
+
+
+def test_write_rejects_a_non_json_serializable_value() -> None:
+    """A value with no real JSON representation (a custom object) is rejected, not silently
+    coerced -- see module docstring for why the boundary is "JSON-serializable", not "str"."""
     adapter = _adapter()
-    provenance = Provenance(
-        trust=Trust.USER_DIRECT, classification=Classification.PUBLIC, sources=frozenset()
-    )
+
+    class _NotJsonSerializable:
+        pass
 
     with pytest.raises(UnsupportedMemoryValueError):
-        adapter.write(Tainted(42, provenance))
+        adapter.write(Tainted(_NotJsonSerializable(), _provenance()))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [42, 3.14, True, False, None, [1, 2, 3], {"key": "value"}],
+    ids=["int", "float", "bool_true", "bool_false", "none", "list", "dict"],
+)
+def test_write_accepts_every_json_serializable_type_and_round_trips_it(value: object) -> None:
+    """Overnight Track 5 pass: JSON-serializable non-str values are now real, supported memories."""
+    adapter = _adapter()
+
+    identifier = adapter.write(Tainted(value, _provenance()))
+    results = adapter.retrieve("anything", limit=5)
+
+    assert len(results) == 1
+    assert results[0].identifier == identifier
+    assert results[0].value.value == value
+    assert type(results[0].value.value) is type(value)
+
+
+def test_a_pre_migration_row_with_no_value_json_still_reads_back_as_its_own_raw_text(
+    tmp_path: Path,
+) -> None:
+    """Real backward compatibility: a row written before value_json existed (simulated here by
+    inserting directly, bypassing the adapter) is still read back correctly, not corrupted."""
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    # Force the migration to have already run, then simulate a legacy row by
+    # inserting directly with value_json left NULL -- the real, pre-Track-5 shape.
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            "INSERT INTO memory_records "
+            "(identifier, text, embedding, trust, classification, sources, written_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "mem:legacy",
+                "a legacy str memory",
+                "[1.0, 0.0]",
+                int(Trust.USER_DIRECT),
+                int(Classification.PUBLIC),
+                "[]",
+                "2026-01-01T00:00:00+00:00",
+                "2026-04-01T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    results = adapter.retrieve("anything", limit=5)
+
+    assert len(results) == 1
+    assert results[0].value.value == "a legacy str memory"
 
 
 def test_written_record_is_retrievable_by_a_similar_query() -> None:
@@ -299,6 +359,43 @@ def test_a_zero_vector_embedding_never_raises_a_division_error() -> None:
     results = adapter.retrieve("tabs query", limit=1)
 
     assert len(results) == 1
+
+
+def test_opening_a_real_pre_track5_database_migrates_in_the_value_json_column(
+    tmp_path: Path,
+) -> None:
+    """A real database created before value_json existed gets it added on open, not left behind."""
+    database_path = tmp_path / "memory.sqlite3"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE memory_records (
+                identifier TEXT PRIMARY KEY,
+                text TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                trust INTEGER NOT NULL,
+                classification INTEGER NOT NULL,
+                sources TEXT NOT NULL,
+                written_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+            """
+        )
+        connection.commit()
+        columns_before = {row[1] for row in connection.execute("PRAGMA table_info(memory_records)")}
+        assert "value_json" not in columns_before
+    finally:
+        connection.close()
+
+    _file_adapter(database_path)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        columns_after = {row[1] for row in connection.execute("PRAGMA table_info(memory_records)")}
+    finally:
+        connection.close()
+    assert "value_json" in columns_after
 
 
 def test_provenance_is_carried_forward_unchanged() -> None:

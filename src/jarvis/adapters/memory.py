@@ -15,13 +15,33 @@ anything: ``exclude_secret_records`` (ADR-0050's amendment) and
 functions WP-59/WP-60 already built and tested against fakes, called
 here for real for the first time.
 
-Real, deliberate scope limit, not a silent gap: this adapter only
-persists ``str``-valued memories (:class:`UnsupportedMemoryValueError`
-otherwise) -- matching every real example this milestone's own design
-documents use ("prefers tabs," a memorized preference or fact), and
-the one thing the chosen embedding pipeline can actually embed. A
-future milestone needing structured, non-string memorized values would
-need real serialization work this ADR/work package does not do.
+Real, deliberate scope limit, narrowed by the overnight Track 5 pass
+(2026-09-02), not fully removed: this adapter persists any
+JSON-serializable value -- ``str``, ``int``, ``float``, ``bool``,
+``None``, ``list``, ``dict`` -- and rejects anything else
+(:class:`UnsupportedMemoryValueError`). This is a safety-neutral,
+mechanical extension, not a new classification/effect decision:
+``jarvis.application.memory.classification.memory_effect_for`` already
+resolved the correct ``Effect`` purely from
+``value.provenance.classification``, never from ``type(value.value)``,
+and ``MemoryWriteAuthorizer.authorize_write`` was already generic over
+``T`` -- neither needed to change. The one real, mechanical problem
+this pass actually solves is that the chosen embedding pipeline
+(``EmbeddingPort``) only ever accepts text: a non-``str`` value is
+embedded via its own ``json.dumps`` representation instead of the
+value itself (a real, stated precision loss for semantic search over
+structured data, not a safety concern -- classification/effect
+enforcement never depends on embedding quality). ``value_json`` is a
+new, migrated-in column (``ALTER TABLE ... ADD COLUMN``, applied in
+``__init__`` if missing) holding each new record's real
+``json.dumps`` value; a pre-migration row (``value_json IS NULL``)
+still reads back exactly as before, via the unchanged ``text`` column
+-- real backward compatibility, not a schema break. A real, stated
+limitation of using ``json``, not silently hidden: round-tripping a
+``tuple`` returns a ``list`` (JSON has no tuple type), and NaN/
+Infinity floats serialize via Python's own non-standard
+``allow_nan=True`` default -- neither is a safety concern, both are
+plain data-fidelity notes for a caller storing either.
 """
 
 from __future__ import annotations
@@ -57,13 +77,33 @@ CREATE TABLE IF NOT EXISTS memory_records (
 )
 """
 
+_ADD_VALUE_JSON_COLUMN = "ALTER TABLE memory_records ADD COLUMN value_json TEXT"
+
+
+def _ensure_value_json_column(connection: sqlite3.Connection) -> None:
+    """Migrate an existing ``memory_records`` table to add ``value_json`` if missing.
+
+    A real, minimal migration, not a schema break: ``CREATE TABLE IF
+    NOT EXISTS`` alone never adds a column to an already-existing
+    table, so a database created before this pass would otherwise
+    never gain ``value_json`` at all. Checked via ``PRAGMA
+    table_info`` rather than a try/except around ``ALTER TABLE`` --
+    deterministic, not exception-driven control flow.
+    """
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(memory_records)")}
+    if "value_json" not in columns:
+        connection.execute(_ADD_VALUE_JSON_COLUMN)
+        connection.commit()
+
 
 class UnsupportedMemoryValueError(Exception):
-    """Raised when a value passed to :meth:`SqliteMemoryAdapter.write` is not a ``str``.
+    """Raised when a value passed to :meth:`SqliteMemoryAdapter.write` is not JSON-serializable.
 
     A real, deliberate scope limit (see module docstring), not a
     generic validation error -- this adapter's own real embedding
-    pipeline (``EmbeddingPort``) only ever accepts text.
+    pipeline (``EmbeddingPort``) only ever accepts text, so any value
+    stored here must have some real text representation derivable
+    from it.
     """
 
 
@@ -111,31 +151,36 @@ class SqliteMemoryAdapter:
         self._connection = sqlite3.connect(database_path)
         self._connection.execute(_CREATE_TABLE)
         self._connection.commit()
+        _ensure_value_json_column(self._connection)
 
     def write(self, value: Tainted[object]) -> str:
         """Persist ``value`` to the real store, provenance intact.
 
         Raises:
-            UnsupportedMemoryValueError: If ``value.value`` is not a
-                ``str`` (see module docstring).
+            UnsupportedMemoryValueError: If ``value.value`` is not
+                JSON-serializable (see module docstring).
         """
-        if not isinstance(value.value, str):
+        try:
+            value_json = json.dumps(value.value)
+        except TypeError as exc:
             msg = (
-                "SqliteMemoryAdapter only persists str-valued memories; "
+                "SqliteMemoryAdapter only persists JSON-serializable memories "
+                "(str, int, float, bool, None, list, dict); "
                 f"got {type(value.value).__name__}."
             )
-            raise UnsupportedMemoryValueError(msg)
-        text = value.value
+            raise UnsupportedMemoryValueError(msg) from exc
+        text = value.value if isinstance(value.value, str) else value_json
         (embedding,) = self._embedding_port.embed((text,))
         written_at, expires_at = compute_write_timestamps(self._clock)
         identifier = self._id_port.new_id()
         self._connection.execute(
             "INSERT INTO memory_records "
-            "(identifier, text, embedding, trust, classification, sources, written_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(identifier, text, value_json, embedding, trust, classification, sources, "
+            "written_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 identifier,
                 text,
+                value_json,
                 json.dumps(embedding),
                 int(value.provenance.trust),
                 int(value.provenance.classification),
@@ -205,7 +250,7 @@ class SqliteMemoryAdapter:
         independent guarantees this milestone's own ADRs name.
         """
         rows = self._connection.execute(
-            "SELECT identifier, text, embedding, trust, classification, sources, "
+            "SELECT identifier, text, value_json, embedding, trust, classification, sources, "
             "written_at, expires_at FROM memory_records"
         ).fetchall()
         parsed = [self._row_to_record_and_embedding(row) for row in rows]
@@ -228,11 +273,12 @@ class SqliteMemoryAdapter:
 
     @staticmethod
     def _row_to_record_and_embedding(
-        row: tuple[str, str, str, int, int, str, str, str | None],
+        row: tuple[str, str, str | None, str, int, int, str, str, str | None],
     ) -> tuple[MemoryRecord, list[float]]:
         (
             identifier,
             text,
+            value_json,
             embedding_json,
             trust,
             classification,
@@ -240,6 +286,11 @@ class SqliteMemoryAdapter:
             written_at,
             expires_at,
         ) = row
+        # A NULL value_json is a real, pre-migration row written before this
+        # column existed -- text alone was, and still is, that row's own
+        # real, complete value. Never re-derived from json.loads(text),
+        # which would incorrectly wrap it in an extra layer of quoting.
+        value = json.loads(value_json) if value_json is not None else text
         provenance = Provenance(
             trust=Trust(trust),
             classification=Classification(classification),
@@ -247,7 +298,7 @@ class SqliteMemoryAdapter:
         )
         record = MemoryRecord(
             identifier=identifier,
-            value=Tainted(text, provenance),
+            value=Tainted(value, provenance),
             written_at=datetime.fromisoformat(written_at),
             expires_at=datetime.fromisoformat(expires_at) if expires_at is not None else None,
         )
