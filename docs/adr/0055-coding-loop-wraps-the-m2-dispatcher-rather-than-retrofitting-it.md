@@ -6,9 +6,11 @@ Proposed
 
 **Not yet reviewed by the user in conversation** — drafted from a remotely-reasoned working assumption (`m5-browser-coding.md`'s own header explains the distinction from M4's ADRs, all of which the user confirmed directly). Do not mark Accepted without the user's own direct review.
 
+**Amended 2026-09-01, still Proposed:** a real error in this ADR's own Decision section was found and corrected while investigating WP-70's own report of an unresolved gap — the claim that "every real file write the wrapper causes... is authorized... before `apply_patch` is ever called" is not how the real code behaves. `Dispatcher.run()` exposes no call site a wrapper could intercept before a write happens; `apply_patch` is called internally, once per candidate, at every rung, unconditionally. This does not change this ADR's own core Decision (a new, minimal wrapper calling the unmodified `Dispatcher.run()` one or more times) — it corrects a wrong description of the mechanism and adds the real fix as a new Consequence. See "Amendment 2026-09-01" below. Still requires the user's own direct review before Accepted.
+
 ## Date
 
-2026-08-31
+2026-08-31 (amended 2026-09-01)
 
 ## Source
 
@@ -49,3 +51,35 @@ A new, minimal orchestration module, `application/coding/loop.py` (or a small pa
 **Real, deliberately open question this ADR does not resolve either, inherited directly from `m5-scoping-notes.md`'s own Part 1, item 3**: whether "one candidate = one patch per `Dispatcher.run()` call, with the wrapper re-calling `Dispatcher.run()` on failure" is itself sufficient for real coding-agent work, or whether a genuine coding agent needs iterative, multi-turn editing *inside* what is today one `generate()` call (a provider reading/editing/re-reading files across several exchanges before returning one final patch) — a structurally different, deeper change to `ReasoningPort`'s own contract this ADR does not attempt, and the working assumption itself does not address. This ADR's own decision (a wrapper that retries whole `Dispatcher.run()` climbs) is compatible with either answer eventually — if the deeper, `ReasoningPort`-level change is ever needed, it would be a separate, later ADR, not something this one either builds or forecloses.
 
 **Depends on ADR-0056** for how the wrapper's own file writes are authorized — this ADR does not itself decide the authorization mechanism, only the orchestration shape around it.
+
+**Amendment 2026-09-01 — `Dispatcher.run()` writes internally, with no interception seam; the wrapper never gets a chance to authorize before it happens.**
+
+WP-70's own closing report flagged this as an open question rather than forcing a fix onto a problem that might not exist. It exists. Confirmed by reading `application/reasoning/dispatcher.py`, `adapters/validation/_command.py`, `adapters/validation/pytest_validator.py`, and `adapters/workspace.py` end to end, not inferred:
+
+`Dispatcher._attempt_rung` (`dispatcher.py`) calls, for every provider registered at a rung:
+
+```python
+tainted_candidate = await adapter.generate(task.value, prior_attempts)
+candidate = tainted_candidate.value
+verdict, evidence = await self._validator.validate(candidate)
+```
+
+`self._validator` is a single `ValidationPort` instance, injected once into `Dispatcher.__init__` and reused for the entire `run()` call — "a single validator for the whole run," per that constructor's own docstring. If it is a `PytestValidator` (the one real implementation today), `validate()` calls:
+
+```python
+unverifiable = apply_candidate_or_report_unverifiable(self._workspace, candidate, _AUTHOR)
+```
+
+which calls, in `adapters/validation/_command.py`:
+
+```python
+workspace.apply_patch(candidate.content)
+```
+
+directly against `self._workspace` — a `WorkspacePort` instance constructed once by whoever builds the `PytestValidator`, *before* `Dispatcher.run()` is ever called, and never exposed to `Dispatcher` itself, let alone to a wrapper sitting above `Dispatcher`. `LocalWorkspaceAdapter.apply_patch` (`adapters/workspace.py`) then runs a real `git apply -` subprocess against `self._root` — whatever real directory that `WorkspacePort` was constructed with.
+
+**This confirms the suspected case, and it is worse than "the wrapper sees the result too late to authorize it first."** There is no "accepted, granted candidate" concept anywhere in this path at all: `_attempt_rung` calls `apply_patch` for *every* candidate from *every* provider registered at a rung, unconditionally, before the arbiter (`self._arbiter.select(...)`) ever picks a winner. A rung with two providers (the real default for `SECOND_PROVIDER`, per this module's own docstring) applies both candidates' patches to the same `WorkspacePort`, in sequence, with no revert between them — a real, pre-existing gap in `WorkspacePort`/`ValidationPort` lifecycle management that ADR-0043's own Consequences section already named as deferred ("how that copy gets made, and how many validators run per rung, is the dispatcher's problem (WP-37)... any workspace lifecycle management \[...\] real gaps if they become load-bearing") and that WP-37's own `Dispatcher` never actually closed. This is independent of M5 and predates it; it is flagged here because M5 is the first real consumer for whom it becomes load-bearing, not because this ADR introduces it. **Fixing the multi-candidate-within-one-rung accumulation itself is out of scope for this amendment** — it would require `Dispatcher`/`_attempt_rung` to construct a fresh workspace per candidate internally, which is exactly the "modify `Dispatcher`" option this ADR's own Context section already rejected. Named here so it is not silently swept in by the fix below, not solved by it.
+
+**The real fix, given `Dispatcher` stays unmodified**: the `WorkspacePort` instance the wrapper constructs and hands (via whatever `ValidationPort` it builds) to each `Dispatcher.run()` call must never be the real target repository — it must always be a fresh, disposable copy, contained by `SandboxPort`/`bwrap` (ADR-0044, M3), for the full duration of that call. Since `Dispatcher.run()` may apply several candidates' patches internally across several rungs before returning, and the wrapper has no way to intercept any single one of them, the only way to keep the real repository untouched during dispatch is for dispatch to never see the real repository at all. Only after the wrapper's own retry loop concludes — a winning `Attempt` with `Verdict.PASSED` chosen, or the wrapper's own retry budget exhausted — does the wrapper perform its own, separate write: one `CodeWriteAuthorizer.authorize_write` call (ADR-0056/WP-70) against the winning candidate's real target path, and only if granted, one `WorkspacePort.apply_patch` call against a *second*, distinct `WorkspacePort` instance that does point at the real repository, applying only that one candidate's content.
+
+**Real sequencing correction**: WP-73 ("Real sandboxing for coding-agent validator execution," `m5-browser-coding.md`'s work-package sketch) was written as a hardening pass to run *after* WP-71 (the wrapper) and WP-72 (its composition root). That order does not work — WP-71's own wrapper cannot be built safely without a real, disposable `SandboxPort`-backed `WorkspacePort` already existing to construct each `Dispatcher.run()` call against. WP-73's own foundational deliverable (a real factory or adapter producing a disposable, sandboxed workspace copy of a target repo) must land **before** WP-71, not after — `m5-browser-coding.md`'s own work-package sketch is updated accordingly. WP-73's other named scope (retrofitting M2's own already-shipped validators onto `SandboxPort` for their own, non-M5 callers) remains explicitly out of scope, unchanged from the original sketch — only the coding-loop wrapper's own use of a sandboxed workspace is pulled forward.

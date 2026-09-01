@@ -47,6 +47,25 @@ and edit a file several times *within* a single attempt, which would be
 a bigger, different change this ADR does not make and does not rule
 out making later.
 
+**Amended 2026-09-01, a real mistake found and corrected**: this ADR
+originally said the new wrapper itself would be the thing writing each
+file change, checking permission first every time. Checking the actual
+existing code line by line turned up that this isn't true — the *old*
+system this wrapper sits on top of already writes a candidate's change
+to disk itself, internally, for every single attempt it makes, before
+the new wrapper ever gets a look at the result. There was never going
+to be a moment for the new wrapper to check permission first, because
+by the time it can see anything, the old system has already written
+several attempts' worth of changes, unchecked. The real fix: never let
+that old system write to the real project at all. Give it a disposable
+throwaway copy of the project instead, using the same real, contained
+sandbox mechanism already built for this project's earlier desktop-app
+work. The new wrapper only writes to the real project itself, once,
+after checking permission, once it already knows which one attempt
+actually worked. One real, practical consequence: the throwaway-copy
+piece (originally planned as a nice-to-have polish step, done last)
+now has to be built first — the wrapper can't safely exist without it.
+
 ---
 
 ## ADR-0056 — A new kind of file-write permission, and an absolute no for test files

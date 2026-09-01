@@ -230,16 +230,22 @@ retrieval-as-a-platform" non-goal already established for this project.
 gaps in the given assumptions" above. Named as a real, still-open
 ROADMAP requirement, not designed or scoped further here.
 
-**No sandboxing of the coding-loop wrapper's own validator execution
-is *decided* by this document**, though it is named as a real,
-plausible deliverable below (WP-73) — `SandboxPort` already exists
-(ADR-0044, M3) and closing `docs/threat-model/v0.md`'s own
-"candidate execution is not sandboxed" gap for the coding-agent's own
-real, new use case is a genuinely different question from whether M2's
-own already-shipped validators get retrofitted (a question M3's own
-scoping explicitly declined to answer, tracked as separate follow-up)
-— this document does not reopen that M3-era decision, only names the
-real opportunity M5's own new use case presents.
+**Amended 2026-09-01, no longer merely plausible**: sandboxing the
+coding-loop wrapper's own validator execution (WP-73) was originally
+named here as a real but optional deliverable. It is not optional.
+ADR-0055's own "Amendment 2026-09-01" found that `Dispatcher.run()`
+applies every candidate's patch internally, with no seam the wrapper
+can intercept — so every `Dispatcher.run()` call the wrapper makes must
+already run against a disposable, `SandboxPort`-backed workspace copy,
+never the real target repo, or the real repo receives unauthorized
+writes by construction. `SandboxPort` already exists (ADR-0044, M3);
+closing `docs/threat-model/v0.md`'s own "candidate execution is not
+sandboxed" gap for the coding-agent's own real, new use case remains a
+genuinely different question from whether M2's own already-shipped
+validators get retrofitted for their own, non-M5 callers (a question
+M3's own scoping explicitly declined to answer, tracked as separate
+follow-up) — this document still does not reopen that M3-era decision,
+only requires the coding-loop wrapper's own use of it.
 
 ## Scope: deliverables
 
@@ -473,6 +479,22 @@ own browser-first, coding-second, Console-UI-third sequence), not a
 fixed sequence the implementing session must follow rigidly if it
 finds a genuine reason to reorder.
 
+**Real execution-order correction (2026-09-01, ADR-0055 amendment)**:
+WP-73 must execute **before** WP-71, despite its higher number. WP-70's
+own closeout investigation found that `Dispatcher.run()` calls
+`WorkspacePort.apply_patch` internally, once per candidate at every
+rung, with no call site the coding-loop wrapper (WP-71) could ever
+intercept before a write happens — see ADR-0055's own "Amendment
+2026-09-01" for the real code chain and the fix. The fix requires every
+`Dispatcher.run()` call the wrapper makes to be constructed against a
+disposable, `SandboxPort`-backed workspace copy from the start, never
+the real target repository — meaning WP-73's own foundational
+deliverable (a real, disposable sandboxed-workspace mechanism) is a
+hard dependency of WP-71, not a later hardening pass on top of it. WP
+numbers are kept as fixed identifiers (already referenced elsewhere);
+only the real execution order changes: WP-67, WP-68, WP-69, WP-70,
+**WP-73**, WP-71, WP-72, WP-74, WP-75.
+
 - **WP-67 — Browser-automation port shape.** `ports/browser_automation.py`
   (real name TBD, see "Real gaps"), contract tests only, against fakes
   — no real CDP client yet, the same ordering `DesktopWindowPort`/
@@ -496,22 +518,35 @@ finds a genuine reason to reorder.
   the required AST-based meta-test — the safety-critical piece lands
   first, before the coding-loop wrapper that will call it exists,
   matching M4's own WP-58 ordering.
+- **WP-73 — Real sandboxing for coding-agent validator execution.**
+  **Executes before WP-71 (see the real execution-order correction
+  above and ADR-0055's own "Amendment 2026-09-01")** — this is now a
+  hard dependency of the coding-loop wrapper, not a later hardening
+  pass: `Dispatcher.run()` applies every candidate's patch internally,
+  with no seam the wrapper could intercept, so every `Dispatcher.run()`
+  call WP-71 makes must already be constructed against a disposable,
+  `SandboxPort`-backed workspace copy of the target repo from the
+  start, never the real one. Reuses `SandboxPort`/`bwrap` (ADR-0044,
+  M3) unmodified; does not retrofit M2's own already-shipped validators
+  for their own, non-M5 callers (that remains the separate,
+  still-untaken follow-up M3's own scoping already declined to fold
+  in) — only the coding-loop wrapper's own use is in scope here.
 - **WP-71 — The coding-loop wrapper.** `application/coding/loop.py`
-  (ADR-0055): wraps the unmodified `Dispatcher`/`EscalationLadder`,
-  real patch-apply-run-tests-feed-back mechanics, the real, new
-  retry-budget concept (exact shape decided during this work package,
-  not fixed by ADR-0055).
+  (ADR-0055, as amended): wraps the unmodified `Dispatcher`/
+  `EscalationLadder`, real patch-apply-run-tests-feed-back mechanics,
+  the real, new retry-budget concept (exact shape decided during this
+  work package, not fixed by ADR-0055). Every `Dispatcher.run()` call
+  is constructed against WP-73's own disposable sandboxed workspace,
+  never the real target repo; only after a winning `PASSED` `Attempt`
+  is chosen (or the wrapper's own retry budget is exhausted) does the
+  wrapper itself call `CodeWriteAuthorizer.authorize_write`
+  (ADR-0056/WP-70) and, only if granted, `WorkspacePort.apply_patch`
+  against the real repo — exactly once, the winning candidate's
+  content only.
 - **WP-72 — Coding-agent composition root.** `kernel/coding.py`, new
   `CapabilityId` constants for coding-agent writes, wiring
   `code_write_effect_for` (WP-70) and the coding-loop wrapper (WP-71)
   through the unmodified `AuthorizationOrchestrator`.
-- **WP-73 — Real sandboxing for coding-agent validator execution.**
-  Closes, for this milestone's own new use case specifically,
-  `docs/threat-model/v0.md`'s own "candidate execution is not
-  sandboxed" gap — reuses `SandboxPort`/`bwrap` (ADR-0044, M3)
-  unmodified; does not retrofit M2's own already-shipped validators
-  (that remains the separate, still-untaken follow-up M3's own scoping
-  already declined to fold in).
 - **WP-74 — Minimal Console UI.** A real, minimal mechanism satisfying
   the "always legible" standing principle's on-screen half — no
   specific views designed ahead of real use, per the recovered
