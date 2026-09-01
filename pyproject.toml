@@ -19,6 +19,7 @@ dependencies = [
     "piper-tts",
     "pygobject>=3.56.3",
     "fastembed>=0.8.0",
+    "websockets>=17.1",
 ]
 
 [project.scripts]

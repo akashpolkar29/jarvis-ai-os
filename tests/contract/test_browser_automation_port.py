@@ -13,7 +13,9 @@ from __future__ import annotations
 from jarvis.domain.browser import PageHandle
 from jarvis.ports.browser_automation import BrowserAutomationPort
 
-_FAKE_HANDLE = PageHandle(debug_port=9222, target_id="fake-target", process_id=1)
+_FAKE_HANDLE = PageHandle(
+    debug_port=9222, target_id="fake-target", process_id=1, user_data_dir="/tmp/fake-profile"
+)
 
 
 class _FakeBrowserAutomationAdapter:
