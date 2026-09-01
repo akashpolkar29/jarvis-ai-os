@@ -12,6 +12,11 @@ never the other way around.
 
 ``confirm/`` holds the GTK4 confirmation dialog: the Finding 2 closure
 (docs/threat-model/v0.md), the first real UI code in this project.
+
+``console/`` holds WP-74's own real, minimal Console UI mechanism
+(``m5-browser-coding.md`` deliverable 6) -- a real, on-screen line, not
+a designed UI; an adapter (``jarvis.adapters.console``) calls into it,
+never the other way around.
 """
 
 from __future__ import annotations

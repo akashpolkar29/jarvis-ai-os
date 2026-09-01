@@ -4,7 +4,13 @@ A stub BrowserAutomationPort (with call tracking) is injected in place
 of the real CdpBrowserAutomationAdapter, for the same reason
 test_desktop_kernel.py's own _StubBrowser is injected in place of
 BraveCliAdapter -- these tests must be hermetic and never launch a
-real browser subprocess.
+real browser subprocess. A stub ConsolePort (WP-74) is injected
+everywhere a granted ``authorize_and_open_page`` call would otherwise
+reach the real, default ``GtkConsoleAdapter`` -- for the same
+hermeticity reason, not because a real console window would fail
+these tests (``show_console_line``'s own real launch never blocks or
+raises even with no display), only because a stray real GTK4 window
+popping up during an automated test run is not desirable regardless.
 
 The one exception is ``test_granted_close_page_really_kills_the_real_process``
 below: real, live proof that ``authorize_and_close_page`` actually
@@ -41,6 +47,16 @@ _FAKE_HANDLE = PageHandle(
 )
 
 
+class _StubConsole:
+    """A ConsolePort test double that records every real line shown, in order."""
+
+    def __init__(self) -> None:
+        self.shown: list[str] = []
+
+    def show_line(self, text: str) -> None:
+        self.shown.append(text)
+
+
 class _StubBrowserAutomation:
     """A BrowserAutomationPort test double that records every call, in order."""
 
@@ -72,6 +88,7 @@ class _StubBrowserAutomation:
 
 async def test_granted_open_page_opens_the_real_url(tmp_path: Path) -> None:
     browser = _StubBrowserAutomation()
+    console = _StubConsole()
 
     decision, handle = await authorize_and_open_page(
         "https://example.com",
@@ -79,11 +96,43 @@ async def test_granted_open_page_opens_the_real_url(tmp_path: Path) -> None:
         remote_confirmation_available=False,
         chain_path=tmp_path / "audit_chain.json",
         browser_automation=browser,
+        console=console,
     )
 
     assert decision.granted is True
     assert browser.opened == ["https://example.com"]
     assert handle == _FAKE_HANDLE
+
+
+async def test_granted_open_page_shows_a_real_console_line(tmp_path: Path) -> None:
+    """WP-74's own required proof: a granted, successful open shows a real on-screen line."""
+    console = _StubConsole()
+
+    await authorize_and_open_page(
+        "https://example.com",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser_automation=_StubBrowserAutomation(),
+        console=console,
+    )
+
+    assert console.shown == ["browser.open_page: https://example.com"]
+
+
+async def test_denied_open_page_never_shows_a_console_line(tmp_path: Path) -> None:
+    console = _StubConsole()
+
+    await authorize_and_open_page(
+        "https://example.com",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser_automation=_StubBrowserAutomation(),
+        console=console,
+    )
+
+    assert console.shown == []
 
 
 async def test_denied_open_page_never_touches_the_browser(tmp_path: Path) -> None:
@@ -111,6 +160,7 @@ async def test_remote_confirmation_alone_is_sufficient_to_grant_open_page(tmp_pa
         remote_confirmation_available=True,
         chain_path=tmp_path / "audit_chain.json",
         browser_automation=browser,
+        console=_StubConsole(),
     )
 
     assert decision.granted is True
@@ -126,6 +176,7 @@ async def test_a_single_granted_open_page_appends_one_verifiable_record(tmp_path
         remote_confirmation_available=False,
         chain_path=chain_path,
         browser_automation=_StubBrowserAutomation(),
+        console=_StubConsole(),
     )
 
     chain = JsonFileAuditStorageAdapter(chain_path).load()
@@ -308,6 +359,7 @@ async def test_granted_close_page_really_kills_the_real_process(tmp_path: Path) 
         remote_confirmation_available=False,
         chain_path=chain_path,
         browser_automation=CdpBrowserAutomationAdapter(),
+        console=_StubConsole(),
     )
     assert open_decision.granted is True
     assert handle is not None

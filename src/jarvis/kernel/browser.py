@@ -9,14 +9,26 @@ only ever inside ``if decision.granted:``, ``storage.save(chain)`` in
 a ``finally`` block so a granted decision is never lost even if the
 subsequent real action raises.
 
-**Only WP-67 through WP-69 of ``m5-browser-coding.md``'s own sketch --
-the browser-automation track only.** No coding-loop wrapper, no
-``Effect.CODE_WRITE``/``Effect.PROTECTED_PATH_WRITE``, no code from
-ADR-0055/ADR-0056 exists anywhere in this module or this codebase --
-both ADRs remain **Proposed**, not Accepted, per this pass's own
-explicit, narrower scope. See ``m5-browser-coding.md``'s own header
-for why even *this* module's design doc basis is more provisional than
-M3/M4's own kernel modules were.
+**Originally WP-67 through WP-69 of ``m5-browser-coding.md``'s own
+sketch -- the browser-automation track only.** At the time this module
+was first written, no coding-loop wrapper existed anywhere in this
+codebase and ADR-0055/ADR-0056 were both still Proposed -- both since
+built (``kernel/coding.py``, WP-70 through WP-72) and both since
+**Accepted** (after their own required properties were built and
+proven, not before -- see each ADR's own "Accepted" note). This
+module's own scope stays the browser-automation family only; the
+coding-agent capability lives in its own composition root, not here.
+
+**WP-74 addition**: ``authorize_and_open_page`` now shows a real,
+on-screen console line (``jarvis.adapters.console.GtkConsoleAdapter``)
+on a granted, successful open -- `docs/ROADMAP.md`'s own "always
+legible" standing principle's on-screen half, satisfied for the first
+time in this codebase. Chosen as this milestone's one real wired
+action per `m5-browser-coding.md`'s own acceptance criterion 7 for
+being the simplest real call site available, not because it is
+otherwise special -- see ``kernel/coding.py``'s own docstring, unchanged
+by this addition, for the coding-agent capability this line was not
+added to.
 
 **Static, fixed-effect capabilities, not a dynamic classification
 function** -- unlike ``memory.write``/(the not-yet-built)
@@ -83,6 +95,7 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
+from jarvis.adapters.console import GtkConsoleAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.capabilities import (
@@ -99,19 +112,25 @@ if TYPE_CHECKING:
     from jarvis.domain.browser import PageHandle
     from jarvis.domain.policy import Decision
     from jarvis.ports.browser_automation import BrowserAutomationPort
+    from jarvis.ports.console import ConsolePort
 
 
 def _adapter(browser_automation: BrowserAutomationPort | None) -> BrowserAutomationPort:
     return browser_automation or CdpBrowserAutomationAdapter()
 
 
-async def authorize_and_open_page(
+def _console(console: ConsolePort | None) -> ConsolePort:
+    return console or GtkConsoleAdapter()
+
+
+async def authorize_and_open_page(  # noqa: PLR0913 -- one per composition-function pass-through
     url: str,
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
     chain_path: Path,
     browser_automation: BrowserAutomationPort | None = None,
+    console: ConsolePort | None = None,
 ) -> tuple[Decision, PageHandle | None]:
     """Wire up the stack, authorize opening ``url``, and open a real page only if granted.
 
@@ -127,6 +146,12 @@ async def authorize_and_open_page(
         browser_automation: The port ``url`` is sent to if granted.
             Defaults to a real ``CdpBrowserAutomationAdapter``.
             Overridable for tests.
+        console: Where a granted, successful open's own real on-screen
+            line (WP-74, ``docs/ROADMAP.md``'s "always legible"
+            standing principle) is shown. Defaults to a real
+            ``GtkConsoleAdapter``. Overridable for tests -- never
+            called at all on a denied decision, matching every other
+            real side effect in this function.
 
     Returns:
         ``(decision, handle)`` -- ``handle`` is the real, reconnectable
@@ -153,6 +178,7 @@ async def authorize_and_open_page(
     try:
         if decision.granted:
             handle = await _adapter(browser_automation).open_page(url)
+            _console(console).show_line(f"browser.open_page: {url}")
     finally:
         storage.save(chain)
 
