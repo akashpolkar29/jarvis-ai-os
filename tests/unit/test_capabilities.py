@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from jarvis.domain.capability import Effect, Tier
 from jarvis.kernel.capabilities import (
+    BROWSER_CLOSE_PAGE_CAPABILITY_ID,
     BROWSER_INSPECT_DOM_CAPABILITY_ID,
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
     BROWSER_SCREENSHOT_CAPABILITY_ID,
@@ -33,7 +34,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 26
+_EXPECTED_CAPABILITY_COUNT = 27
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -79,6 +80,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         BROWSER_OPEN_PAGE_CAPABILITY_ID,
         BROWSER_SCREENSHOT_CAPABILITY_ID,
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
+        BROWSER_CLOSE_PAGE_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -287,6 +289,15 @@ def test_browser_inspect_dom_has_egress_local_effects() -> None:
     descriptor = registry.get(BROWSER_INSPECT_DOM_CAPABILITY_ID)
     assert descriptor.effects == Effect.EGRESS_LOCAL
     assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_browser_close_page_has_execute_effects() -> None:
+    """browser.close_page is EXECUTE -- Tier.CONFIRM, same as docker.stop_container."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(BROWSER_CLOSE_PAGE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EXECUTE
+    assert descriptor.required_tier == Tier.CONFIRM
 
 
 def test_every_descriptor_has_a_non_empty_description() -> None:

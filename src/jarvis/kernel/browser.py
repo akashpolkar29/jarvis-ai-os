@@ -1,6 +1,6 @@
 """The composition root for M5's browser-automation capability family.
 
-browser.open_page / browser.screenshot / browser.inspect_dom.
+browser.open_page / browser.screenshot / browser.inspect_dom / browser.close_page.
 
 Mirrors ``jarvis.kernel.desktop``'s ``authorize_and_open_brave_url``
 pattern exactly: registry/storage/confirmation/orchestrator wiring,
@@ -43,21 +43,37 @@ not tainted itself** -- it is an opaque reference, the same
 "not content, not tainted" treatment ``WindowHandle`` already gets from
 ``kernel/desktop.py``.
 
-**No ``browser.close`` capability is registered.** Tearing down a real
-browser process this module itself launched is real, necessary cleanup
--- but it acts only on state this process already fully controls (its
-own already-granted, already-launched subprocess), the same
-"cleanup is not itself a new authorizable action" reasoning
-``storage.save(chain)`` already gets throughout this codebase.
-:func:`close_browser_page` exists as a plain, ungated function for
-exactly this reason -- a real, necessary caller-facing capability this
-work package's own scope still leaves genuinely open: nothing in this
-codebase yet calls it automatically after a real
-``browser.screenshot``/``browser.inspect_dom`` call, so every real
-``browser.open_page`` call today leaks one real browser subprocess and
-temporary profile directory until something -- a future work package,
-a manual call -- closes it. Named here plainly, not silently smoothed
-over.
+**``browser.close_page`` is a real, registered, authorized capability
+-- not a plain, ungated function.** A prior version of this module
+reasoned that tearing down a subprocess this process already fully
+controls needed no new authorization, treating it as cleanup rather
+than a capability, the same "cleanup is not itself a new authorizable
+action" shape ``storage.save(chain)`` gets throughout this codebase.
+**That reasoning does not hold up against this project's own real
+precedent, checked directly rather than assumed**: ``docker.stop_container``
+(``kernel/desktop.py``) is exactly this same shape -- tearing down
+something a prior capability started -- and it is a real, registered,
+``Effect.EXECUTE`` capability, not a bare port call. Nothing in this
+codebase treats "stop what you started" as exempt from authorization;
+this module's own prior exemption was a real, un-mirrored inconsistency,
+not a considered design choice, and is fixed here to match
+``docker.stop_container``'s own precedent exactly (same effect, same
+tier, same "recoverable/expected cleanup, not destructive" reasoning).
+
+**Still a real, open gap, named plainly**: registering the capability
+closes the *authorization* gap, not the *automatic-invocation* gap --
+nothing in this codebase yet calls ``browser.close_page`` on its own
+after a ``browser.screenshot``/``browser.inspect_dom`` call, or on any
+kind of idle timeout. A caller (a future coding-loop consumer, a CLI
+command, a voice command) must still invoke it explicitly, the same
+way a caller must explicitly invoke ``docker.stop_container`` --
+nothing in this codebase auto-stops a Docker container either. This is
+a deliberate, consistent choice, not a shortcut: no other
+process/resource-lifecycle capability in this repo (``SandboxPort.launch``'s
+own returned pid included) has ever had an automatic sweep or
+idle-timeout mechanism -- inventing one here, for browser pages
+specifically, would be new, unprecedented machinery this milestone's
+own narrow scope does not call for.
 """
 
 from __future__ import annotations
@@ -70,6 +86,7 @@ from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.capabilities import (
+    BROWSER_CLOSE_PAGE_CAPABILITY_ID,
     BROWSER_INSPECT_DOM_CAPABILITY_ID,
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
     BROWSER_SCREENSHOT_CAPABILITY_ID,
@@ -264,14 +281,58 @@ async def authorize_and_query_dom(  # noqa: PLR0913 -- one per composition-funct
     return decision, html
 
 
-async def close_browser_page(
-    handle: PageHandle, browser_automation: BrowserAutomationPort | None = None
-) -> None:
-    """Tear down ``handle``'s real browser subprocess and temporary profile. Not authorized.
+async def authorize_and_close_page(
+    handle: PageHandle,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    browser_automation: BrowserAutomationPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize closing ``handle``, and tear it down only if granted.
 
-    See the module docstring's own "No browser.close capability"
-    section for why this is a plain function, not a registered
-    capability -- and for the real, still-open gap that nothing in
-    this codebase calls this automatically yet.
+    Mirrors ``docker.stop_container``'s own real precedent (see module
+    docstring): stopping/tearing down something a prior capability
+    started is itself a real, registered, authorized capability in
+    this codebase, not exempt cleanup. Returns the bare ``Decision``
+    directly, matching ``authorize_and_pin``/``authorize_and_forget``'s
+    own shape (``kernel/memory.py``) -- a close has no further output
+    data worth wrapping in its own outcome type.
+
+    Args:
+        handle: A real, still-live page, from a prior granted
+            ``authorize_and_open_page`` call.
+        physical_confirmation_available: As above.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        browser_automation: Defaults to a real
+            ``CdpBrowserAutomationAdapter``. Overridable for tests.
+
+    Returns:
+        The real ``Decision`` for this close call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
     """
-    await _adapter(browser_automation).close(handle)
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        BROWSER_CLOSE_PAGE_CAPABILITY_ID,
+        Tainted({"target_id": handle.target_id}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            await _adapter(browser_automation).close(handle)
+    finally:
+        storage.save(chain)
+
+    return decision

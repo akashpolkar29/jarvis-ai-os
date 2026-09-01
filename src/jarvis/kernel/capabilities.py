@@ -67,6 +67,7 @@ MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
 BROWSER_OPEN_PAGE_CAPABILITY_ID = CapabilityId("browser.open_page")
 BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
 BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
+BROWSER_CLOSE_PAGE_CAPABILITY_ID = CapabilityId("browser.close_page")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -330,6 +331,18 @@ def build_default_registry() -> CapabilityRegistry:
                 "Query an already-open browser page's live DOM for the outer "
                 "HTML of the first element matching a CSS selector. Same "
                 "EGRESS_LOCAL reasoning as browser.screenshot."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=BROWSER_CLOSE_PAGE_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Terminate a browser page's real subprocess and remove its "
+                "temporary profile. Same EXECUTE tier as docker.stop_container "
+                "-- stopping something already started, real cleanup, not a "
+                "new resource."
             ),
         )
     )

@@ -318,8 +318,18 @@ async def test_query_dom_returns_none_when_nothing_matches() -> None:
 
 
 async def test_close_kills_a_real_running_process() -> None:
-    """A real, harmless `sleep` subprocess -- proves close() really terminates a real pid."""
-    process = subprocess.Popen(["sleep", "30"])
+    """A real, harmless `sleep` subprocess -- proves close() really terminates a real pid.
+
+    Launched with ``start_new_session=True``, matching
+    ``_launch_subprocess``'s own real launch exactly -- every real
+    ``PageHandle`` this adapter ever issues carries a pid that is also
+    its own real process group id (``close()``'s own ``os.killpg``
+    depends on this real invariant, see its docstring); a plain
+    ``Popen(["sleep", "30"])`` without it would not be a group leader,
+    which would make ``os.killpg`` raise ``ProcessLookupError`` for a
+    real, different reason than "already gone" and silently miss it.
+    """
+    process = subprocess.Popen(["sleep", "30"], start_new_session=True)
     adapter = CdpBrowserAutomationAdapter()
     handle = PageHandle(
         debug_port=9222,

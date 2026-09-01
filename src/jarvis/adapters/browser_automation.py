@@ -97,6 +97,18 @@ _PAGE_READY_TIMEOUT = 15.0
 _CDP_CALL_TIMEOUT = 10.0
 _POLL_INTERVAL = 0.1
 _DEVTOOLS_ACTIVE_PORT_LINE_COUNT = 2
+_GRACEFUL_EXIT_TIMEOUT = 5.0
+"""Real, bounded wait for SIGTERM to actually take effect before escalating."""
+_KILL_GRACE_PERIOD = 1.0
+"""Real, bounded wait for SIGKILL to take effect -- should be near-instant, but
+kill(2) delivery is still asynchronous, never assumed synchronous even here."""
+_DIRECTORY_REMOVAL_ATTEMPTS = 15
+_DIRECTORY_REMOVAL_RETRY_INTERVAL = 0.3
+"""Real, second-layer defense in depth, not the primary fix (that's
+close()'s own os.killpg -- see its docstring). Bounded at up to 4.5s
+total, real margin for real system load this adapter cannot itself
+control (the full test suite's own real CPU/IO contention already
+showed this matters in practice, not a hypothetical)."""
 
 
 class _CdpSocket(Protocol):
@@ -173,6 +185,95 @@ async def _wait_for_devtools_active_port(user_data_dir: Path, timeout: float) ->
         elapsed += _POLL_INTERVAL
     msg = f"Real DevTools endpoint never became reachable within {timeout}s."
     raise BrowserLaunchFailedError(msg)
+
+
+def _process_is_really_gone(pid: int) -> bool:
+    """Return whether ``pid`` is genuinely gone -- reaps it first if it's our own child.
+
+    Real, necessary two-step check, not one: ``os.kill(pid, 0)`` alone
+    reports a *zombie* process (one that has already exited but has
+    not yet been reaped by its real parent) as still existing -- a
+    real, classic Unix gap this method closes for the one case it
+    actually can. If ``pid`` is this process's own real child (the
+    common case: ``close()`` called in the same process that launched
+    it, e.g. this module's own real live tests),
+    ``os.waitpid(pid, os.WNOHANG)`` reaps it the moment it has
+    genuinely exited, making the zombie state disappear for real. If
+    ``pid`` is not this process's own child (the real cross-process
+    case ``PageHandle``'s own design exists for: opened in one CLI
+    invocation, closed in a separate, later one) ``waitpid`` raises
+    ``ChildProcessError`` -- caught here, falling back to a plain
+    ``os.kill(pid, 0)`` check, since only the pid's own real parent
+    (or, once that parent itself exits, the real init/subreaper
+    process) can ever reap it; nothing this function does can change
+    that Unix-level ownership rule.
+    """
+    with contextlib.suppress(ChildProcessError):
+        reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
+        if reaped_pid == pid:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+async def _wait_for_process_exit(pid: int) -> None:
+    """Wait for ``pid`` to really exit, sending a real SIGKILL to its whole group if needed.
+
+    Real, bounded, two-phase wait: up to ``_GRACEFUL_EXIT_TIMEOUT`` for
+    whatever signal the caller already sent (SIGTERM) to take real
+    effect, then a real SIGKILL and up to ``_KILL_GRACE_PERIOD`` more
+    for that to land -- SIGKILL cannot be caught or ignored by a real
+    process, but delivery is still asynchronous, never assumed
+    instantaneous even here.
+
+    The SIGKILL escalation targets ``pid``'s whole real process
+    *group* (``os.killpg``), not just the one pid, for the same real
+    reason ``close()``'s own initial SIGTERM does (see that method's
+    own docstring) -- a real, live test found Chromium's own child
+    processes (its component-updater subprocess, confirmed live) can
+    outlive a plain, single-pid SIGKILL of the main browser process
+    alone if that process gets force-killed before it finishes
+    gracefully tearing its own children down.
+    """
+    elapsed = 0.0
+    while elapsed < _GRACEFUL_EXIT_TIMEOUT:
+        if _process_is_really_gone(pid):
+            return
+        await asyncio.sleep(_POLL_INTERVAL)
+        elapsed += _POLL_INTERVAL
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGKILL)
+    elapsed = 0.0
+    while elapsed < _KILL_GRACE_PERIOD:
+        if _process_is_really_gone(pid):
+            return
+        await asyncio.sleep(_POLL_INTERVAL)
+        elapsed += _POLL_INTERVAL
+
+
+async def _remove_directory_with_retry(path: str) -> None:
+    """Remove ``path`` for real, retrying a real, bounded number of times before giving up.
+
+    A single ``shutil.rmtree(path, ignore_errors=True)`` attempt is
+    not enough in practice -- a real, live test found one of the
+    browser's own real child processes can still be writing into
+    ``path`` for a brief moment after the main process is already
+    confirmed gone (see :meth:`CdpBrowserAutomationAdapter.close`'s own
+    docstring). Still best-effort overall (matching this method's own
+    established "never raises, a leftover directory is a real but
+    non-fatal leak" convention) -- silently gives up, not raises, if
+    ``path`` still cannot be removed after every real attempt.
+    """
+    for attempt in range(_DIRECTORY_REMOVAL_ATTEMPTS):
+        shutil.rmtree(path, ignore_errors=True)
+        if not Path(path).exists():
+            return
+        if attempt < _DIRECTORY_REMOVAL_ATTEMPTS - 1:
+            await asyncio.sleep(_DIRECTORY_REMOVAL_RETRY_INTERVAL)
 
 
 async def _cdp_call(
@@ -253,7 +354,8 @@ class CdpBrowserAutomationAdapter:
             TimeoutError,
         ) as exc:
             process.terminate()
-            shutil.rmtree(user_data_dir, ignore_errors=True)
+            await _wait_for_process_exit(process.pid)
+            await _remove_directory_with_retry(str(user_data_dir))
             msg = f"Failed to bring up a real CDP-controlled page for {url!r}: {exc}"
             raise BrowserLaunchFailedError(msg) from exc
 
@@ -338,7 +440,32 @@ class CdpBrowserAutomationAdapter:
         return value if isinstance(value, str) else None
 
     async def close(self, handle: PageHandle) -> None:
-        """Terminate ``handle``'s real browser subprocess and remove its real temp profile.
+        """Terminate ``handle``'s real browser subprocess (and its children) and remove its profile.
+
+        Waits for the real process to actually be gone before removing
+        its profile directory -- SIGTERM delivery is not synchronous
+        with process death, a real gap this method's own first version
+        had (found by a real, live test: ``os.kill(pid, 0)`` still
+        succeeded immediately after a "successful" ``close()`` call,
+        because the child had become a zombie no one had reaped yet --
+        see :func:`_wait_for_process_exit`'s own docstring for the full
+        reasoning).
+
+        Signals the whole real process *group* (``os.killpg``), not
+        just the one main pid -- a second, separately-found real gap:
+        Chromium is a real, multi-process application, and one of its
+        own real child processes (its component-updater subprocess,
+        confirmed live: writes into ``component_crx_cache``) was found,
+        by a real, live test, to keep writing into the profile
+        directory for a real, observable stretch after the *main*
+        process alone was confirmed gone. ``_launch_subprocess``'s own
+        ``start_new_session=True`` (a real ``setsid()``) already makes
+        the main process's own pid double as its real process group id
+        -- signaling that group, not just that one pid, reaches the
+        component-updater child too, the real, root-cause fix, not a
+        workaround. :func:`_remove_directory_with_retry`'s own bounded
+        retries remain as real, second-layer defense in depth on top of
+        this, not the primary fix.
 
         Both real cleanup steps happen even if the process is already
         gone -- a real user-data-dir left behind after a process
@@ -346,5 +473,6 @@ class CdpBrowserAutomationAdapter:
         one left behind after a process this call actually killed.
         """
         with contextlib.suppress(ProcessLookupError):
-            os.kill(handle.process_id, signal.SIGTERM)
-        shutil.rmtree(handle.user_data_dir, ignore_errors=True)
+            os.killpg(handle.process_id, signal.SIGTERM)
+        await _wait_for_process_exit(handle.process_id)
+        await _remove_directory_with_retry(handle.user_data_dir)

@@ -5,26 +5,35 @@ of the real CdpBrowserAutomationAdapter, for the same reason
 test_desktop_kernel.py's own _StubBrowser is injected in place of
 BraveCliAdapter -- these tests must be hermetic and never launch a
 real browser subprocess.
+
+The one exception is ``test_granted_close_page_really_kills_the_real_process``
+below: real, live proof that ``authorize_and_close_page`` actually
+terminates a real subprocess, not just that a Python object went out
+of scope -- skipif-guarded on the real ``brave-browser`` binary's
+presence, mirroring ``tests/unit/adapters/test_browser_automation.py``'s
+own real-CDP-test precedent exactly.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import os
+import shutil
+from pathlib import Path
 
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
 from jarvis.domain.browser import PageHandle
 from jarvis.kernel.browser import (
     authorize_and_capture_screenshot,
+    authorize_and_close_page,
     authorize_and_open_page,
     authorize_and_query_dom,
-    close_browser_page,
 )
 from jarvis.ports.browser_automation import BrowserActionFailedError, BrowserLaunchFailedError
 
-if TYPE_CHECKING:
-    from pathlib import Path
+_HAS_BRAVE_BROWSER = shutil.which("brave-browser") is not None
 
 _GRANTED_CALLS = 1
 _FAKE_HANDLE = PageHandle(
@@ -229,9 +238,95 @@ async def test_query_dom_propagates_a_real_action_failure(tmp_path: Path) -> Non
         )
 
 
-async def test_close_browser_page_calls_the_real_port_close() -> None:
+async def test_granted_close_page_closes_the_real_port(tmp_path: Path) -> None:
     browser = _StubBrowserAutomation()
 
-    await close_browser_page(_FAKE_HANDLE, browser)
+    decision = await authorize_and_close_page(
+        _FAKE_HANDLE,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser_automation=browser,
+    )
 
+    assert decision.granted is True
     assert browser.closed == [_FAKE_HANDLE]
+
+
+async def test_denied_close_page_never_touches_the_browser(tmp_path: Path) -> None:
+    browser = _StubBrowserAutomation()
+
+    decision = await authorize_and_close_page(
+        _FAKE_HANDLE,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser_automation=browser,
+    )
+
+    assert decision.granted is False
+    assert browser.closed == []
+
+
+async def test_a_single_granted_close_page_appends_one_verifiable_record(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+
+    await authorize_and_close_page(
+        _FAKE_HANDLE,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        browser_automation=_StubBrowserAutomation(),
+    )
+
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == _GRANTED_CALLS
+    assert chain.verify().valid is True
+
+
+@pytest.mark.skipif(
+    not _HAS_BRAVE_BROWSER,
+    reason=(
+        "Requires a real, installed brave-browser binary -- not present on headless CI "
+        "runners (confirmed: .github/workflows/ci.yml never installs it). Live-verified "
+        "on the real development machine; see this fix's own commit message for the "
+        "real, live result."
+    ),
+)
+async def test_granted_close_page_really_kills_the_real_process(tmp_path: Path) -> None:
+    """Real, definitive proof: the real process AND its real temp profile are both gone.
+
+    Not just that a Python object went out of scope -- checked
+    directly against the real OS process table and the real
+    filesystem, the two real resources a leaked ``browser.open_page``
+    call actually leaves behind.
+    """
+    chain_path = tmp_path / "audit_chain.json"
+    open_decision, handle = await authorize_and_open_page(
+        "about:blank",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        browser_automation=CdpBrowserAutomationAdapter(),
+    )
+    assert open_decision.granted is True
+    assert handle is not None
+
+    # The real process and its real profile directory both genuinely exist
+    # before closing -- signal 0 only checks existence/permission, sends
+    # nothing real to the process.
+    os.kill(handle.process_id, 0)
+    assert Path(handle.user_data_dir).is_dir()
+
+    close_decision = await authorize_and_close_page(
+        handle,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        browser_automation=CdpBrowserAutomationAdapter(),
+    )
+    assert close_decision.granted is True
+
+    with pytest.raises(ProcessLookupError):
+        os.kill(handle.process_id, 0)
+    assert not Path(handle.user_data_dir).exists()
