@@ -138,8 +138,19 @@ class EmailMessage:
 class EmailPort(Protocol):
     async def list_messages(self, folder: str, limit: int) -> tuple[EmailSummary, ...]: ...
     async def read_message(self, message_id: str) -> EmailMessage: ...
-    async def send_message(self, to: str, subject: str, body: str) -> None: ...
+    async def send_message(self, to: tuple[str, ...], subject: str, body: str) -> None: ...
 ```
+
+**Amended 2026-09-01 (real gap-hunt pass, before implementation)**:
+`send_message`'s own `to` parameter is `tuple[str, ...]`, not a bare
+`str` — a real email capability needs to address more than one real
+recipient in the ordinary case. This does not weaken ADR-0057's own
+classification guarantee, it strengthens the statement of it:
+classification runs once, over the whole message, for the entire
+call — there is no code path where a `Classification.SECRET` body
+sends to some addresses in `to` and not others; the capability
+invocation is atomic. See ADR-0057's own "Amendment 2026-09-01" for
+the full reasoning.
 
 `domain/email.py` holds `EmailSummary`/`EmailMessage` — plain,
 stdlib-only dataclasses, matching `PageHandle`'s own "explicit, typed
@@ -210,6 +221,36 @@ document does not invent speculatively, matching every other
 `m6-scoping-notes.md`-adjacent deferral in this project's own
 discipline.
 
+**Real trust-boundary caveat, made explicit by the 2026-09-01
+gap-hunt pass, mirroring `kernel/memory.py`'s own identical caveat for
+`authorize_and_remember` word for word**: `egress_effect_for`
+*classifies* the body's already-assigned `Classification`; it does not
+*detect* anything. Nothing in this mechanism scans the real text for
+something that looks like a leaked secret — if whichever real caller
+constructs the outgoing body's `Tainted` value assigns it
+`Classification.PUBLIC` without genuinely considering whether the text
+contains something sensitive, a real secret embedded in otherwise
+ordinary prose reaches `Tier.CONFIRM`, not the unconditional `DENY`
+this design's own guarantee depends on. This is not a new risk unique
+to email — every dynamic-effect capability in this codebase (memory
+write, coding-agent write) carries the identical caveat, stated
+explicitly at each one's own site. Whichever work package first builds
+a real caller (WP-79 onward) is responsible for real, considered
+classification at the point the outgoing content is constructed, the
+same responsibility `authorize_and_remember`'s own callers already
+carry.
+
+**Real, explicit ordering requirement, not merely implied by
+"mirrors the existing pattern"**: `egress_effect_for` must be called
+and its result used to build the real `CapabilityInvocation`
+`AuthorizationOrchestrator.authorize()` evaluates, strictly *before*
+`EmailPort.send_message`/`CalendarPort.create_event` is ever invoked
+against the real adapter — and only if that call's own `Decision.granted`
+is `True`. See ADR-0057's own "Amendment 2026-09-01" for the full
+statement; this is now a binding requirement of that ADR's own
+Decision, not just a structural resemblance to
+`MemoryWriteAuthorizer`/`CodeWriteAuthorizer`.
+
 ## Calendar: `CalendarPort`
 
 ```python
@@ -276,6 +317,20 @@ implausible in practice, but not structurally impossible — still
 floors `DENY`, everything else floors `CONFIRM`). One real
 classification function serves both `send_message` and
 `create_event`-with-attendees; not two parallel copies.
+
+**Real, named future bypass risk, flagged by the 2026-09-01 gap-hunt
+pass**: `CalendarPort` as designed here has no `update_event`/
+`add_attendees` method — `create_event` is the only real write — so no
+bypass exists in what is designed today. But any future extension
+adding one **must** route an attendee-affecting write through the
+identical `egress_effect_for` classification `create_event` already
+requires, not default it to `Effect.WRITE_LOCAL` on the reasoning that
+"updating" is a lesser action than "creating." Adding attendees to an
+already-existing event reaches a new external party exactly the way
+creating a new event with attendees does — the risk this ADR exists to
+close does not depend on whether the event object itself is new. See
+ADR-0057's own "Amendment 2026-09-01," finding 4, for the full
+statement.
 
 ## Package/class layout
 
@@ -374,6 +429,12 @@ detail.
    precedent, honestly skipped in CI) proves the real adapter can list,
    read, and send a real message against a real mailbox, and list/
    create a real event against a real calendar.
+7. **(2026-09-01 gap-hunt amendment)** A real test proves a
+   `Classification.SECRET` body addressed to multiple real recipients
+   (`to` with more than one element) is denied unconditionally, and
+   that none of the addressed recipients receive anything — the real,
+   direct proof of ADR-0057's own "all-or-nothing, no partial send"
+   amendment, not merely asserted from the single-invocation shape.
 
 **Incomplete, stated plainly rather than padded**: this list does not
 cover the real `caldav`-vs-alternative library evaluation (real,

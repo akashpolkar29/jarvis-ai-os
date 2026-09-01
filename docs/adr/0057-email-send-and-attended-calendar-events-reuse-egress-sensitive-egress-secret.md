@@ -11,9 +11,19 @@ pass's own reasoning while away from the machine, the same
 later, explicit acceptance. Do not mark Accepted without the user's
 own direct review of the reasoning below specifically.
 
+**Amended 2026-09-01 (real gap-hunt pass, before any implementation
+started, still Proposed):** four real gaps found by applying the same
+adversarial scrutiny ADR-0056's own amendment pass applied to itself —
+a missing trust-boundary caveat, an under-specified multi-recipient
+send signature, an implicit rather than explicit classify-then-
+authorize ordering, and an unnamed future bypass risk for calendar
+attendees. None change this ADR's own core Decision (reuse
+`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`, no new effect) — see
+"Amendment 2026-09-01" under Consequences below for what each one adds.
+
 ## Date
 
-2026-09-01
+2026-09-01 (amended 2026-09-01)
 
 ## Source
 
@@ -124,3 +134,96 @@ decision no code yet implements — `EmailPort`/`CalendarPort` and
 ADR's own drafting. Implementation is real, separate, future work
 (`m6a-communications.md`'s own work-package sketch, WP-76 onward), not
 bundled into this ADR's own scope.
+
+## Amendment 2026-09-01 (real gap-hunt pass, before implementation)
+
+Applied the same real skepticism ADR-0056's own amendment pass applied
+to itself, before any of WP-76 onward starts, not after. Four real
+findings, none changing this ADR's own core Decision:
+
+**1. A real trust-boundary caveat was missing, not just unstated.**
+This ADR's own `Effect.EGRESS_SECRET`/`DENY` protection is entirely
+dependent on the outgoing content's `Classification` already being
+correct by the time `egress_effect_for` sees it — this function
+*classifies*, it does not *detect*. Nothing in this mechanism scans an
+email body's actual text for something that looks like a leaked API
+key; if the `Tainted` value representing the body is constructed with
+`Classification.PUBLIC` by whatever real caller builds it (a future
+voice/CLI entry point, or an M5 coding-agent-adjacent flow drafting an
+email on the user's behalf), a real secret embedded in otherwise
+ordinary-looking prose passes straight through at `CONFIRM`, not
+`DENY` — this ADR's own unconditional-DENY guarantee is only as strong
+as whoever computes that provenance upstream. **This is not a new,
+undiscovered risk specific to email — it is the same trust boundary
+`kernel/memory.py`'s own `authorize_and_remember` docstring already
+names explicitly for memory writes** ("A future caller constructing
+this value from a less-trusted or more sensitive source is responsible
+for giving it the correct provenance before calling this function --
+this function does not, and cannot, second-guess a provenance it did
+not compute"). The real gap was this ADR's own silence on it, not a
+new architectural hole — fixed by restating the identical caveat here,
+explicitly, rather than leaving a reader to assume it. Whichever work
+package first builds a real caller of `send_message`/`create_event`
+(WP-79 onward) must construct the outgoing content's `Tainted` value
+with real, considered classification, the same responsibility every
+other dynamic-effect capability in this codebase already carries.
+
+**2. `EmailPort.send_message`'s own `to: str` signature does not
+support real multiple recipients, and this ADR never stated what
+"all-or-nothing" means for it.** A real email capability needs to
+address more than one recipient in the ordinary case (a real cc/to
+list), which `to: str` cannot express at all. `m6a-communications.md`
+is amended to widen this to `to: tuple[str, ...]`. This does not weaken
+this ADR's own classification guarantee — it strengthens the
+statement of it: classification here is computed once, over the whole
+message's own content, for the entire call, not per-recipient. There
+is no code path, by construction, where a `Classification.SECRET` body
+sends to some addresses in `to` and not others — the capability
+invocation is atomic (one real `send_message` call, one real
+`Decision`, one real outcome), so "all-or-nothing" was already
+structurally guaranteed by the existing single-invocation shape; it
+was simply never stated as an explicit property of this ADR's own
+Decision until this amendment.
+
+**3. The classify-then-authorize-then-act ordering was implicit
+("mirrors the existing pattern"), not stated as an explicit
+requirement of this ADR's own Decision.** Every real dynamic-effect
+authorizer this codebase already has
+(`MemoryWriteAuthorizer.authorize_write`, `CodeWriteAuthorizer.authorize_write`)
+follows the same real shape: classify the content, build the
+`CapabilityInvocation` with the resulting `Effect`, call
+`AuthorizationOrchestrator.authorize()`, and only if `Decision.granted`
+is `True` does the real side effect (`adapter.write`,
+`WorkspacePort.apply_patch`) ever run. `m6a-communications.md`'s own
+package-layout section said the future `EmailSendAuthorizer`/
+`CalendarEventAuthorizer` would mirror this "exactly," which is
+correct, but this ADR's own Decision section never said so explicitly
+enough to be unambiguous on its own. Stated explicitly now, as a real,
+binding requirement of this ADR's own Decision, not merely implied by
+analogy: **`egress_effect_for` must be called, and its result used to
+build the real `CapabilityInvocation` that `AuthorizationOrchestrator.authorize()`
+evaluates, strictly before `EmailPort.send_message`/`CalendarPort.create_event`
+is ever invoked against the real adapter — and only if that call's own
+`Decision.granted` is `True`.** Whichever work package implements
+`kernel/communications.py` (WP-80) must satisfy this literally, the
+same way `CodeWriteAuthorizer`'s own real code already does, not just
+structurally resemble it.
+
+**4. A real, named future bypass risk: any future `update_event`/
+`add_attendees` method must apply the identical attendee
+classification this ADR requires for `create_event`, not treat
+"adding attendees to an already-existing event" as ordinary
+`Effect.WRITE_LOCAL` just because it isn't creation.** This design's
+own current `CalendarPort` has no such method — `create_event` is the
+only write — so no real bypass exists in what is designed today. But
+the risk is real and worth naming now, before it can be built past
+unnoticed: a future implementer adding `update_event(uid, draft)` or
+`add_attendees(uid, attendees)` without reading this ADR closely could
+reasonably assume "updating an existing event" is a lesser action than
+"creating one," and classify it `WRITE_LOCAL` by default — silently
+reopening the exact "reaches a new external party" gap this ADR exists
+to close. Any future work extending `CalendarPort` with an
+attendee-affecting write must route through
+`application/communications/classification.py::egress_effect_for` the
+identical way `create_event` does, or this ADR is being violated in
+spirit even while its own literal text is unchanged.
