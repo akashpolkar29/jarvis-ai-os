@@ -68,6 +68,7 @@ BROWSER_OPEN_PAGE_CAPABILITY_ID = CapabilityId("browser.open_page")
 BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
 BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
 BROWSER_CLOSE_PAGE_CAPABILITY_ID = CapabilityId("browser.close_page")
+CODING_RUN_TASK_CAPABILITY_ID = CapabilityId("coding.run_task")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -343,6 +344,24 @@ def build_default_registry() -> CapabilityRegistry:
                 "temporary profile. Same EXECUTE tier as docker.stop_container "
                 "-- stopping something already started, real cleanup, not a "
                 "new resource."
+            ),
+        )
+    )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=CODING_RUN_TASK_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Run an autonomous coding-agent task (WP-71's coding-loop "
+                "wrapper) against a real target repository. The outer gate "
+                "on invoking the coding agent at all -- Effect.EXECUTE, same "
+                "tier as docker.stop_container/browser.open_page, an "
+                "ordinary 'ask first' action. Each real write the task may "
+                "eventually make is separately, individually authorized "
+                "through Effect.CODE_WRITE/Effect.PROTECTED_PATH_WRITE "
+                "(ADR-0056) inside run_coding_task itself, unaffected by "
+                "this outer gate's own tier."
             ),
         )
     )

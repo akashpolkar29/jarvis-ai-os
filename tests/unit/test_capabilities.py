@@ -8,6 +8,7 @@ from jarvis.kernel.capabilities import (
     BROWSER_INSPECT_DOM_CAPABILITY_ID,
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
     BROWSER_SCREENSHOT_CAPABILITY_ID,
+    CODING_RUN_TASK_CAPABILITY_ID,
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
@@ -34,7 +35,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 27
+_EXPECTED_CAPABILITY_COUNT = 28
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -81,6 +82,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         BROWSER_SCREENSHOT_CAPABILITY_ID,
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
         BROWSER_CLOSE_PAGE_CAPABILITY_ID,
+        CODING_RUN_TASK_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -296,6 +298,15 @@ def test_browser_close_page_has_execute_effects() -> None:
     registry = build_default_registry()
 
     descriptor = registry.get(BROWSER_CLOSE_PAGE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EXECUTE
+    assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_coding_run_task_has_execute_effects() -> None:
+    """coding.run_task is EXECUTE -- Tier.CONFIRM, the outer gate on invoking the coding agent."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(CODING_RUN_TASK_CAPABILITY_ID)
     assert descriptor.effects == Effect.EXECUTE
     assert descriptor.required_tier == Tier.CONFIRM
 
