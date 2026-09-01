@@ -60,12 +60,22 @@ docstring for why memory.write is deliberately never registered in
 names the ``kernel/voice_loop.py`` dispatch branch a granted memory
 write needs for its own spoken confirmation as real, necessary work
 for this work package -- without a real way to resolve to that
-capability id, that branch would be unreachable dead code. No
-equivalent "recall"/"what do you know about" command is added: nothing
-in this milestone's ADRs names voice-triggered recall as required
-work, matching the same real, precedented scope boundary
-``docker.*``/``git.*``'s own kernel functions already have (real and
-tested, not voice- or CLI-wired).
+capability id, that branch would be unreachable dead code.
+
+"recall" (overnight Track 3 pass) mirrors "remember"'s/"read"'s
+identical shape: everything after the keyword, verbatim, becomes the
+search query -- resolved to ``kernel.capabilities.MEMORY_RETRIEVE_CAPABILITY_ID``,
+a real ``kernel.capabilities`` id this time (unlike "remember"'s
+dynamic-effect ``memory.write``, ``memory.retrieve`` is a static,
+fixed-effect capability, already registered in
+``build_default_registry()`` -- ``kernel/memory.py``'s own module
+docstring explains why the two capabilities take different
+registration shapes). Closes a real, previously-named gap: this
+module's own docstring used to state flatly that "nothing in this
+milestone's ADRs names voice-triggered recall as required work" --
+true when M4 was built, but the real, named gap it left behind
+(`docs/threat-model/v0.md`'s own M4 closeout: "voice-triggered *recall*
+was not built") was never actually resolved until this pass.
 """
 
 from __future__ import annotations
@@ -75,7 +85,11 @@ from typing import TYPE_CHECKING
 
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
-from jarvis.kernel.capabilities import PING_CAPABILITY_ID, READ_FILE_CAPABILITY_ID
+from jarvis.kernel.capabilities import (
+    MEMORY_RETRIEVE_CAPABILITY_ID,
+    PING_CAPABILITY_ID,
+    READ_FILE_CAPABILITY_ID,
+)
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, MUSIC_COMMAND_NAMES
 
 if TYPE_CHECKING:
@@ -128,6 +142,16 @@ def _resolve_remember(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     )
 
 
+def _resolve_recall(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve the "recall" command: everything after the keyword is the search query."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=MEMORY_RETRIEVE_CAPABILITY_ID,
+        arguments=Tainted({"query": rest}, Provenance.user()),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -147,8 +171,8 @@ def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedInten
 
     Matching is case-insensitive (on the command word only) and
     whitespace-trimmed. The first word selects the command; for every
-    command except "read"/"remember", any remaining text makes the
-    match fail (a zero-argument command does not silently ignore
+    command except "read"/"remember"/"recall", any remaining text makes
+    the match fail (a zero-argument command does not silently ignore
     trailing words) rather than resolving anyway.
     """
     words = transcript.text.strip().split(maxsplit=1)
@@ -162,6 +186,8 @@ def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedInten
         return _resolve_read(rest)
     if command == "remember":
         return _resolve_remember(rest)
+    if command == "recall":
+        return _resolve_recall(rest)
     if rest:
         return _UNRECOGNIZED
     return _resolve_zero_argument_command(command)

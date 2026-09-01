@@ -16,6 +16,13 @@ this dispatch too -- ADR-0053 names this module's own "remember"
 branch as real, necessary work for that milestone, distinct from the
 "unchanged M0 code" framing above; unlike the M0 functions, it is
 new, not a pre-existing function this module merely wires in.
+``authorize_and_recall`` (overnight Track 3 pass) joins the same
+dispatch: unlike ``authorize_and_remember``, it is a *static*,
+fixed-effect capability (``memory.retrieve``, already registered in
+``build_default_registry()`` since WP-63) -- closing the real,
+previously-named gap that no voice-triggered recall existed, only
+"remember `<text>`" (see ``kernel/intent.py``'s own module docstring
+for the full "recall" grammar addition).
 
 Per utterance: a confirmed :class:`~jarvis.domain.wake_word.WakeEvent`
 (carrying its own audio, per ADR-0033) is handed to
@@ -117,12 +124,13 @@ from jarvis.adapters.vad import SileroVadAdapter
 from jarvis.adapters.wake_word import OpenWakeWordAdapter
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.kernel.capabilities import (
+    MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
 )
 from jarvis.kernel.files import authorize_and_read_file
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
-from jarvis.kernel.memory import authorize_and_remember
+from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 
@@ -148,6 +156,13 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIRMATION_TIMEOUT_S = 30.0
+
+_RECALL_SPOKEN_LIMIT = 3
+"""How many recalled records a granted "recall" command speaks back.
+A real, deliberate bound, not arbitrary: RetrievalPort.retrieve()'s
+own ranking already returns records best-match-first, so the top three
+are the real, most relevant answer to speak -- more than a handful
+read aloud in one breath stops being a usable spoken answer at all."""
 
 _MUSIC_COMMAND_BY_CAPABILITY_ID: dict[CapabilityId, MusicCommand] = {
     capability_id: command for command, capability_id in MUSIC_CAPABILITY_IDS.items()
@@ -190,6 +205,9 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:
     if resolved.capability_id == MEMORY_WRITE_CAPABILITY_ID:
         text = resolved.arguments.value.get("text")
         return f"JARVIS wants to: remember '{text}'. Approve?"
+    if resolved.capability_id == MEMORY_RETRIEVE_CAPABILITY_ID:
+        query_text = resolved.arguments.value.get("query")
+        return f"JARVIS wants to: recall memories about '{query_text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -198,7 +216,7 @@ def _describe(decision: Decision) -> str:
     return "Done." if decision.granted else "Sorry, that wasn't approved."
 
 
-def _authorize_and_execute(  # noqa: PLR0913 -- one per composition-function pass-through
+def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per composition function, one return per dispatch branch
     resolved: ResolvedIntent,
     *,
     approved: bool,
@@ -263,6 +281,24 @@ def _authorize_and_execute(  # noqa: PLR0913 -- one per composition-function pas
             embedding_port=embedding_port,
         )
         return _describe(write_outcome.decision)
+
+    if resolved.capability_id == MEMORY_RETRIEVE_CAPABILITY_ID:
+        query_text = str(resolved.arguments.value["query"])
+        recall_outcome = authorize_and_recall(
+            query_text,
+            limit=_RECALL_SPOKEN_LIMIT,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+        )
+        if not recall_outcome.decision.granted:
+            return _describe(recall_outcome.decision)
+        if not recall_outcome.records:
+            return "I don't remember anything about that."
+        contents = "; ".join(str(record.value.value) for record in recall_outcome.records)
+        return f"I recall: {contents}"
 
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(

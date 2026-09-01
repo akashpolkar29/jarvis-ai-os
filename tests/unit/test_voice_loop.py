@@ -65,6 +65,17 @@ class _FakeSttPort:
         return Tainted(Transcript(text=self._text), Provenance.user())
 
 
+class _SequentialSttPort:
+    """Transcribes a fixed list of texts, one per real call, in order -- for a multi-utterance test."""  # noqa: E501
+
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = iter(texts)
+
+    async def transcribe(self, audio: Segment) -> Tainted[Transcript]:
+        del audio
+        return Tainted(Transcript(text=next(self._texts)), Provenance.user())
+
+
 class _FakeSpeakerIdPort:
     """Always reports the same fixed score -- content is irrelevant, it's audit/UX only."""
 
@@ -293,6 +304,116 @@ async def test_the_confirmation_prompt_names_the_text_to_remember(tmp_path: Path
     assert len(confirmation.prompts) == 1
     prompt_text, _timeout = confirmation.prompts[0]
     assert "I prefer tabs" in prompt_text
+
+
+async def test_a_recognized_recall_command_speaks_back_a_previously_remembered_value(
+    tmp_path: Path,
+) -> None:
+    """ "remember <text>" then "recall <query>" speaks the remembered content back."""
+    tts = _FakeTtsPort()
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    database_path = tmp_path / "memory.sqlite3"
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT, _A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_SequentialSttPort(["remember I prefer tabs", "recall my editor preferences"]),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+
+    assert tts.spoken[0] == "Done."
+    assert "I prefer tabs" in tts.spoken[1]
+
+
+async def test_a_recall_command_with_nothing_stored_reports_nothing_remembered(
+    tmp_path: Path,
+) -> None:
+    """A granted recall against an empty store speaks a real, honest "nothing" answer."""
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("recall my editor preferences"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+    )
+
+    assert tts.spoken == ["I don't remember anything about that."]
+
+
+async def test_a_recall_command_is_granted_even_when_confirmation_is_denied(
+    tmp_path: Path,
+) -> None:
+    """memory.retrieve is Tier.ALLOW -- a denied spoken confirmation still doesn't block recall."""
+    tts = _FakeTtsPort()
+    database_path = tmp_path / "memory.sqlite3"
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT, _A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_SequentialSttPort(["remember I prefer tabs", "recall my editor preferences"]),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    remembered_via_confirmed_run = "I prefer tabs" in tts.spoken[1]
+
+    tts_denied = _FakeTtsPort()
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain_2.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("recall my editor preferences"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts_denied,
+        play_fn=_no_playback,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+
+    assert remembered_via_confirmed_run is True
+    # A denied physical confirmation still finds and speaks the same real, already-stored
+    # record -- ALLOW tier means the recall itself was never gated by the answer at all.
+    assert "I prefer tabs" in tts_denied.spoken[0]
+
+
+async def test_the_confirmation_prompt_names_the_recall_query(tmp_path: Path) -> None:
+    """The prompt for a resolved "recall" command names the actual query, not a generic label."""
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("recall my editor preferences"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "my editor preferences" in prompt_text
 
 
 async def test_zero_vad_segments_produces_no_speech_and_no_confirmation(tmp_path: Path) -> None:
