@@ -32,21 +32,24 @@ infrastructure entirely unrelated to this ADR's own coding-agent
 concern, predating it, not a violation. Named here explicitly as a
 real, deliberate allowlist entry, not silently ignored.
 
-**Real, explicit sequencing note -- not a silent gap**: this test
-module is built in WP-70, *before* WP-71 (the coding-loop wrapper
-itself, ADR-0055's own real orchestration module,
-`application/coding/loop.py` or similar), which is explicitly out of
-this work package's own scope. Once WP-71 is built, whatever module it
-lives in will very likely need to call `WorkspacePort.apply_patch`
-itself (directly, or by constructing a wrapping `WorkspacePort` that
-intercepts the call M2's own `Dispatcher`→`ValidationPort` chain makes
-internally -- a real, deeper architectural question this work package
-does not resolve, named here for WP-71's own attention, not solved
-speculatively now). Whichever real shape that turns out to be, this
-test's own allowlist must be extended, by hand, at that point -- the
-same "small, tracked, mechanical addition" `test_memory_adapter_isolation.py`'s
-own sequencing note predicted for `kernel/memory.py`, restated here for
-the coding-agent's own equivalent gap.
+**Real, explicit sequencing note, resolved -- not a silent gap**: this
+test module was built in WP-70, before WP-71 (the coding-loop wrapper
+itself). At the time, it named a real, deeper open question: would
+WP-71 call `apply_patch` directly, or by constructing a wrapping
+`WorkspacePort` that intercepts the call M2's own
+`Dispatcher`→`ValidationPort` chain makes internally? Resolved by
+WP-71/ADR-0055's own "Amendment 2026-09-01" (see
+`docs/adr/0055-...md`): no interception is possible or needed --
+`Dispatcher.run()`'s own internal `apply_patch` calls only ever touch a
+disposable, `SandboxPort`-backed workspace copy (WP-73), never the real
+target repository. `application/coding/loop.py`'s own
+`run_coding_task` calls `WorkspacePort.apply_patch` directly, itself,
+exactly once, against a *second*, distinct `WorkspacePort` pointed at
+the real repository -- only after the winning candidate's own touched
+paths are individually authorized (`CodeWriteAuthorizer`, WP-70) and
+every single one is granted. Added to this allowlist below, the same
+"small, tracked, mechanical addition"
+`test_memory_adapter_isolation.py`'s own sequencing note predicted.
 """
 
 from __future__ import annotations
@@ -122,18 +125,21 @@ def test_the_scan_predicate_does_not_flag_a_bare_method_definition() -> None:
 def test_no_module_under_src_references_apply_patch_outside_the_real_allowlist() -> None:
     """The real ADR-0056 guarantee: apply_patch is referenced only where it legitimately must be.
 
-    ``adapters/validation/_command.py`` is the one real, already-
-    Accepted M2 caller (ADR-0043) -- see this module's own docstring
-    for why the port/adapter's own definitions need no exemption, and
-    for the real, tracked gap this allowlist will need extending for
-    once WP-71 (out of this work package's own scope) is built.
+    Two real, deliberate entries, both named in this module's own
+    docstring: ``adapters/validation/_command.py`` (the pre-existing
+    M2/ADR-0043 caller, applying a candidate to a disposable workspace
+    for validation) and ``application/coding/loop.py`` (WP-71's own
+    coding-loop wrapper, the one real place a *classified, authorized*
+    write against the actual target repository happens, exactly once,
+    only after every touched path is granted).
     """
     validation_command = SRC_ROOT / "jarvis" / "adapters" / "validation" / "_command.py"
+    coding_loop = SRC_ROOT / "jarvis" / "application" / "coding" / "loop.py"
 
     violations = _references_identifier_outside_allowed_modules(
         SRC_ROOT / "jarvis",
         _BANNED_IDENTIFIER,
-        frozenset({validation_command}),
+        frozenset({validation_command, coding_loop}),
     )
 
     assert violations == []
