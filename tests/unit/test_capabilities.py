@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from jarvis.domain.capability import Effect, Tier
 from jarvis.kernel.capabilities import (
+    BROWSER_INSPECT_DOM_CAPABILITY_ID,
+    BROWSER_OPEN_PAGE_CAPABILITY_ID,
+    BROWSER_SCREENSHOT_CAPABILITY_ID,
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
@@ -30,7 +33,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 23
+_EXPECTED_CAPABILITY_COUNT = 26
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -73,6 +76,9 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         MEMORY_RETRIEVE_CAPABILITY_ID,
         MEMORY_PIN_CAPABILITY_ID,
         MEMORY_FORGET_CAPABILITY_ID,
+        BROWSER_OPEN_PAGE_CAPABILITY_ID,
+        BROWSER_SCREENSHOT_CAPABILITY_ID,
+        BROWSER_INSPECT_DOM_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 
@@ -254,6 +260,33 @@ def test_memory_forget_has_destructive_and_irreversible_effects() -> None:
     descriptor = registry.get(MEMORY_FORGET_CAPABILITY_ID)
     assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
     assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_browser_open_page_has_execute_effects() -> None:
+    """browser.open_page is EXECUTE -- Tier.CONFIRM, same as desktop.brave_open_url."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(BROWSER_OPEN_PAGE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EXECUTE
+    assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_browser_screenshot_has_egress_local_effects() -> None:
+    """browser.screenshot is EGRESS_LOCAL, same reasoning as fs.read_file."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(BROWSER_SCREENSHOT_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EGRESS_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_browser_inspect_dom_has_egress_local_effects() -> None:
+    """browser.inspect_dom is EGRESS_LOCAL, same reasoning as browser.screenshot."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(BROWSER_INSPECT_DOM_CAPABILITY_ID)
+    assert descriptor.effects == Effect.EGRESS_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
 
 
 def test_every_descriptor_has_a_non_empty_description() -> None:

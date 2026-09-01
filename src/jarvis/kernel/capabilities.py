@@ -64,6 +64,9 @@ GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
 MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
 MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
+BROWSER_OPEN_PAGE_CAPABILITY_ID = CapabilityId("browser.open_page")
+BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
+BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -292,5 +295,43 @@ def build_default_registry() -> CapabilityRegistry:
     # value's own classification (ADR-0049), the same reason
     # jarvis.application.reasoning.router.ModelRouter's capability is never
     # registered here either.
+
+    registry.register(
+        CapabilityDescriptor(
+            id=BROWSER_OPEN_PAGE_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Launch a dedicated, headless, CDP-controlled browser page, "
+                "navigated to a URL. Same tier as desktop.brave_open_url/"
+                "desktop.vscode_open_file (M5's own deep counterpart to M3's "
+                "shallow app-launch capabilities, m3-desktop-control.md's own "
+                "'Relationship to M5' split)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=BROWSER_SCREENSHOT_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "Capture a real screenshot of an already-open browser page's "
+                "current content. EGRESS_LOCAL, not READ_LOCAL, matching "
+                "fs.read_file's own reasoning: this extracts real page content "
+                "out to the caller, which is an egress even though it never "
+                "leaves the machine."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=BROWSER_INSPECT_DOM_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "Query an already-open browser page's live DOM for the outer "
+                "HTML of the first element matching a CSS selector. Same "
+                "EGRESS_LOCAL reasoning as browser.screenshot."
+            ),
+        )
+    )
 
     return registry
