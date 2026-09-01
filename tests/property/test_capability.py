@@ -112,6 +112,21 @@ def test_memory_write_always_denies_unconditionally(other_members: set[Effect]) 
     assert minimum_tier_for(combined) == Tier.DENY
 
 
+@given(EFFECT_MEMBER_SET)
+def test_protected_path_write_always_denies_unconditionally(other_members: set[Effect]) -> None:
+    """PROTECTED_PATH_WRITE always floors at DENY, regardless of what else is combined with it.
+
+    Mirrors test_egress_secret_always_denies_unconditionally and
+    test_memory_write_always_denies_unconditionally exactly (ADR-0056):
+    a third, deliberately separate DENY-floored effect, its own
+    property test for the same reason those two have theirs -- DENY is
+    an absolute ceiling, a stronger claim than ">= MANUAL_ONLY" alone
+    would prove.
+    """
+    combined = _combine(other_members) | Effect.PROTECTED_PATH_WRITE
+    assert minimum_tier_for(combined) == Tier.DENY
+
+
 @given(DESCRIPTOR, ARGUMENTS_VALUE, UNTAINTED_PROVENANCE | TAINTED_PROVENANCE)
 def test_effective_tier_never_below_required(
     descriptor: CapabilityDescriptor,

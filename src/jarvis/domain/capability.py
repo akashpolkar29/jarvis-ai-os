@@ -40,6 +40,8 @@ class Effect(Flag):
     EGRESS_SENSITIVE = auto()
     EGRESS_SECRET = auto()
     MEMORY_WRITE = auto()
+    CODE_WRITE = auto()
+    PROTECTED_PATH_WRITE = auto()
 
 
 class Tier(IntEnum):
@@ -57,9 +59,11 @@ _EFFECT_TIER_FLOOR: dict[Effect, Tier] = {
     Effect.CREDENTIAL: Tier.MANUAL_ONLY,
     Effect.EGRESS_SECRET: Tier.DENY,
     Effect.MEMORY_WRITE: Tier.DENY,
+    Effect.PROTECTED_PATH_WRITE: Tier.DENY,
     Effect.EGRESS_SENSITIVE: Tier.CONFIRM,
     Effect.EXECUTE: Tier.CONFIRM,
     Effect.WRITE_LOCAL: Tier.CONFIRM,
+    Effect.CODE_WRITE: Tier.CONFIRM,
     Effect.EGRESS_LOCAL: Tier.ALLOW,
     Effect.READ_LOCAL: Tier.ALLOW,
 }

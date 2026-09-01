@@ -35,9 +35,12 @@ EFFECT_TIER_CASES = [
     (Effect.CREDENTIAL, Tier.MANUAL_ONLY),
     (Effect.EGRESS_SECRET, Tier.DENY),
     (Effect.MEMORY_WRITE, Tier.DENY),
+    (Effect.CODE_WRITE, Tier.CONFIRM),
+    (Effect.PROTECTED_PATH_WRITE, Tier.DENY),
     (Effect.NONE, Tier.ALLOW),
     (Effect.EGRESS_SECRET | Effect.READ_LOCAL, Tier.DENY),
     (Effect.MEMORY_WRITE | Effect.READ_LOCAL, Tier.DENY),
+    (Effect.PROTECTED_PATH_WRITE | Effect.CODE_WRITE, Tier.DENY),
 ]
 
 
