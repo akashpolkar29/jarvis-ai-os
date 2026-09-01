@@ -1,16 +1,20 @@
 # M6 scoping notes — research and questions, not a design
 
-**Status: prep material for a scoping conversation that has not
-finished yet.** This is not `m6-integrations.md`'s real content, not
-an ADR, not a design. Per this project's rolling-wave planning
-principle (`docs/ROADMAP.md`) and CLAUDE.md's own hard rule ("never
-silently change the architecture... propose a fix as a new ADR, and
-wait for approval"), M6's real design starts only once the user has
-actually answered the questions below — the same discipline that kept
+**Status: four of six real scope questions answered directly by the
+user in conversation (2026-09-01); two remain genuinely open, deferred
+to whichever future pass begins each surviving sub-milestone's own real
+design.** This is not `m6-integrations.md`'s real content, not an ADR,
+not a design. Per this project's rolling-wave planning principle
+(`docs/ROADMAP.md`) and CLAUDE.md's own hard rule ("never silently
+change the architecture... propose a fix as a new ADR, and wait for
+approval"), each surviving sub-milestone's own real design starts only
+once its own turn genuinely arrives — the same discipline that kept
 `m3-desktop-control.md`/`m4-memory-retrieval.md`/`m5-browser-coding.md`
-each a stub until their own milestone genuinely started and their own
-real ambiguities got resolved first. Nothing here authorizes writing
-`ports/`, `adapters/`, or `application/` code, or an ADR, for M6.
+each a stub until their own milestone genuinely started. Nothing here
+authorizes writing `ports/`, `adapters/`, or `application/` code, or an
+ADR, for M6a/M6b. **See "Resolved, 2026-09-01" at the bottom of this
+document for the real answers** — read that section first if only
+reading one.
 
 `m6-integrations.md` itself remains untouched, gate-only, exactly as
 it was before this document existed.
@@ -279,3 +283,54 @@ not resolved by this tool merely existing in an unrelated context.
   on Part 1, item 3's own answer — no design assumed here.
 - A real "research synthesis" capability, if item 6's answer is (b) or
   (c) rather than (a).
+
+## Resolved, 2026-09-01 — real answers, given directly by the user in conversation
+
+Four of Part 1's six questions were put to the user directly and
+answered — not inferred, not assumed, not a remotely-reasoned working
+assumption the way M5's own two ADRs were. All four were the option
+this pass itself had recommended; each is a real, deliberate choice
+the user made, not a default that went unquestioned.
+
+- **Item 2 (Docker)**: **Dropped.** Confirmed already fully satisfied
+  by M3's own real `docker.*` capabilities — M6 does not build
+  anything Docker-related. The ROADMAP's own M6 objective line is
+  stale on this point and gets corrected, not carried forward.
+- **Item 3 (ROS2)**: **Dropped.** No real robot/simulated environment
+  or product reason was ever named for it; treated as a stale
+  carry-forward from earlier planning material that predates this
+  repo's real structure, the same category `m6-integrations.md`'s own
+  placeholder text already warned about. Not part of M6a/M6b's own
+  scope; not deferred to a later milestone either — genuinely dropped,
+  unless a real reason to reopen this surfaces later.
+- **Item 4 (email/calendar protocol)**: **IMAP/CalDAV only** —
+  vendor-neutral, matching ADR-0021's own no-vendor-names rule with no
+  new tension or exception needed. A specific provider's own API is
+  out of scope unless a real, separate future decision reopens this.
+- **Item 1 (split)**: **M6 splits.** Two real, separately-scoped
+  sub-milestones replace the single M6 bundle: **M6a** (communications/
+  productivity — email, calendar, research) and **M6b** (job
+  assistance — research and drafting only, no auto-apply). Each gets
+  its own real design doc, written only once its own turn genuinely
+  arrives, per this project's own rolling-wave discipline — this
+  document does not draft either one now.
+
+**Two of Part 1's six questions remain genuinely open, deliberately not
+resolved here** — deferred to whichever future pass begins M6a's or
+M6b's own real design, not resolved prematurely just because the other
+four were answered in the same conversation:
+
+- **Item 5 (job-assistance boundary)** — M6b's own real design must
+  still decide whether "no auto-apply" is a structural boundary (no
+  capability in scope ever submits anything to a real external system)
+  or a policy-tier gate (a real `Effect`/`Tier` requiring
+  `MANUAL_ONLY`), and what "research and drafting" concretely includes.
+- **Item 6 (research capability shape)** — M6a's own real design must
+  still decide whether "research" needs any new port at all, or folds
+  entirely into M5's already-built `BrowserAutomationPort`.
+
+`docs/ROADMAP.md`'s own M6 row is updated to reflect the real M6a/M6b
+split and the Docker/ROS2 drops (see that document); this document
+itself is not further rewritten — the six original questions and the
+real research behind them stay in place above, as the real record of
+how these four answers were reached.

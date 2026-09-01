@@ -5,9 +5,14 @@
 A complete, privacy-first, plugin-based personal AI agent kernel running
 locally, handling voice interaction, multi-model reasoning, desktop
 control, memory/retrieval, browser/coding assistance, and integrations
-(email, calendar, research, Docker, ROS2) — all under the Clean
-Architecture, capability-based plugin, multi-tier policy engine, and
-hash-chained audit invariants established in M0.
+(email/calendar via IMAP/CalDAV, research, job assistance) — all under
+the Clean Architecture, capability-based plugin, multi-tier policy
+engine, and hash-chained audit invariants established in M0. Docker
+and ROS2 were both real, named parts of this line's original vision;
+both were dropped during M6's own real scoping pass (2026-09-01) —
+Docker because M3 already fully satisfies it, ROS2 because no real
+product reason for it was ever found — see
+`docs/architecture/m6-scoping-notes.md`'s own "Resolved" section.
 
 ## Standing principle: always legible
 
@@ -62,7 +67,8 @@ CLAUDE.md's "Current Status" line, which reflects the same state.
 | **M3** | Desktop control: portal + libei, X11 fallback, AT-SPI2. Out-of-process plugin host + `bwrap` sandboxing. Eight apps: Brave, VS Code, Spotify, Terminal, Docker, Git, the Claude desktop app, the ChatGPT desktop app. | M0, M1. | `DesktopControlPortContract` green on both Wayland and X11; moving plugins out-of-process requires zero plugin changes. | XL, 25–35 ideal-days. | **Code-complete** (WP-43 through WP-56), all gates pass — see `docs/architecture/m3-desktop-control.md`, ADR-0044–ADR-0047, and `docs/threat-model/v0.md`'s "Milestone 3 additions"/"Live desktop-control verification"/"Overnight live-reality audit" sections for what was actually built and verified. Real deviations from this row's own original objective, stated plainly rather than rounded up: the mechanism actually used for reading/finding/focusing windows is AT-SPI2 only, not portal+libei (libei's GI binding was found absent during WP-43's spike) — AT-SPI2 is display-server-agnostic, so it was never run against a real X11 session specifically, only this milestone's real Wayland development machine; Terminal's synthetic-typing step does use the RemoteDesktop portal (ADR-0047, WP-56), the one place `libei`'s original objective partly survives, code-complete but its real portal call has deliberately never fired (needs the user physically present); no out-of-process plugin host was built in this pass, so this row's "moving plugins out-of-process requires zero plugin changes" criterion remains untested, not passed. **No longer a blanket unverified gap, updated across several later sessions**: Docker (`list_containers`) and Git (push/branch/commit/force-push) have been exercised for real against a real daemon and a real, network-reachable remote; Brave, VS Code, Spotify (MPRIS), and Terminal's real display have all been exercised for real against live desktop windows — one pass also found and fixed a real bug (`focus()`/`is_focused()`/`is_visible_and_showing()` checked the wrong AT-SPI2 node). Genuinely still open: Terminal's real synthetic keystroke has never fired; the Claude desktop app launches but exposes no AT-SPI2 tree; the ChatGPT desktop app was never installed (no official Linux client exists); `docker run`/`build_image` (DESTRUCTIVE) remain deliberately unexercised. |
 | **M4** | Memory, hybrid retrieval, retrieval eval set. | M2, M3. | Retrieval measured against a fixed eval set; brute-force-vs-ANN decision made by benchmark, not preference. | XL, 25–35 ideal-days (not re-estimated after scoping -- see below). | **Code-complete, tagged v0.4.0** (WP-57 through WP-64, plus the WP-65 M4-gap-closure pass), all gates pass — see `docs/architecture/m4-memory-retrieval.md`, ADR-0048–ADR-0054, `docs/architecture/m4-benchmark-results.md`, and `docs/threat-model/v0.md`'s "Milestone 4 additions"/"M4-gap-closure pass" for what was actually built. Built in one unattended overnight pass; ADR-0048–ADR-0053 were accepted directly by the user before the pass began, but **ADR-0054 (ClockPort/IdPort) was accepted unilaterally, mid-implementation, by the pass itself, not by the user** — flagged for the user's own retroactive review, not presented as equivalent to the other six. Real, benchmark-backed decision: brute-force numpy cosine similarity over `sqlite-vec` (real numbers in `m4-benchmark-results.md`); `fastembed`/`BAAI/bge-small-en-v1.5` (ONNX, CPU-only) chosen over a `torch`-based embedding model specifically to avoid an unattended-overnight CUDA/download risk — a real quality trade-off, not a default. **WP-65 (2026-08-31) closed four of the originally-named gaps**: a real GC sweep (`MemoryWritePort.sweep_expired()`, triggered on every granted write); a real "forget X" capability (`authorize_and_forget()`/`MemoryWritePort.forget()`, `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`, same combination as `git.force_push`); `memory.pin`'s first real caller (`authorize_and_pin()`); and real `jarvis memory write/retrieve/forget/pin` CLI subcommands (correcting an earlier, mistaken "mirrors `docker.*`/`git.*`'s no-CLI precedent" claim — see the threat model's own note). All four kernel-level only, no new voice grammar, per that pass's own fixed scope. Real, explicitly-named gaps still open: ADR-0050's provenance carry-forward rule has no real consumer yet to exercise it; only `str`-valued memories are supported; voice-triggered *recall* was not built (only "remember `<text>`", per ADR-0053's own explicit commitment); the full real write/retrieve pipeline was verified live exactly once, manually, never repeated by CI by design. |
 | **M5** | Browser via CDP. Coding capabilities via LSP + git. Console UI. Vision via ScreenCast/PipeWire (moved from M4's original objective, decided alongside M4's own scoping pass -- see `m4-memory-retrieval.md`'s "Relationship to M5" section). | M3, M4. | Coding agent passes the M2 escalation ladder end-to-end on a real repo; test files provably write-protected. | XL, 30–40 ideal-days. | **Code-complete, tagged v0.5.0** (WP-67 through WP-75), all gates pass — see `docs/architecture/m5-browser-coding.md`, ADR-0055–ADR-0056, and `docs/threat-model/v0.md`'s "Milestone 5 additions" for what was actually built and verified. Exit gate met for real: `run_coding_task`'s own end-to-end test proves the wrapper retries across two full `Dispatcher.run()` climbs on a real repo with a real failing test and reaches `Verdict.PASSED`; a real, all-or-nothing test proves a patch touching one ordinary and one protected path is rejected wholesale, neither file written. Browser automation (CDP) is real and live-verified (a real headless Brave instance, a real screenshot, a real DOM query, all proven on the development machine); the minimal Console UI mechanism is real, wired into one real action (`browser.open_page`). **Real, explicitly-named gaps, none rounded up to "done"**: LSP-based code intelligence (half of this row's own original objective) was never answered or built, real unresolved scope; `coding.run_task` has no default `dispatcher_factory` and therefore no real caller anywhere in this codebase yet; no voice grammar exists for `coding.run_task`; `Dispatcher`'s own pre-existing multi-candidate-accumulation gap is contained by a disposable workspace, not resolved at the `Dispatcher` level. **ADR-0055/ADR-0056 are Accepted, but by this session's own judgment acting on the user's own relayed instruction, not the user's own independent reading of the final ADR text** — see the threat model's own note. **Tagged `v0.5.0` 2026-09-01**, out of strict milestone-sequential order, same as M4 (M3 remains untagged). |
-| **M6+** | Email, calendar, research, job assistance (research + drafting only, no auto-apply), Docker, ROS2. | M5. | Per-plugin conformance to the M0 capability/policy/audit model. | Not specified. | Not started. See `docs/architecture/m6-integrations.md` (placeholder). |
+| **M6a** | Communications/productivity: email and calendar via IMAP/CalDAV (vendor-neutral, not a specific provider API — ADR-0021), research (real scope still open: may fold entirely into M5's existing `BrowserAutomationPort` with no new port, or need real new orchestration — see `m6-scoping-notes.md`'s own still-open item 6). | M5. | Per-plugin conformance to the M0 capability/policy/audit model. | Not specified. | Not started. Real scoping done (`docs/architecture/m6-scoping-notes.md`, 2026-09-01) — see `docs/architecture/m6-integrations.md` (still placeholder; M6a's own real design doc does not exist yet, per rolling-wave planning). |
+| **M6b** | Job assistance: research and drafting only, no auto-apply (real scope still open: whether "no auto-apply" is a structural boundary or a policy-tier gate, and what "research and drafting" concretely includes — see `m6-scoping-notes.md`'s own still-open item 5). | M5. | Per-plugin conformance to the M0 capability/policy/audit model. | Not specified. | Not started. Real scoping done (`docs/architecture/m6-scoping-notes.md`, 2026-09-01) — see `docs/architecture/m6-integrations.md` (still placeholder; M6b's own real design doc does not exist yet, per rolling-wave planning). |
 
 ## Rolling-wave planning
 
@@ -99,8 +105,18 @@ assumptions rather than confirmed by the user directly in conversation
 "Milestone 5 additions" for what that meant for ADR-0055/ADR-0056's own
 acceptance) — the rolling-wave principle in action a third time, with
 that one process difference stated plainly rather than smoothed over.
-**M6+ remains a gate-only stub** — no design work has started for it,
-matching the same principle exactly.
+**M6 followed the same pattern a fourth time, once M5 was tagged**:
+real scoping (`m6-scoping-notes.md`, written 2026-09-01) surfaced six
+genuine ambiguities in the ROADMAP's own terse M6 objective — the user
+answered four directly in conversation (Docker dropped, already
+satisfied by M3; ROS2 dropped, no real product reason ever named;
+email/calendar scoped to vendor-neutral IMAP/CalDAV; the bundle split
+into M6a/M6b rather than staying one milestone) and left two
+genuinely open, deferred to whichever future pass begins each
+surviving sub-milestone's own real design. `m6-integrations.md` itself
+**remains a gate-only stub** — real scoping is not the same as a real
+design, and neither M6a's nor M6b's own design doc exists yet, matching
+the same rolling-wave principle exactly.
 
 ## Per-milestone documents
 
@@ -141,4 +157,9 @@ matching the same principle exactly.
   assumptions rather than the user's own direct answers in conversation
   (see the document's own header) — see the M5 row above and
   `docs/threat-model/v0.md`'s "Milestone 5 additions".
-- **M6+**: [`docs/architecture/m6-integrations.md`](architecture/m6-integrations.md) — placeholder.
+- **M6a/M6b**: [`docs/architecture/m6-integrations.md`](architecture/m6-integrations.md) —
+  still a placeholder (no real design exists for either sub-milestone
+  yet); real scoping is done —
+  [`docs/architecture/m6-scoping-notes.md`](architecture/m6-scoping-notes.md),
+  four of six real questions answered directly by the user
+  (2026-09-01), two still genuinely open.
