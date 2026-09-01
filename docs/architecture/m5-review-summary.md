@@ -81,14 +81,32 @@ a time — the real, practical question of "what if a patch changes ten
 files and only one of them is a protected test file" is answered here
 (reject the whole patch, don't apply it partially), but exactly how the
 code figures out which files a given patch touches in the first place
-is left as real, separate work. It also doesn't decide how a person
-using this on a project with a different test-naming convention than
-this one's own would tell it about that — a real, necessary setting
-that isn't designed in detail here. And, like every permission rule in
-this project, it can only ever be as good as the information it's
-given — nothing here can independently verify a file really is or
-isn't a test file beyond checking its name against the configured
-pattern.
+is left as real, separate work. And, like every permission rule in this
+project, it can only ever be as good as the information it's given —
+nothing here can independently verify a file really is or isn't a test
+file beyond checking its name against the configured pattern.
+
+**Amended 2026-09-01, real gap closed, not just noted this time**: the
+original version of this ADR only *named* "what if a project uses a
+different test-naming convention" as an undesigned gap — worse than
+that on a second look: the default patterns are Python-specific, and
+most real target projects won't be Python at all, meaning the "test
+files get the absolute block" promise above would have silently done
+nothing for a Go, JavaScript, or Ruby project, with no one aware. The
+real fix, built now: before writing to any project, this checks for a
+handful of real, well-known signals of what testing convention that
+project actually uses (a pytest config file, a Go module file, an
+RSpec config file, a `package.json` naming a known JS test tool) and
+uses the matching real patterns automatically. If none of those real
+signals are found, it now refuses to authorize any write at all until
+a person explicitly says what the patterns should be — never silently
+falls back to the Python defaults on a project they don't fit. A
+second, separate real gap closed the same day: whatever eventually
+figures out which files a patch touches must resolve real file paths
+first (so a sneaky `../`-style path or a symlink can't dodge the check)
+and must treat a patch *creating* a new protected-looking file exactly
+the same as one editing an existing one — creating a new "test" file
+was never meant to be a loophole.
 
 ---
 

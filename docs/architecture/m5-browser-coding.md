@@ -339,6 +339,18 @@ principle.
    same way M4's own "no indicator was built" criteria were checkable
    (by direct reading/verification, since no generic "Console UI
    exists" abstraction exists yet to test against more mechanically).
+8. **(ADR-0056 amendment, 2026-09-01)** A real test proves whatever
+   parses "which paths does this patch touch" from a real diff
+   canonicalizes each path (resolving `.`/`..`/symlinks) before
+   checking it against `protected_patterns` — an uncanonicalized path
+   must not be able to fnmatch-compare against the wrong literal
+   string and silently evade a real protected-path match. A second
+   real test proves a file being *created* by a patch at a
+   protected-looking path is classified identically to one being
+   *modified* at that same path — creation is not a real loophole this
+   ADR's own guarantee has. Both required for ADR-0055's own
+   diff-parsing mechanism specifically, not decided here in
+   implementation detail (see ADR-0056's own Amendment 2).
 
 **Incomplete, stated plainly rather than padded, mirroring
 `m4-memory-retrieval.md`'s own precedent**: this list does not cover
