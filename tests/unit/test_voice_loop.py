@@ -14,8 +14,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.validation.pytest_validator import PytestValidator
+from jarvis.application.policy import AuthorizationOrchestrator
+from jarvis.application.reasoning.arbiter import Arbiter
+from jarvis.application.reasoning.dispatcher import Dispatcher
+from jarvis.application.reasoning.ladder import EscalationLadder
+from jarvis.application.reasoning.router import ModelRouter
 from jarvis.domain.audio import AudioChunk, AudioStream, Segment
+from jarvis.domain.audit import AuditChain
+from jarvis.domain.evidence import Candidate, EscalationRung
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.reasoning import ProviderProfile
+from jarvis.domain.registry import CapabilityRegistry
 from jarvis.domain.speaker_id import SpeakerScore
 from jarvis.domain.transcript import Transcript
 from jarvis.domain.wake_word import WakeEvent
@@ -24,6 +34,10 @@ from jarvis.kernel.voice_loop import run_voice_loop
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+    from jarvis.application.coding.loop import DispatcherFactory
+    from jarvis.domain.evidence import Attempt
+    from jarvis.ports.workspace import WorkspacePort
 
 _SAMPLE_RATE = 16000
 _SOME_AUDIO = AudioChunk(samples=b"\x00\x00\x01\x00", sample_rate=_SAMPLE_RATE)
@@ -473,3 +487,153 @@ async def test_the_confirmation_prompt_names_the_resolved_capability(tmp_path: P
     assert len(confirmation.prompts) == 1
     prompt_text, _timeout = confirmation.prompts[0]
     assert "music.pause" in prompt_text
+
+
+_LOCAL_PROFILE = ProviderProfile(name="local", is_local=True)
+_NOT_A_REAL_PATCH = "this is not a real unified diff at all"
+
+
+class _CountingProvider:
+    """A minimal, test-local ReasoningPort that records every real call it receives.
+
+    Mirrors tests/unit/test_coding_kernel.py's own fake exactly -- see
+    that module's docstring for why only the reasoning provider, the
+    true external-I/O edge, is faked here.
+    """
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def generate(
+        self, _task: str, _prior_attempts: tuple[Attempt, ...]
+    ) -> Tainted[Candidate]:
+        self.call_count += 1
+        candidate = Candidate(author="local", content=_NOT_A_REAL_PATCH)
+        return Tainted(candidate, Provenance.system())
+
+
+def _fake_dispatcher_factory_for(
+    provider: _CountingProvider, orchestrator: AuthorizationOrchestrator
+) -> DispatcherFactory:
+    def _build(workspace: WorkspacePort) -> Dispatcher:
+        router = ModelRouter(orchestrator)
+        validator = PytestValidator(workspace)
+        providers = {EscalationRung.SELF_REPAIR: ((_LOCAL_PROFILE, provider),)}
+        return Dispatcher(EscalationLadder(), Arbiter(), router, validator, providers)
+
+    return _build
+
+
+def _target_repo_with_pytest_convention(tmp_path: Path) -> Path:
+    """A real target repo whose test convention auto-detects, so resolve_protected_patterns
+    succeeds without run_voice_loop needing its own coding_protected_patterns override."""
+    target_repo = tmp_path / "target_repo"
+    target_repo.mkdir()
+    (target_repo / "pytest.ini").write_text("[pytest]\n")
+    return target_repo
+
+
+async def test_a_recognized_code_command_is_granted_and_invokes_the_coding_agent(
+    tmp_path: Path,
+) -> None:
+    """ "code <task>" -> confirmed -> granted -> the real coding agent actually runs."""
+    tts = _FakeTtsPort()
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    chain_path = tmp_path / "audit_chain.json"
+    provider = _CountingProvider()
+    target_repo = _target_repo_with_pytest_convention(tmp_path)
+
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    await run_voice_loop(
+        chain_path=chain_path,
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("code fix the failing test"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        coding_target_repo=target_repo,
+        coding_dispatcher_factory=_fake_dispatcher_factory_for(provider, orchestrator),
+    )
+
+    assert tts.spoken == ["Done."]
+    # No coding_max_climbs pass-through exists (deliberately, minimal scope) --
+    # authorize_and_run_coding_task retries across DEFAULT_MAX_CLIMBS=3 climbs
+    # since the fake provider's patch never validates, so this proves the
+    # coding agent was actually invoked, not that it was invoked exactly once.
+    assert provider.call_count >= 1
+
+
+async def test_a_denied_code_command_never_invokes_the_coding_agent(tmp_path: Path) -> None:
+    """A "code" request whose physical confirmation is denied never runs the coding agent
+    -- mirroring test_coding_kernel.py's own provider.call_count == 0 proof, through voice."""
+    tts = _FakeTtsPort()
+    provider = _CountingProvider()
+    target_repo = _target_repo_with_pytest_convention(tmp_path)
+
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("code fix the failing test"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        coding_target_repo=target_repo,
+        coding_dispatcher_factory=_fake_dispatcher_factory_for(provider, orchestrator),
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    assert provider.call_count == 0
+
+
+async def test_a_code_command_with_no_coding_configuration_speaks_an_honest_fallback(
+    tmp_path: Path,
+) -> None:
+    """With coding_target_repo/coding_dispatcher_factory both omitted, a "code" command
+    never crashes and never silently no-ops -- it speaks a real, honest message."""
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("code fix the failing test"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+    )
+
+    assert tts.spoken == ["Coding isn't configured on this device."]
+
+
+async def test_the_confirmation_prompt_names_the_coding_task(tmp_path: Path) -> None:
+    """The prompt shown for physical confirmation names the actual task text."""
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    provider = _CountingProvider()
+    target_repo = _target_repo_with_pytest_convention(tmp_path)
+
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("code fix the failing test"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+        coding_target_repo=target_repo,
+        coding_dispatcher_factory=_fake_dispatcher_factory_for(provider, orchestrator),
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "fix the failing test" in prompt_text

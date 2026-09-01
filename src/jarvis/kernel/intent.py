@@ -76,6 +76,22 @@ milestone's ADRs names voice-triggered recall as required work" --
 true when M4 was built, but the real, named gap it left behind
 (`docs/threat-model/v0.md`'s own M4 closeout: "voice-triggered *recall*
 was not built") was never actually resolved until this pass.
+
+"code" (overnight Track 4 pass) mirrors the identical "keyword + rest
+of text" shape once more: everything after the keyword becomes the
+coding task's own description -- resolved to
+``kernel.capabilities.CODING_RUN_TASK_CAPABILITY_ID``, another real,
+already-registered static capability (M5, WP-72), the same shape
+``memory.retrieve`` takes. **A real, deliberate departure from
+``browser.*``/``memory.pin``/``memory.forget``'s own established "stay
+kernel-level only" precedent** (`docs/threat-model/v0.md`'s own
+"Milestone 5 additions"), made here because this pass was explicitly
+asked to add it, unlike those capabilities' own real gaps, where no
+one asked. The resolved intent carries only the task text -- which
+real target repository a "code" command runs against, and which real
+``ReasoningPort`` providers service it, are not something a single
+voice phrase can safely express; see ``kernel/voice_loop.py``'s own
+module docstring for how those get supplied.
 """
 
 from __future__ import annotations
@@ -86,6 +102,7 @@ from typing import TYPE_CHECKING
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
+    CODING_RUN_TASK_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
@@ -152,6 +169,16 @@ def _resolve_recall(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     )
 
 
+def _resolve_code(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve the "code" command: everything after the keyword is the coding task's description."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=CODING_RUN_TASK_CAPABILITY_ID,
+        arguments=Tainted({"task": rest}, Provenance.user()),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -166,14 +193,16 @@ def _resolve_zero_argument_command(command: str) -> ResolvedIntent | Unrecognize
     return _UNRECOGNIZED
 
 
-def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedIntent:
+def resolve_intent(  # noqa: PLR0911 -- one return per command keyword, mirrors the module's flat dispatch shape
+    transcript: Transcript,
+) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve ``transcript``'s text to a known command, or ``UnrecognizedIntent`` if none matches.
 
     Matching is case-insensitive (on the command word only) and
     whitespace-trimmed. The first word selects the command; for every
-    command except "read"/"remember"/"recall", any remaining text makes
-    the match fail (a zero-argument command does not silently ignore
-    trailing words) rather than resolving anyway.
+    command except "read"/"remember"/"recall"/"code", any remaining
+    text makes the match fail (a zero-argument command does not
+    silently ignore trailing words) rather than resolving anyway.
     """
     words = transcript.text.strip().split(maxsplit=1)
     if not words:
@@ -188,6 +217,8 @@ def resolve_intent(transcript: Transcript) -> ResolvedIntent | UnrecognizedInten
         return _resolve_remember(rest)
     if command == "recall":
         return _resolve_recall(rest)
+    if command == "code":
+        return _resolve_code(rest)
     if rest:
         return _UNRECOGNIZED
     return _resolve_zero_argument_command(command)

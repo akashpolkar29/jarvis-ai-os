@@ -5,6 +5,7 @@ from __future__ import annotations
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.transcript import Transcript
 from jarvis.kernel.capabilities import (
+    CODING_RUN_TASK_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
@@ -151,6 +152,38 @@ def test_recall_matching_is_case_insensitive() -> None:
 
     assert isinstance(result, ResolvedIntent)
     assert result.capability_id == MEMORY_RETRIEVE_CAPABILITY_ID
+
+
+def test_code_with_task_resolves_to_coding_run_task_with_the_task_argument() -> None:
+    """ "code <task>" resolves to coding.run_task with the trailing text as the task."""
+    result = resolve_intent(Transcript(text="code add a docstring to main.py"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == CODING_RUN_TASK_CAPABILITY_ID
+    assert result.arguments.value == {"task": "add a docstring to main.py"}
+
+
+def test_code_preserves_the_full_rest_of_the_text_including_spaces() -> None:
+    """A multi-word phrase after "code" is kept whole, not just the next single word."""
+    result = resolve_intent(Transcript(text="code fix the failing test in test_foo.py"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.arguments.value == {"task": "fix the failing test in test_foo.py"}
+
+
+def test_code_with_no_task_is_unrecognized() -> None:
+    """ "code" alone, with nothing after it, is not a valid request -- never a guessed value."""
+    result = resolve_intent(Transcript(text="code"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_code_matching_is_case_insensitive() -> None:
+    """Command matching does not depend on exact casing, mirroring every other command."""
+    result = resolve_intent(Transcript(text="CODE add a docstring to main.py"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == CODING_RUN_TASK_CAPABILITY_ID
 
 
 def test_a_zero_argument_command_with_trailing_words_is_unrecognized() -> None:

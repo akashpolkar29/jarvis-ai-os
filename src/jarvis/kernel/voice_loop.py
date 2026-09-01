@@ -24,6 +24,26 @@ previously-named gap that no voice-triggered recall existed, only
 "remember `<text>`" (see ``kernel/intent.py``'s own module docstring
 for the full "recall" grammar addition).
 
+``authorize_and_run_coding_task`` (overnight Track 4 pass) joins the
+same dispatch, but does not fit the pattern above cleanly: it is
+``async`` (every other composition function this module calls is
+sync), and it requires two pieces of real configuration --
+``target_repo`` and ``dispatcher_factory`` -- that have no safe
+default anywhere in this codebase (WP-72's own deliberate decision:
+which cloud provider(s) service a coding task was never decided by
+any ADR, so no default ``DispatcherFactory`` exists to fall back on).
+A single free-text voice phrase cannot safely supply either, so
+``run_voice_loop`` gains two new *optional* parameters,
+``coding_target_repo``/``coding_dispatcher_factory``, that must be
+pre-configured out-of-band by whoever constructs the loop (mirroring
+how ``database_path``/``embedding_port`` are already pre-configured,
+not spoken). If a "code" command resolves while either is ``None``,
+this module speaks a real, honest "not configured" message and never
+attempts the call -- never a crash, never a silent no-op. Because
+``authorize_and_run_coding_task`` is itself ``async``,
+``_authorize_and_execute`` is ``async`` too now, awaited at its one
+call site in ``_handle_utterance``.
+
 Per utterance: a confirmed :class:`~jarvis.domain.wake_word.WakeEvent`
 (carrying its own audio, per ADR-0033) is handed to
 :class:`~jarvis.ports.vad.VadPort`, which may find zero, one, or
@@ -124,10 +144,12 @@ from jarvis.adapters.vad import SileroVadAdapter
 from jarvis.adapters.wake_word import OpenWakeWordAdapter
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.kernel.capabilities import (
+    CODING_RUN_TASK_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
 )
+from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.files import authorize_and_read_file
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
@@ -137,6 +159,7 @@ from jarvis.kernel.ping import authorize_ping
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from jarvis.application.coding.loop import DispatcherFactory
     from jarvis.domain.audio import AudioStream, Segment
     from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
@@ -208,6 +231,9 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:
     if resolved.capability_id == MEMORY_RETRIEVE_CAPABILITY_ID:
         query_text = resolved.arguments.value.get("query")
         return f"JARVIS wants to: recall memories about '{query_text}'. Approve?"
+    if resolved.capability_id == CODING_RUN_TASK_CAPABILITY_ID:
+        task_text = resolved.arguments.value.get("task")
+        return f"JARVIS wants to: run a coding task -- '{task_text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -216,7 +242,7 @@ def _describe(decision: Decision) -> str:
     return "Done." if decision.granted else "Sorry, that wasn't approved."
 
 
-def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per composition function, one return per dispatch branch
+async def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per composition function, one return per dispatch branch
     resolved: ResolvedIntent,
     *,
     approved: bool,
@@ -226,6 +252,8 @@ def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per compositi
     media_player: MediaPlayerPort | None,
     database_path: Path | None,
     embedding_port: EmbeddingPort | None,
+    coding_target_repo: Path | None,
+    coding_dispatcher_factory: DispatcherFactory | None,
 ) -> str:
     """Dispatch the resolved capability to its (unchanged, M0) composition function.
 
@@ -244,6 +272,13 @@ def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per compositi
     reasoning applies to ``embedding_port``: a granted memory write
     with no override reaches a real ``FastEmbedAdapter``, triggering a
     real model download on first use (WP-61/62).
+
+    ``coding_target_repo``/``coding_dispatcher_factory`` are
+    pass-throughs to ``authorize_and_run_coding_task``'s own existing,
+    required parameters, for a resolved "code" command -- see the
+    module docstring for why they have no safe default and why a
+    missing one speaks an honest "not configured" message instead of
+    calling through.
 
     Returns the text to speak back: a file's content on a granted
     read, otherwise a short granted/denied description.
@@ -300,6 +335,20 @@ def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per compositi
         contents = "; ".join(str(record.value.value) for record in recall_outcome.records)
         return f"I recall: {contents}"
 
+    if resolved.capability_id == CODING_RUN_TASK_CAPABILITY_ID:
+        if coding_target_repo is None or coding_dispatcher_factory is None:
+            return "Coding isn't configured on this device."
+        task_text = str(resolved.arguments.value["task"])
+        coding_decision, _result = await authorize_and_run_coding_task(
+            task_text,
+            coding_target_repo,
+            coding_dispatcher_factory,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+        )
+        return _describe(coding_decision)
+
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(
         music_command,
@@ -326,6 +375,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
     media_player: MediaPlayerPort | None,
     database_path: Path | None,
     embedding_port: EmbeddingPort | None,
+    coding_target_repo: Path | None,
+    coding_dispatcher_factory: DispatcherFactory | None,
 ) -> None:
     """Transcribe, resolve, confirm, and authorize+execute one VAD-confirmed speech segment."""
     transcript = await stt.transcribe(segment)
@@ -349,7 +400,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         prompt, confirmation_timeout_s
     )
 
-    response_text = _authorize_and_execute(
+    response_text = await _authorize_and_execute(
         resolved,
         approved=approved,
         chain_path=chain_path,
@@ -358,6 +409,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         media_player=media_player,
         database_path=database_path,
         embedding_port=embedding_port,
+        coding_target_repo=coding_target_repo,
+        coding_dispatcher_factory=coding_dispatcher_factory,
     )
     await _speak(tts, play_fn, response_text)
 
@@ -378,6 +431,8 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
     media_player: MediaPlayerPort | None = None,
     database_path: Path | None = None,
     embedding_port: EmbeddingPort | None = None,
+    coding_target_repo: Path | None = None,
+    coding_dispatcher_factory: DispatcherFactory | None = None,
 ) -> None:
     """Run the voice pipeline until ``wake_word``'s stream ends (never, for the real adapter).
 
@@ -426,6 +481,16 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
             Overridable for tests -- important to override, in fact: a
             granted memory write with no override triggers a real
             model download on first use.
+        coding_target_repo: Pass-through to
+            ``authorize_and_run_coding_task``'s own existing required
+            ``target_repo`` parameter, for a resolved "code" command.
+            No default -- see the module docstring for why. If ``None``
+            when a "code" command resolves, this module speaks an
+            honest "not configured" message instead of calling through.
+        coding_dispatcher_factory: Pass-through to
+            ``authorize_and_run_coding_task``'s own existing required
+            ``dispatcher_factory`` parameter. No default, for the same
+            reason as ``coding_target_repo``.
     """
     wake_word = wake_word or OpenWakeWordAdapter()
     vad = vad or SileroVadAdapter()
@@ -451,4 +516,6 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
                 media_player=media_player,
                 database_path=database_path,
                 embedding_port=embedding_port,
+                coding_target_repo=coding_target_repo,
+                coding_dispatcher_factory=coding_dispatcher_factory,
             )
