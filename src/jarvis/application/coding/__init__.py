@@ -21,6 +21,15 @@ one real coding-agent write through the existing
 ``AuthorizationOrchestrator``/``AuditChain`` choke point, mirroring
 ``jarvis.application.memory.writer.MemoryWriteAuthorizer`` exactly.
 
+:func:`~jarvis.application.coding.sandbox_workspace.make_disposable_workspace`
+is WP-73, ADR-0055's own "Amendment 2026-09-01" fix: ``Dispatcher.run()``
+was confirmed to call ``WorkspacePort.apply_patch`` internally, once
+per candidate at every rung, with no seam a wrapper could intercept
+before that write happens. This function gives ``Dispatcher.run()`` a
+real, disposable, ``SandboxPort``-made copy of a target repository
+instead of the real one, so those internal writes can only ever touch
+the copy.
+
 **No real caller yet, deliberately** -- this package's own real
 integration with a coding-loop wrapper (ADR-0055) is WP-71, explicitly
 out of the work package that built this one's own scope. See
@@ -37,13 +46,21 @@ from .classification import (
     detect_protected_patterns,
     resolve_protected_patterns,
 )
+from .sandbox_workspace import (
+    DisposableWorkspace,
+    DisposableWorkspaceCopyFailedError,
+    make_disposable_workspace,
+)
 from .writer import CODE_WRITE_CAPABILITY_ID, CodeWriteAuthorizer
 
 __all__ = [
     "CODE_WRITE_CAPABILITY_ID",
     "CodeWriteAuthorizer",
+    "DisposableWorkspace",
+    "DisposableWorkspaceCopyFailedError",
     "UnrecognizedTestConventionError",
     "code_write_effect_for",
     "detect_protected_patterns",
+    "make_disposable_workspace",
     "resolve_protected_patterns",
 ]
