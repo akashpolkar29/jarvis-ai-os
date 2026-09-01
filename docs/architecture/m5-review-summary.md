@@ -7,8 +7,13 @@ each ADR's own text — no new judgment, no new decisions, nothing added
 that the ADR itself doesn't already say. Read the real ADRs before
 accepting any of them; this is a map, not a replacement.
 
-Both are currently **Proposed**. Neither is Accepted. No code exists
-for either of them.
+**Updated 2026-09-01**: both are now **Accepted** — by the user's own
+direct instruction in conversation, given only after WP-70, WP-73, and
+WP-71 were actually built and each one's own required real tests
+proven passing (see each ADR's own "Accepted 2026-09-01" note for
+specifics). Unlike M4's ADRs, accepted on design review alone before
+any code existed, these two were accepted after the code did — the
+user's own explicit, stated condition for accepting them at all.
 
 **Read this before the two ADRs below, not instead of it**: unlike
 every prior milestone's own ADRs, these two were drafted from working

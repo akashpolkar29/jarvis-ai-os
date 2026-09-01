@@ -2,15 +2,15 @@
 
 ## Status
 
-Proposed
+Accepted
 
-**Not yet reviewed by the user in conversation** — drafted from a remotely-reasoned working assumption (`m5-browser-coding.md`'s own header explains the distinction from M4's ADRs, all of which the user confirmed directly). Do not mark Accepted without the user's own direct review of this ADR specifically — see this ADR's own "A real technical correction made while drafting" section below for why that review matters more than usual here.
+**Accepted 2026-09-01, by the user's own direct, explicit instruction in this conversation** — conditioned by the user themselves on a real, stated bar, met and checked directly before this acceptance, not assumed: `Effect.CODE_WRITE`/`Effect.PROTECTED_PATH_WRITE` and `code_write_effect_for` (WP-70), the disposable-workspace mechanism this ADR's own DENY floor depends on to ever matter in practice (WP-73), and the real coding-loop wrapper that actually calls `CodeWriteAuthorizer` on every real write (WP-71) are all built, gate-verified, and each one's own required tests are real and passing — see ADR-0055's own acceptance note for the specific test files and properties proven, since WP-71 is the one real place this ADR's own mechanism and ADR-0055's own orchestration meet. Unlike M4's ADRs (accepted ahead of implementation) and unlike this ADR's own prior drafting/amendment passes (remotely-reasoned working assumptions, not user-reviewed at the time), this acceptance follows real, built, tested code, by the user's own explicit design.
 
-**Amended 2026-09-01, still Proposed:** two real Consequences added before WP-70's own implementation — a fail-closed default for target repositories whose own test convention this ADR's original Python/pytest-specific defaults cannot detect, and a diff-path-parsing robustness requirement (canonicalization, created-file handling). Neither amendment changes this ADR's own core Decision (`Effect.CODE_WRITE`/`Effect.PROTECTED_PATH_WRITE`, the unconditional DENY floor, or `code_write_effect_for`'s own signature/logic) — see each amendment's own text below for what it actually adds. Still requires the user's own direct review before Accepted.
+**Amended 2026-09-01 (before acceptance, not after):** two real Consequences added before WP-70's own implementation — a fail-closed default for target repositories whose own test convention this ADR's original Python/pytest-specific defaults cannot detect, and a diff-path-parsing robustness requirement (canonicalization, created-file handling). Neither amendment changes this ADR's own core Decision (`Effect.CODE_WRITE`/`Effect.PROTECTED_PATH_WRITE`, the unconditional DENY floor, or `code_write_effect_for`'s own signature/logic) — see each amendment's own text below for what it actually adds. Both amendments are now real, built, and tested: `resolve_protected_patterns`/`detect_protected_patterns` (WP-70) and `touched_paths` (WP-71, `application/coding/patch_paths.py`).
 
 ## Date
 
-2026-08-31 (amended 2026-09-01)
+2026-08-31 (amended 2026-09-01, accepted 2026-09-01)
 
 ## Source
 

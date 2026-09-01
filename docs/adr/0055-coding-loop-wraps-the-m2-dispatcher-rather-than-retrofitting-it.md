@@ -2,15 +2,21 @@
 
 ## Status
 
-Proposed
+Accepted
 
-**Not yet reviewed by the user in conversation** — drafted from a remotely-reasoned working assumption (`m5-browser-coding.md`'s own header explains the distinction from M4's ADRs, all of which the user confirmed directly). Do not mark Accepted without the user's own direct review.
+**Accepted 2026-09-01, by the user's own direct, explicit instruction in this conversation** — unlike M4's ADRs (all accepted ahead of implementation, on the strength of the user's own direct design review alone) and unlike this ADR's own two prior drafting/amendment passes (both remotely-reasoned working assumptions, explicitly not user-reviewed at the time), this acceptance was conditioned by the user themselves on a real, stated bar: build WP-70, WP-73, and WP-71; prove each one's own required safety properties with real, passing tests; only then accept. That bar is now met, checked directly, not assumed:
 
-**Amended 2026-09-01, still Proposed:** a real error in this ADR's own Decision section was found and corrected while investigating WP-70's own report of an unresolved gap — the claim that "every real file write the wrapper causes... is authorized... before `apply_patch` is ever called" is not how the real code behaves. `Dispatcher.run()` exposes no call site a wrapper could intercept before a write happens; `apply_patch` is called internally, once per candidate, at every rung, unconditionally. This does not change this ADR's own core Decision (a new, minimal wrapper calling the unmodified `Dispatcher.run()` one or more times) — it corrects a wrong description of the mechanism and adds the real fix as a new Consequence. See "Amendment 2026-09-01" below. Still requires the user's own direct review before Accepted.
+- WP-70 (`Effect.CODE_WRITE`/`Effect.PROTECTED_PATH_WRITE`, `code_write_effect_for`, `CodeWriteAuthorizer`): the required property test (`tests/property/test_coding_writer.py`) and AST-based structural meta-test (`tests/meta/test_workspace_apply_patch_single_path.py`) both real and passing.
+- WP-73 (`make_disposable_workspace`): its own required real proof (`tests/integration/test_dispatcher_against_disposable_workspace.py`) — a real `Dispatcher.run()` call against a disposable copy leaves the real target repository provably untouched — passing.
+- WP-71 (`run_coding_task`, this ADR's own real orchestration piece, as amended below): all four of the user's own required tests (`tests/integration/test_coding_loop.py`) real and passing — a finite retry budget that actually stops, all-or-nothing rejection of a patch touching one protected path, an end-to-end real retry-then-write proof, and a proof that an exhausted budget leaves the real repository untouched.
+
+Full gate suite green (ruff, ruff format, mypy --strict, lint-imports, pytest, and all four required 100%-coverage gates) at the point of acceptance — see this work package's own commit history for the exact, real test counts, not summarized here as "passed."
+
+**Amended 2026-09-01 (before acceptance, not after):** a real error in this ADR's own Decision section was found and corrected while investigating WP-70's own report of an unresolved gap — the claim that "every real file write the wrapper causes... is authorized... before `apply_patch` is ever called" is not how the real code behaves. `Dispatcher.run()` exposes no call site a wrapper could intercept before a write happens; `apply_patch` is called internally, once per candidate, at every rung, unconditionally. This does not change this ADR's own core Decision (a new, minimal wrapper calling the unmodified `Dispatcher.run()` one or more times) — it corrects a wrong description of the mechanism and adds the real fix as a new Consequence. See "Amendment 2026-09-01" below — this is exactly the fix WP-71 implements and the tests above prove.
 
 ## Date
 
-2026-08-31 (amended 2026-09-01)
+2026-08-31 (amended 2026-09-01, accepted 2026-09-01)
 
 ## Source
 
