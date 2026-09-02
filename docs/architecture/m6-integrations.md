@@ -76,15 +76,23 @@ submission exists or will exist without a new ADR explicitly
 superseding ADR-0058 first; no port, adapter, or module under M6b's
 own package path may call, import, or reference anything capable of
 submitting data externally — enforced not just by design intent but by
-a real, specified (not yet implemented) structural meta-test, mirroring
-`tests/meta/test_no_response_scraping.py`'s own AST-scan precedent.
+a real, implemented, passing structural meta-test
+(`tests/meta/test_job_assistance_no_submission.py`), mirroring
+`tests/meta/test_no_response_scraping.py`'s own AST-scan precedent,
+landed and proven *before* any real capability code existed.
 
-**Not yet implemented.** No `ports/draft_storage.py`,
-`adapters/draft_storage.py`, `application/job_assistance/`, or
-`kernel/job_assistance.py` exist in this codebase yet —
-`m6b-job-assistance.md`'s own work-package sketch (WP-82 through
-WP-86, continuing M6a's own shared, sequential numbering) is real,
-objective-level planning, not a completed or started implementation.
+**Code-complete (WP-82 through WP-85), all gates pass.** `ports/draft_storage.py`,
+`adapters/draft_storage.py`, `application/job_assistance/`
+(`classification.py`, `drafting.py`), and `kernel/job_assistance.py`
+all exist and are real, tested, invocable code — see
+`docs/threat-model/v0.md`'s own "Milestone 6b additions" for what was
+actually built and verified, including a real, conservative
+`SECRET`-input implementation default flagged for the user's own
+confirmation (not silently decided) and the structural meta-test's own
+real, named limits. WP-86 (this closeout) is the last work package in
+the design doc's own sketch. **Not tagged** — tagging remains a
+separate, later action, mirroring every prior milestone's own
+precedent.
 
 ### Objective
 
