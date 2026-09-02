@@ -20,6 +20,7 @@ dependencies = [
     "pygobject>=3.56.3",
     "fastembed>=0.8.0",
     "websockets>=17.1",
+    "caldav>=3.2.1",
 ]
 
 [project.scripts]
