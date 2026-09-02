@@ -1,22 +1,28 @@
 # JARVIS — M6b: Job Assistance (research and drafting only, no auto-apply)
 
-**Status: real design, drafted 2026-09-02, not yet approved.** Unlike
-M5's and M6a's own design docs, this one's single most load-bearing
-decision — whether "no auto-apply" is a structural boundary or a
-policy-tier gate — was **not** worked out remotely while the user was
-away. It was put to them directly, as `m6-scoping-notes.md`'s own item
-5 named it, and they answered it directly, in conversation, before
-this document was written: **a structural boundary. No submission
-mechanism exists in this codebase's M6b scope at all.** See
+**Status: real design, drafted 2026-09-02. Its own ADR (0058) is
+Accepted (2026-09-02, directly by the user, in conversation, after
+this document and the ADR were both surfaced to them in full).**
+Unlike M5's and M6a's own design docs, this one's single most
+load-bearing decision — whether "no auto-apply" is a structural
+boundary or a policy-tier gate — was **not** worked out remotely
+while the user was away. It was put to them directly, as
+`m6-scoping-notes.md`'s own item 5 named it, and they answered it
+directly, in conversation, before this document was written: **a
+structural boundary. No submission mechanism exists in this
+codebase's M6b scope at all.** See
 `docs/adr/0058-m6b-no-auto-apply-is-a-structural-boundary-not-a-policy-tier-gate.md`
-for the full, real record of that decision, in the user's own words.
-Everything *past* that point — the real port shapes, the reuse of
-`UnverifiableTaskHandler`, the meta-test design — is this pass's own
-reasoning, the same "remotely-reasoned working assumption" caveat
-`m5-browser-coding.md`/`m6a-communications.md` each state for their
-own designs. The user should review this document's own real
-consequences before ADR-0058 is Accepted; this document is not
-pre-approved.
+for the full, real record of that decision, in the user's own words,
+and of its own real acceptance. Everything *past* that point — the
+real port shapes, the reuse of `UnverifiableTaskHandler`, the
+meta-test design — remains this pass's own reasoning, the same
+"remotely-reasoned working assumption" caveat `m5-browser-coding.md`/
+`m6a-communications.md` each state for their own designs; ADR-0058's
+own acceptance covers its own Decision and Consequences specifically,
+not a blanket sign-off on every implementation-time detail this
+document sketches — those remain ordinary design detail a real work
+package can still refine, the same as any other accepted ADR's own
+design doc.
 
 `m6-scoping-notes.md` itself remains untouched — this document
 resolves its item 5 (M6a's own document already resolved item 6,

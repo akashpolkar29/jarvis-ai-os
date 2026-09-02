@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed
+Accepted (2026-09-02, directly by the user, in conversation — see
+below for the real acceptance record)
 
 **Real, load-bearing difference from ADR-0057's own provenance,
 stated plainly**: this ADR's core Decision was **not** worked out
@@ -22,13 +23,23 @@ written:
 This ADR records that real decision, in the user's own words, plus
 the real, mechanical consequences it implies for M6b's own package
 layout and a real, structural meta-test design (see
-`docs/architecture/m6b-job-assistance.md`). **Still left Proposed, not
-Accepted, despite the core Decision already being the user's own** —
-matching this project's now-established discipline (`docs/threat-model/v0.md`'s
-own note on ADR-0055/ADR-0056) that a decision relayed or made in
-conversation is not the same as the user's own direct review of this
-specific document's own final written text, structure, and stated
-consequences. Do not mark Accepted without that review.
+`docs/architecture/m6b-job-assistance.md`).
+
+**Acceptance record**: this document was surfaced in full to the user
+immediately after being drafted, alongside `docs/architecture/m6b-job-assistance.md`
+and the corresponding `m6-integrations.md`/`ROADMAP.md`/`CLAUDE.md`
+updates. The user then explicitly instructed "Accept ADR-0058" in a
+direct, separate turn — a real, deliberate acceptance of this specific
+document's own final written text, not a rounding-up of the earlier
+"no auto-apply is a structural boundary" answer alone. This closes the
+"still left Proposed" gap this section originally stated at drafting
+time, honestly, rather than silently editing that history away.
+**Accepting this ADR does not itself authorize any M6b implementation
+work** — it authorizes this document's own Decision and Consequences
+as the real, binding constraint any future M6b work package (WP-82
+onward) must satisfy; building `ports/draft_storage.py`,
+`kernel/job_assistance.py`, or anything else under M6b's scope is
+still separate, future work, not started by this acceptance alone.
 
 ## Date
 

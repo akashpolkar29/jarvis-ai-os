@@ -62,11 +62,12 @@ item 6 reached, checked separately rather than assumed) and drafting
 a stated reason — plus one new, minimal write port,
 `DraftStoragePort`). One new ADR,
 [`docs/adr/0058-m6b-no-auto-apply-is-a-structural-boundary-not-a-policy-tier-gate.md`](../adr/0058-m6b-no-auto-apply-is-a-structural-boundary-not-a-policy-tier-gate.md),
-**Proposed, not Accepted** — even though its own core Decision was the
-user's own direct answer, in conversation, not remotely reasoned; the
-document's own final written text and consequences still need the
-user's own direct review before acceptance, matching M6a's/M5's own
-"a relayed decision is not the same as reviewing the document" precedent.
+**Accepted (2026-09-02, directly by the user, in conversation)** —
+its own core Decision was already the user's own direct answer, and
+this document's own final written text was then surfaced to them in
+full before they explicitly accepted it, matching this project's own
+"a relayed decision is not the same as reviewing the document" bar,
+satisfied here rather than merely noted as still outstanding.
 
 **The central open question `m6-scoping-notes.md`'s own item 5 named
 is now resolved, directly by the user**: "no auto-apply" is a
