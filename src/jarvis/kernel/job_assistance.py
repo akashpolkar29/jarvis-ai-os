@@ -60,6 +60,15 @@ from each write inside it. Drafting has no such inner loop -- its one
 real side effect is a single ``DraftStoragePort.save()`` call, so
 ``DraftWriteAuthorizer``'s own single ``Decision`` is both the first
 and only gate this capability needs.
+
+**Console UI wiring (post-WP-86), mirroring ``kernel/browser.py``'s
+own ``authorize_and_open_page`` exactly, same shape, no new
+mechanism** -- a granted draft shows one real, on-screen line via
+``ConsolePort.show_line`` (``"job_assistance.draft: {task}"``), never
+called at all on a denied decision, matching every other real side
+effect in this function and ``authorize_and_open_page``'s own real,
+already-tested ``test_denied_open_page_never_shows_a_console_line``
+precedent exactly.
 """
 
 from __future__ import annotations
@@ -71,6 +80,7 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.candidate_presentation import TtsTextCandidatePresentationAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
+from jarvis.adapters.console import GtkConsoleAdapter
 from jarvis.adapters.draft_storage import LocalDraftStorageAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
 from jarvis.application.job_assistance.drafting import DraftWriteAuthorizer
@@ -84,6 +94,7 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision
     from jarvis.domain.reasoning import ProviderProfile
     from jarvis.ports.candidate_presentation import CandidatePresentationPort
+    from jarvis.ports.console import ConsolePort
     from jarvis.ports.draft_storage import DraftStoragePort
     from jarvis.ports.reasoning import ReasoningPort
 
@@ -95,6 +106,10 @@ platformdirs for real default data paths anywhere."""
 
 def _default_presentation() -> TtsTextCandidatePresentationAdapter:
     return TtsTextCandidatePresentationAdapter(tts=PiperTtsAdapter())
+
+
+def _console(console: ConsolePort | None) -> ConsolePort:
+    return console or GtkConsoleAdapter()
 
 
 @dataclass(frozen=True)
@@ -122,6 +137,7 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
     presentation: CandidatePresentationPort | None = None,
     drafts_dir: Path | None = None,
     draft_storage: DraftStoragePort | None = None,
+    console: ConsolePort | None = None,
 ) -> DraftOutcome:
     """Wire up the stack, authorize drafting ``task``, and run it only if granted.
 
@@ -152,6 +168,12 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
         draft_storage: The real store a granted draft is saved to.
             Defaults to a real ``LocalDraftStorageAdapter`` over
             ``drafts_dir``. Overridable for tests.
+        console: Where a granted, successful draft's own real
+            on-screen line (WP-74, ``docs/ROADMAP.md``'s "always
+            legible" standing principle) is shown. Defaults to a real
+            ``GtkConsoleAdapter``. Overridable for tests -- never
+            called at all on a denied decision, matching
+            ``authorize_and_open_page``'s own identical precedent.
 
     Returns:
         A ``DraftOutcome`` -- see its own docstring.
@@ -182,6 +204,7 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
             candidate = await handler.handle(value, orchestrator.get_current_context())
             store = draft_storage or LocalDraftStorageAdapter(drafts_dir or _DEFAULT_DRAFTS_DIR)
             path = store.save(candidate.author, candidate.content)
+            _console(console).show_line(f"job_assistance.draft: {task}")
     finally:
         storage.save(chain)
 

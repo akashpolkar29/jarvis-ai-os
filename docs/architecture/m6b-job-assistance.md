@@ -184,26 +184,41 @@ entries are named at before their own work packages build them.
 
 ### The drafting capability's own `Effect`/`Tier`
 
-`job_assistance.draft` — a new, real, **static** capability (fixed
-effect, not dynamic like `memory.write`'s own per-invocation
-classification): `Effect.WRITE_LOCAL`, floor `Tier.CONFIRM` — the
-same, already-Accepted, ordinary local-write floor `memory.pin`/
-`memory.forget` (WRITE_LOCAL effect) already reuse rather than
-inventing a new one. **No new `Effect`/`Tier` decision required**:
-saving a drafted document to a new local file never leaves the
-machine, the identical "does it leave the machine" test ADR-0049 and
-ADR-0057 each already applied to their own write-shaped decisions,
-answered the same way here.
+**Updated 2026-09-02, post-implementation — this section's own
+original "static capability" sketch below is superseded, not deleted,
+so the real reasoning that changed it stays visible.** This design
+originally sketched `job_assistance.draft` as a new, real, **static**
+capability (fixed effect, not dynamic like `memory.write`'s own
+per-invocation classification): `Effect.WRITE_LOCAL`, floor
+`Tier.CONFIRM`, with "no new `Effect`/`Tier` decision required." That
+held only for non-`SECRET` input. Implementing
+`application/job_assistance/classification.py::draft_effect_for` for
+real (WP-84) forced the question this section originally deferred (see
+the amendment immediately below) to an actual, concrete answer — some
+real behavior had to exist the first time real `SECRET` content was
+passed as drafting input, and "no decision required" was never really
+true once real code existed. **`job_assistance.draft` is therefore a
+dynamic-effect capability in the real, built system**, mirroring
+`memory.write`'s own per-invocation-classification shape, not the
+static one first sketched here — deliberately not registered in
+`build_default_registry()`, the same reason `memory.write` never is.
 
-**A real, deliberately deferred question, not silently resolved
-either way — see ADR-0058's own "Consequences" section for the full
-statement**: whether `Classification.SECRET` content used as drafting
-input deserves the same unconditional-DENY, never-persisted
-protection `Effect.MEMORY_WRITE` (ADR-0049) gives memory writes,
-rather than the ordinary `WRITE_LOCAL`/`CONFIRM` floor this design
-currently uses. A real, legitimate future safety question — flagged
-for whichever work package or future ADR actually decides it, not
-quietly picked in either direction by this document.
+**Amendment 2026-09-02 (real, now-confirmed decision, superseding the
+"deliberately deferred question" this section originally posed)**:
+whether `Classification.SECRET` content used as drafting input
+deserves the same unconditional-`DENY`, never-persisted protection
+`Effect.MEMORY_WRITE` (ADR-0049) gives memory writes, rather than the
+ordinary `WRITE_LOCAL`/`CONFIRM` floor everything else here uses, was
+answered by implementation as a real, conservative default (WP-84:
+`draft_effect_for` returns `Effect.MEMORY_WRITE` for `SECRET`, reusing
+that effect's own tier-floor behavior, not claiming a draft
+conceptually *is* a memory write), then **confirmed by the user
+directly, in conversation, 2026-09-02, as the real, permanent
+policy: keep the unconditional `DENY` floor, no override, matching
+memory-write's own precedent exactly.** No longer an open question
+this document defers — see ADR-0058's own "Consequences" section and
+`docs/threat-model/v0.md`'s own "Milestone 6b additions" for the full
+record.
 
 ## Structural meta-test (design specified now, written at implementation time)
 

@@ -66,6 +66,20 @@ class _FakeDraftStorage:
         return self._tmp_path / f"{filename_hint}.txt"
 
 
+class _StubConsole:
+    """A ConsolePort test double that records every real line shown, in order.
+
+    Mirrors tests/unit/test_browser_kernel.py's own _StubConsole
+    exactly.
+    """
+
+    def __init__(self) -> None:
+        self.shown: list[str] = []
+
+    def show_line(self, text: str) -> None:
+        self.shown.append(text)
+
+
 async def test_granted_draft_invokes_every_provider_and_saves_the_selected_candidate(
     tmp_path: Path,
 ) -> None:
@@ -160,3 +174,39 @@ async def test_a_single_granted_draft_appends_a_verifiable_audit_record(tmp_path
     assert len(chain) >= 1
     assert chain.verify().valid is True
     assert chain[0].decision.granted is True
+
+
+async def test_granted_draft_shows_a_real_console_line(tmp_path: Path) -> None:
+    """Post-WP-86 Console UI wiring: a granted, successful draft shows a real on-screen line."""
+    console = _StubConsole()
+
+    await authorize_and_draft_document(
+        "draft a cover letter",
+        ((_PROFILE_A, _CountingProvider("local-a", "content")),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        presentation=_FakePresentation(),
+        draft_storage=_FakeDraftStorage(tmp_path),
+        console=console,
+    )
+
+    assert console.shown == ["job_assistance.draft: draft a cover letter"]
+
+
+async def test_denied_draft_never_shows_a_console_line(tmp_path: Path) -> None:
+    """Mirrors authorize_and_open_page's own test_denied_open_page_never_shows_a_console_line."""
+    console = _StubConsole()
+
+    await authorize_and_draft_document(
+        "draft a cover letter",
+        ((_PROFILE_A, _CountingProvider("local-a", "content")),),
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        presentation=_FakePresentation(),
+        draft_storage=_FakeDraftStorage(tmp_path),
+        console=console,
+    )
+
+    assert console.shown == []
