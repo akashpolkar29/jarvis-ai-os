@@ -23,14 +23,14 @@ email (IMAP read, SMTP send), calendar (CalDAV), and research
 (resolved: no new capability, reuses M5's existing
 `BrowserAutomationPort` unmodified). One new ADR,
 [`docs/adr/0057-email-send-and-attended-calendar-events-reuse-egress-sensitive-egress-secret.md`](../adr/0057-email-send-and-attended-calendar-events-reuse-egress-sensitive-egress-secret.md),
-**Proposed, not Accepted** — the real design's own classification
-reasoning (`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`, reused
-rather than a new effect) needs the user's own direct review before
-acceptance, matching M5's own "accept only once built and proven"
-discipline.
+**Accepted (2026-09-03, directly by the user, in conversation, after
+direct review of the ADR's own full text)** — the design's own
+classification reasoning (`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`,
+reused rather than a new effect) is now settled.
 
 **Read half implemented and tested (WP-76 through WP-80); write half
-entirely unbuilt, explicitly blocked on ADR-0057.** `ports/email.py`,
+not yet implemented as code — implementation, not review, is what
+remains.** `ports/email.py`,
 `ports/calendar.py`, `adapters/email.py` (real `ImapEmailAdapter`,
 stdlib `imaplib`), `adapters/calendar.py` (real `CalDavCalendarAdapter`,
 the real `caldav` library, a new dependency), and `kernel/communications.py`
@@ -42,7 +42,9 @@ real adapter's own implementation unconditionally raises
 `NotImplementedError` — proven structurally, not just by inspection
 (`tests/meta/test_communications_no_send_or_create.py`). `application/communications/`
 does not exist — WP-79's own dynamic-effect classification function
-and authorizers remain real, separate, blocked future work. See
+and authorizers remain real, separate future work, no longer blocked
+on ADR review (ADR-0057 is Accepted; what remains is implementation).
+See
 `docs/threat-model/v0.md`'s own "Milestone 6a additions" for the full
 account, including a real, deliberately conservative scoping choice
 (even attendee-less `create_event`, which the design doc itself

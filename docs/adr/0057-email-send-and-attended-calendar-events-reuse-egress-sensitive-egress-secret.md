@@ -2,24 +2,41 @@
 
 ## Status
 
-Proposed
+Accepted
 
-**Not yet reviewed by the user in conversation** — drafted from this
-pass's own reasoning while away from the machine, the same
-"remotely-reasoned working assumption" provenance
-`m5-browser-coding.md`'s own ADRs (0055, 0056) had before their own
-later, explicit acceptance. Do not mark Accepted without the user's
-own direct review of the reasoning below specifically.
+**Accepted 2026-09-03, directly by the user, in conversation, after
+direct review of this document's own full text** — the complete
+Decision, Consequences, and Amendment sections below were surfaced to
+the user verbatim and accepted as-is, satisfying this project's own
+"a relayed decision is not the same as reviewing the document" bar
+(the same bar ADR-0058 already satisfied, and the bar ADR-0055/
+ADR-0056 still have not). Drafted from this pass's own reasoning while
+away from the machine, the same "remotely-reasoned working assumption"
+provenance `m5-browser-coding.md`'s own ADRs (0055, 0056) had before
+their own acceptance — that provenance is now closed out by this
+direct review, not merely noted as an open gap.
 
 **Amended 2026-09-01 (real gap-hunt pass, before any implementation
-started, still Proposed):** four real gaps found by applying the same
-adversarial scrutiny ADR-0056's own amendment pass applied to itself —
-a missing trust-boundary caveat, an under-specified multi-recipient
-send signature, an implicit rather than explicit classify-then-
-authorize ordering, and an unnamed future bypass risk for calendar
-attendees. None change this ADR's own core Decision (reuse
-`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`, no new effect) — see
-"Amendment 2026-09-01" under Consequences below for what each one adds.
+started, prior to this Acceptance):** four real gaps found by applying
+the same adversarial scrutiny ADR-0056's own amendment pass applied to
+itself — a missing trust-boundary caveat, an under-specified
+multi-recipient send signature, an implicit rather than explicit
+classify-then-authorize ordering, and an unnamed future bypass risk
+for calendar attendees. None change this ADR's own core Decision
+(reuse `Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`, no new
+effect) — see "Amendment 2026-09-01" under Consequences below for what
+each one adds. The user's own acceptance above covers this amended
+text, not the pre-amendment original.
+
+**What Acceptance does and does not unblock, stated precisely**: this
+ADR's own classification question is now settled — `email_port`/
+`calendar_port`'s future `send_message`/`create_event` authorizers may
+be built using `Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET` per
+the Decision below. **Implementation itself remains separate, future
+work** (`m6a-communications.md`'s own WP-79 onward) — `EmailPort.send_message`/
+`CalendarPort.create_event` still unconditionally raise
+`NotImplementedError` in every real adapter as of this Acceptance;
+this document records a decision, it does not write code.
 
 ## Date
 

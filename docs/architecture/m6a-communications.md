@@ -13,32 +13,33 @@ fifth — item 6, research — and consuming the other four as given).
 
 **Updated 2026-09-03 — the read half of this design is now real,
 implemented, and tested (WP-76 through WP-80).** The write half
-(`send_message`/`create_event`) remains entirely unbuilt, exactly as
-this document's own classification reasoning below required: ADR-0057
-is still `Proposed`, not `Accepted`, so nothing whose real `Effect`/`Tier`
-depends on it was implemented — see `docs/threat-model/v0.md`'s own
-"Milestone 6a additions" for the full, real account of what was built,
-including a real, deliberately conservative scoping choice
-(implementing neither `send_message` nor `create_event`, attendee-less
-or not, so there is exactly one clean "everything past reading needs
-ADR-0057" boundary rather than a partially-implemented write path).
-This document's own text below is otherwise unchanged from its
-original, remotely-reasoned draft — its classification reasoning
-still awaits the user's own direct review before ADR-0057 can be
-Accepted.
+(`send_message`/`create_event`) remains entirely unbuilt as real code,
+but the reason has changed: **ADR-0057 was Accepted 2026-09-03,
+directly by the user, in conversation, after direct review of its own
+full text** — the classification question below is now settled, not
+outstanding. What remains is ordinary future implementation work
+(WP-79 onward), not a review gate — see `docs/threat-model/v0.md`'s own
+"Milestone 6a additions" for the full, real account of what was built
+in the read-only pass, including a real, deliberately conservative
+scoping choice made *before* this Acceptance (implementing neither
+`send_message` nor `create_event`, attendee-less or not, so there was
+exactly one clean "everything past reading needs ADR-0057" boundary
+rather than a partially-implemented write path). This document's own
+classification reasoning below is otherwise unchanged from its
+original, remotely-reasoned draft — that reasoning is what the user
+reviewed and accepted.
 
 **Real, load-bearing difference from M6a's own scoping precedent,
 stated plainly**: the four scoping answers this design *starts from*
 (Docker/ROS2 dropped, IMAP/CalDAV chosen, M6a/M6b split) were each
-confirmed by the user directly, in conversation — the strongest
-provenance any of M5/M6's own working assumptions have had.
-**Everything past that point — the real port shapes, the `Effect`/`Tier`
-classification reasoning, the ADR this document implies — is this
-pass's own reasoning, worked through once while the user is away, the
-same "remotely-reasoned working assumption" caveat `m5-browser-coding.md`'s
-own header states for its own five answers.** The user should review
-the classification reasoning below specifically, directly, before
-ADR-0057 is Accepted — this document is not pre-approved.
+confirmed by the user directly, in conversation. **Everything past
+that point — the real port shapes, the `Effect`/`Tier` classification
+reasoning, ADR-0057 itself — was this pass's own reasoning, worked
+through once while the user was away, the same "remotely-reasoned
+working assumption" caveat `m5-browser-coding.md`'s own header states
+for its own five answers** — until 2026-09-03, when the user reviewed
+the classification reasoning below directly and accepted ADR-0057
+as-is, closing out that provenance gap.
 
 `m6-scoping-notes.md` itself remains untouched, real research and real
 open questions, exactly as it was before this document existed — this
