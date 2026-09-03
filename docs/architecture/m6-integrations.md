@@ -53,6 +53,21 @@ choice the read-only pass made before ADR-0057 was Accepted (even
 attendee-less `create_event` was left unimplemented until then, for
 exactly one clean boundary rather than a partial write path).
 
+**A real, open question raised 2026-09-03, after both write
+capabilities were built and CLI-wired**: does ADR-0057's own
+`Tier.CONFIRM` floor for `send_message`/attendee-bearing `create_event`
+actually satisfy the project's own founding charter, which names
+"sending emails" explicitly among actions requiring "manual
+confirmation through the desktop interface," never voice/remote alone?
+`Tier.CONFIRM` is remote-satisfiable by design
+(`domain/policy.py::evaluate()`), already directly proven by this
+codebase's own real tests
+(`tests/property/test_communications_writer.py`). See
+[`docs/adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md`](../adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md)
+(**Proposed** — lays out real options without choosing one) and
+`docs/threat-model/v0.md`'s own matching note. **Voice grammar for
+either write capability remains blocked until this resolves.**
+
 ### Entry gate
 
 M5, tagged `v0.5.0`, complete.

@@ -186,6 +186,23 @@ not JARVIS-generated ones.
 
 ### Effect/Tier classification for email — the real decision this document's own ADR-0057 records
 
+**Real, open question raised 2026-09-03, after ADR-0057's own
+Acceptance and this design's own implementation — see
+[`docs/adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md`](../adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md)
+(Proposed)**: this section's own `Tier.CONFIRM` floor for
+`send_message`/attendee-bearing `create_event` is remote-satisfiable
+by design (`domain/policy.py::evaluate()`), already directly proven by
+this codebase's own real tests. The project's own founding charter
+names "sending emails" explicitly among actions requiring "manual
+confirmation through the desktop interface," never voice/remote alone
+— a requirement this section's own reasoning below never checked
+itself against, only against `EGRESS_SENSITIVE`/`EGRESS_SECRET`'s own
+existing precedent (calibrated for a different, narrower risk: a cloud
+AI provider seeing text, not a real person receiving a real email).
+ADR-0059 lays out the real options without choosing one. **Voice
+grammar for either write capability remains blocked until this
+resolves**, per the same investigation's own explicit instruction.
+
 **Reading** (`list_messages`/`read_message`): `Effect.EGRESS_LOCAL`
 (`Tier.ALLOW`), the identical shape `fs.read_file`/`memory.retrieve`/
 `browser.screenshot`/`browser.inspect_dom` already established —
