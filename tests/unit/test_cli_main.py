@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.cli.main import main
@@ -55,6 +56,7 @@ from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.media_player import NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
+from jarvis.ports.secret import SecretNotFoundError
 
 if TYPE_CHECKING:
     from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
@@ -812,6 +814,203 @@ def test_memory_pin_subcommand_routes_the_given_identifier(
 
     assert received == ["mem:1"]
     assert exit_code == 0
+
+
+def test_send_email_subcommand_routes_to_and_subject_and_body(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`jarvis send-email <to...> --subject S --body B` calls authorize_and_send_email."""
+    received: list[tuple[tuple[str, ...], str, str]] = []
+
+    async def fake_authorize_and_send_email(  # noqa: PLR0913 -- mirrors the real signature
+        to: tuple[str, ...],
+        subject: str,
+        body: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> Decision:
+        received.append((to, subject, body))
+        return _make_decision(granted=True, capability_id="communications.send_email")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_send_email", fake_authorize_and_send_email
+    )
+
+    exit_code = main(
+        [
+            "send-email",
+            "alice@example.com",
+            "bob@example.com",
+            "--subject",
+            "Hello",
+            "--body",
+            "The message.",
+            "--imap-host",
+            "imap.example.com",
+            "--smtp-host",
+            "smtp.example.com",
+            "--username",
+            "user@example.com",
+            "--password-reference",
+            "example-ref",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(("alice@example.com", "bob@example.com"), "Hello", "The message.")]
+    assert exit_code == 0
+
+
+def test_send_email_subcommand_constructs_a_real_adapter_with_the_given_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The real ImapEmailAdapter is built from --imap-host/--smtp-host/--username/--password-reference."""  # noqa: E501
+    received_ports: list[ImapEmailAdapter] = []
+
+    async def fake_authorize_and_send_email(  # noqa: PLR0913 -- mirrors the real signature
+        to: tuple[str, ...],  # noqa: ARG001
+        subject: str,  # noqa: ARG001
+        body: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: ImapEmailAdapter,
+    ) -> Decision:
+        received_ports.append(email_port)
+        return _make_decision(granted=True, capability_id="communications.send_email")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_send_email", fake_authorize_and_send_email
+    )
+
+    exit_code = main(
+        [
+            "send-email",
+            "alice@example.com",
+            "--subject",
+            "Hello",
+            "--body",
+            "The message.",
+            "--imap-host",
+            "imap.example.com",
+            "--smtp-host",
+            "smtp.example.com",
+            "--username",
+            "user@example.com",
+            "--password-reference",
+            "example-ref",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert len(received_ports) == 1
+    assert isinstance(received_ports[0], ImapEmailAdapter)
+    assert exit_code == 0
+
+
+def test_send_email_subcommand_prints_the_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_send_email(  # noqa: PLR0913 -- mirrors the real signature
+        to: tuple[str, ...],  # noqa: ARG001
+        subject: str,  # noqa: ARG001
+        body: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False, capability_id="communications.send_email")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_send_email", fake_authorize_and_send_email
+    )
+
+    exit_code = main(
+        [
+            "send-email",
+            "alice@example.com",
+            "--subject",
+            "Hello",
+            "--body",
+            "The message.",
+            "--imap-host",
+            "imap.example.com",
+            "--smtp-host",
+            "smtp.example.com",
+            "--username",
+            "user@example.com",
+            "--password-reference",
+            "example-ref",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "send-email: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_send_email_subcommand_reports_secret_not_found_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SecretNotFoundError (a bad --password-reference) surfaces as a clean message."""
+
+    async def fake_authorize_and_send_email(  # noqa: PLR0913 -- mirrors the real signature
+        to: tuple[str, ...],  # noqa: ARG001
+        subject: str,  # noqa: ARG001
+        body: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> Decision:
+        msg = "No secret found for reference 'example-ref'."
+        raise SecretNotFoundError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_send_email", fake_authorize_and_send_email
+    )
+
+    exit_code = main(
+        [
+            "send-email",
+            "alice@example.com",
+            "--subject",
+            "Hello",
+            "--body",
+            "The message.",
+            "--imap-host",
+            "imap.example.com",
+            "--smtp-host",
+            "smtp.example.com",
+            "--username",
+            "user@example.com",
+            "--password-reference",
+            "example-ref",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "No secret found" in captured.err
+
+
+def test_send_email_subcommand_requires_subject_and_body() -> None:
+    with pytest.raises(SystemExit):
+        main(["send-email", "alice@example.com"])
 
 
 def test_memory_pin_subcommand_prints_the_command_label(

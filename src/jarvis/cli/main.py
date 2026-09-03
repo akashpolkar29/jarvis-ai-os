@@ -56,6 +56,28 @@ deliberately stay at the root's default level regardless of
 several would flood the terminal at DEBUG. Without ``--verbose``,
 logging configuration is unchanged from every other subcommand's
 existing (absent) behavior.
+
+``send-email`` (2026-09-03) is the first real caller of
+``jarvis.kernel.communications.authorize_and_send_email`` -- closing
+exactly the "authorizable and proven, but no wired entry point" gap
+M6a's own threat-model note named. A flat, top-level subcommand,
+matching ``ping``/``read``/``play``'s own granularity (one capability,
+one subcommand) rather than ``memory``'s nested-group shape (a family
+of related subcommands introduced together) -- only ``send_email`` is
+wired here, not ``list_email``/``read_email``/either calendar
+capability, so a group would anticipate subcommands this pass does not
+build. ``--imap-host``/``--smtp-host``/``--username``/
+``--password-reference`` are new, required flags with no default, on
+purpose -- mirroring ``authorize_and_send_email``'s own
+``email_port``: which real mailbox to send through is real,
+per-deployment configuration this module does not decide either,
+exactly like ``listen``'s own ``Gtk4PhysicalConfirmationAdapter``, the
+only other place this file constructs a real, concrete adapter itself
+rather than letting a kernel function default one internally.
+``authorize_and_send_email`` is ``async`` (``EmailPort.send_message``
+is), so this branch is the second place (after ``listen``) that wraps
+a kernel call in ``asyncio.run`` -- every other subcommand here calls
+a synchronous kernel function directly.
 """
 
 from __future__ import annotations
@@ -67,9 +89,12 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
+from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.domain.errors import JarvisError
+from jarvis.kernel.communications import authorize_and_send_email
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
 from jarvis.kernel.memory import (
     authorize_and_forget,
@@ -83,6 +108,7 @@ from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
+from jarvis.ports.secret import SecretNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -172,6 +198,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     memory_pin_parser.add_argument("identifier", help="The record's identifier.")
     _add_common_flags(memory_pin_parser)
+
+    send_email_parser = subparsers.add_parser(
+        "send-email", help="Send a real email to one or more real recipients."
+    )
+    send_email_parser.add_argument("to", nargs="+", help="One or more real recipient addresses.")
+    send_email_parser.add_argument("--subject", required=True, help="The real subject line.")
+    send_email_parser.add_argument("--body", required=True, help="The real message body.")
+    send_email_parser.add_argument(
+        "--imap-host", required=True, help="The real IMAP server hostname."
+    )
+    send_email_parser.add_argument(
+        "--smtp-host", required=True, help="The real SMTP server hostname."
+    )
+    send_email_parser.add_argument("--username", required=True, help="The real mailbox username.")
+    send_email_parser.add_argument(
+        "--password-reference",
+        required=True,
+        help=(
+            "The keyring reference for this mailbox's password -- "
+            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
+        ),
+    )
+    _add_common_flags(send_email_parser)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -329,6 +378,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "memory":
             command_label = f"memory {args.memory_command}"
             decision, memory_identifier, memory_records = _run_memory_subcommand(args)
+        elif args.command == "send-email":
+            email_port = ImapEmailAdapter(
+                args.imap_host,
+                args.username,
+                SecretServiceAdapter(),
+                args.password_reference,
+                smtp_host=args.smtp_host,
+            )
+            decision = asyncio.run(
+                authorize_and_send_email(
+                    tuple(args.to),
+                    args.subject,
+                    args.body,
+                    physical_confirmation_available=args.physical_confirmation_available,
+                    remote_confirmation_available=args.remote_confirmation_available,
+                    chain_path=args.chain_path,
+                    email_port=email_port,
+                )
+            )
         else:
             decision = authorize_and_run_music_command(
                 MUSIC_COMMAND_NAMES[args.command],
@@ -344,6 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryRecordNotFoundError,
         UnsupportedMemoryValueError,
         MemoryIntegrityViolationError,
+        SecretNotFoundError,
         OSError,
         UnicodeDecodeError,
         KeyError,

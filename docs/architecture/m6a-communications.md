@@ -480,14 +480,25 @@ own established precedent in this codebase.
    send" amendment, not merely asserted from the single-invocation
    shape (`tests/property/test_communications_writer.py`).
 
+**Updated 2026-09-03 — `jarvis send-email` is now a real CLI caller of
+`authorize_and_send_email`** (`cli/main.py`), a flat, top-level
+subcommand mirroring `ping`/`read`/`play`'s own granularity. New,
+required `--imap-host`/`--smtp-host`/`--username`/`--password-reference`
+flags construct a real `ImapEmailAdapter` — no default, the same
+per-deployment-config reasoning `email_port` itself already carries,
+mirroring `listen`'s own real `Gtk4PhysicalConfirmationAdapter`
+construction as the CLI's other precedent for building a concrete
+adapter itself. `authorize_and_create_calendar_event` remains
+unwired — not requested in this pass.
+
 **Incomplete, stated plainly rather than padded**: this list does not
 cover the real `caldav`-vs-alternative library evaluation (real,
 separate work this pass did not revisit), the real console-line wiring
 for any M6a capability (WP-74's own "no specific views" discipline
 extended here — still open), a real CLI subcommand or voice grammar
-for either write capability (no real caller invokes
-`authorize_and_send_email`/`authorize_and_create_calendar_event` yet),
-or anything from M6b (out of this document's own scope entirely).
+for `authorize_and_create_calendar_event` (still no real caller), voice
+grammar for `send-email` (only a CLI caller was built), or anything
+from M6b (out of this document's own scope entirely).
 
 ## Work-package sketch (objective-level only)
 
