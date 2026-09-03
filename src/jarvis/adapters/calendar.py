@@ -34,20 +34,30 @@ documentation alone -- confirmed via `mypy --strict`'s own
   returns a bare `vCalAddress`; more than one returns a real `list` of
   them -- `_parse_attendees` handles all three.
 
-`create_event` raises `NotImplementedError` unconditionally -- see
-`ports/calendar.py`'s own module docstring for why (blocked on
-ADR-0057, `Proposed`, not `Accepted`, and this pass's own deliberately
-conservative scoping choice not to implement even the attendee-less
-case). No CalDAV write call exists anywhere in this module.
+**Updated 2026-09-03 (WP-79 onward, following ADR-0057's Acceptance)**:
+`create_event` is now a real implementation, via `Calendar.add_event`
+-- confirmed as the real, current, non-deprecated write method on the
+installed 3.2.1 `Calendar` class (`save_event` is a real, deprecated
+alias for it, per the library's own docstring; `add_event`, not
+`save_with_invites`, is used here since this design has no `organizer`
+concept to add -- `add_event` writes the identical ATTENDEE-bearing
+VEVENT a real CalDAV server's own RFC 6638 scheduling logic acts on
+regardless of which of the two real methods was used to write it).
+Real attendee addresses are given the `mailto:` scheme prefix
+(`_with_mailto`) before being handed to `icalendar`'s own `vCalAddress`
+encoding -- confirmed directly (`icalendar.vCalAddress("x@example.com").to_ical()`
+does not add the prefix itself), mirroring `_strip_mailto`'s read-side
+handling exactly, in reverse.
 
 `caldav`'s own real client is blocking/synchronous; every real method
 here wraps its own blocking call in `asyncio.to_thread`, the identical
-pattern `adapters/email.py` uses for `imaplib`.
+pattern `adapters/email.py` uses for `imaplib`/`smtplib`.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -66,16 +76,31 @@ class _CalendarObjectLike(Protocol):
     @property
     def icalendar_component(self) -> Any: ...
 
+    @property
+    def id(self) -> str | None: ...
+
 
 class _Calendar(Protocol):
     """The narrow subset of caldav.Calendar's own real interface this adapter uses."""
 
     def date_search(self, start: datetime, end: datetime) -> Sequence[_CalendarObjectLike]: ...
+    def add_event(
+        self,
+        dtstart: datetime,
+        dtend: datetime,
+        summary: str,
+        attendee: list[str] | None = None,
+    ) -> _CalendarObjectLike | Coroutine[Any, Any, _CalendarObjectLike]: ...
 
 
 def _strip_mailto(value: str) -> str:
     prefix = "mailto:"
     return value[len(prefix) :] if value.lower().startswith(prefix) else value
+
+
+def _with_mailto(value: str) -> str:
+    prefix = "mailto:"
+    return value if value.lower().startswith(prefix) else f"{prefix}{value}"
 
 
 def _parse_attendees(component: Any) -> tuple[str, ...]:
@@ -118,6 +143,17 @@ class CalendarNotFoundError(Exception):
     """
 
 
+class CalendarEventCreationError(Exception):
+    """Raised when a real CalDAV server does not return a real UID for a newly created event.
+
+    Defined on the adapter, not the port, for the identical reason
+    `CalendarNotFoundError` is: `caldav`'s own real `.id` property is
+    genuinely typed `str | None` -- this is a real, checkable
+    protocol-level anomaly (a compliant server always echoes back a
+    UID), not a "this can't happen" case papered over defensively.
+    """
+
+
 def _real_calendar_factory(
     url: str, username: str, secret: SecretPort, password_reference: str
 ) -> _Calendar:
@@ -137,7 +173,7 @@ def _real_calendar_factory(
 
 
 class CalDavCalendarAdapter:
-    """A real, read-only CalDAV-backed `CalendarPort`. `create_event` is deliberately unimplemented."""  # noqa: E501
+    """A real, CalDAV-backed `CalendarPort` -- reads and writes both real."""
 
     def __init__(
         self,
@@ -178,13 +214,37 @@ class CalDavCalendarAdapter:
         """See `CalendarPort.list_events`. Runs the real, blocking CalDAV call off the event loop."""  # noqa: E501
         return await asyncio.to_thread(self._list_events_sync, start, end)
 
-    async def create_event(self, draft: CalendarEventDraft) -> str:
-        """Always raises -- see `CalendarPort.create_event`'s own docstring for why."""
-        del draft
-        msg = (
-            "CalendarPort.create_event is not implemented in this codebase -- blocked on "
-            "ADR-0057's own pending review (Proposed, not Accepted), and this pass's own "
-            "deliberate scoping choice not to implement even the attendee-less case. "
-            "No CalDAV write is made."
+    def _create_event_sync(self, draft: CalendarEventDraft) -> str:
+        calendar = self._calendar_factory()
+        attendees = [_with_mailto(attendee) for attendee in draft.attendees] or None
+        created = calendar.add_event(
+            dtstart=datetime.fromisoformat(draft.start),
+            dtend=datetime.fromisoformat(draft.end),
+            summary=draft.summary,
+            attendee=attendees,
         )
-        raise NotImplementedError(msg)
+        if isinstance(created, Coroutine):
+            # Real but unreachable in practice: this adapter only ever constructs a
+            # synchronous DAVClient (see _real_calendar_factory) -- mirrors
+            # _list_events_sync's own isinstance(calendars, list) narrowing.
+            msg = "add_event() returned a coroutine -- this adapter requires a synchronous client."
+            raise CalendarEventCreationError(msg)
+        if created.id is None:
+            msg = f"Real CalDAV server returned no UID for the newly created event {draft!r}."
+            raise CalendarEventCreationError(msg)
+        return created.id
+
+    async def create_event(self, draft: CalendarEventDraft) -> str:
+        """See `CalendarPort.create_event`. Runs the real, blocking CalDAV call off the event loop.
+
+        Real, per-invocation classification/authorization
+        (`calendar_effect_for`, ADR-0057) happens entirely at the
+        composition-root layer (`kernel/communications.py`), before
+        this is ever called -- matching `list_events`'s own identical
+        "pure mechanism, no authorization here" contract.
+
+        Raises:
+            CalendarEventCreationError: If the real CalDAV server does
+                not echo back a real UID for the newly created event.
+        """
+        return await asyncio.to_thread(self._create_event_sync, draft)

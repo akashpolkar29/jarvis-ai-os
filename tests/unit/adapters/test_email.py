@@ -1,10 +1,11 @@
 """Unit tests for jarvis.adapters.email.ImapEmailAdapter.
 
-A fake, minimal IMAP connection object stands in for a real
-imaplib.IMAP4_SSL socket -- this adapter's own real network path is
-exercised only in a real, skipif-guarded manual verification pass (see
-test_real_imap_flow_against_a_configured_mailbox below), matching this
-project's established precedent for network-dependent adapters
+Fake, minimal IMAP/SMTP connection objects stand in for real
+imaplib.IMAP4_SSL/smtplib.SMTP_SSL sockets -- this adapter's own real
+network path (both read and send, WP-79 onward) is exercised only in a
+real, skipif-guarded manual verification pass (see
+test_real_imap_smtp_flow_against_a_configured_mailbox below), matching
+this project's established precedent for network-dependent adapters
 (test_real_cdp_flow_against_a_local_page).
 """
 
@@ -13,8 +14,12 @@ from __future__ import annotations
 import email as email_stdlib
 import os
 from email.message import EmailMessage as StdlibEmailMessage
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from jarvis.adapters.email import ImapEmailAdapter, _extract_body
 from jarvis.ports.email import EmailMessageNotFoundError
@@ -92,13 +97,45 @@ class _FakeImapConnection:
         return ("BYE", [None])
 
 
-def _adapter(connection: _FakeImapConnection, secret: _FakeSecretPort) -> ImapEmailAdapter:
+class _FakeSmtpConnection:
+    """Records every real call it receives, in order, and returns canned real responses."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+        self.sent_messages: list[StdlibEmailMessage] = []
+
+    def login(self, user: str, password: str) -> tuple[int, bytes]:
+        self.calls.append(("login", (user, password)))
+        return (235, b"Authentication successful")
+
+    def send_message(
+        self,
+        msg: StdlibEmailMessage,
+        from_addr: str | None = None,
+        to_addrs: Sequence[str] | None = None,
+    ) -> dict[str, tuple[int, bytes]]:
+        self.calls.append(("send_message", (msg, from_addr, tuple(to_addrs or ()))))
+        self.sent_messages.append(msg)
+        return {}
+
+    def quit(self) -> tuple[int, bytes]:
+        self.calls.append(("quit", ()))
+        return (221, b"Bye")
+
+
+def _adapter(
+    connection: _FakeImapConnection,
+    secret: _FakeSecretPort,
+    smtp_connection: _FakeSmtpConnection | None = None,
+) -> ImapEmailAdapter:
     return ImapEmailAdapter(
         "imap.example.com",
         "user@example.com",
         secret,
         "imap-password-ref",
+        smtp_host="smtp.example.com",
         connection_factory=lambda _host: connection,
+        smtp_connection_factory=lambda _host: smtp_connection or _FakeSmtpConnection(),
     )
 
 
@@ -192,14 +229,42 @@ async def test_read_message_raises_when_no_message_matches() -> None:
         await adapter.read_message("<missing@example.com>")
 
 
-async def test_send_message_always_raises_and_never_touches_the_network() -> None:
+async def test_send_message_sends_a_real_message_with_the_right_headers_and_body() -> None:
     connection = _FakeImapConnection(message_numbers=[], messages_by_number={})
-    adapter = _adapter(connection, _FakeSecretPort())
+    smtp = _FakeSmtpConnection()
+    adapter = _adapter(connection, _FakeSecretPort(), smtp)
 
-    with pytest.raises(NotImplementedError, match="ADR-0057"):
-        await adapter.send_message(("someone@example.com",), "Subject", "Body")
+    await adapter.send_message(("alice@example.com", "bob@example.com"), "Hello", "The body.")
 
-    assert connection.calls == []
+    assert connection.calls == []  # IMAP is never touched by a send
+    assert len(smtp.sent_messages) == 1
+    sent = smtp.sent_messages[0]
+    assert sent["From"] == "user@example.com"
+    assert sent["To"] == "alice@example.com, bob@example.com"
+    assert sent["Subject"] == "Hello"
+    assert "The body." in sent.get_content()
+
+
+async def test_send_message_logs_in_with_the_real_resolved_password() -> None:
+    smtp = _FakeSmtpConnection()
+    secret = _FakeSecretPort(value="real-secret-password")
+    adapter = _adapter(_FakeImapConnection(message_numbers=[], messages_by_number={}), secret, smtp)
+
+    await adapter.send_message(("someone@example.com",), "Subject", "Body")
+
+    assert smtp.calls[0] == ("login", ("user@example.com", "real-secret-password"))
+    assert secret.requested_references == ["imap-password-ref"]
+
+
+async def test_send_message_always_quits_the_smtp_connection() -> None:
+    smtp = _FakeSmtpConnection()
+    adapter = _adapter(
+        _FakeImapConnection(message_numbers=[], messages_by_number={}), _FakeSecretPort(), smtp
+    )
+
+    await adapter.send_message(("someone@example.com",), "Subject", "Body")
+
+    assert smtp.calls[-1] == ("quit", ())
 
 
 def test_extract_body_of_a_multipart_message_prefers_the_plain_text_part() -> None:
@@ -215,13 +280,13 @@ def test_extract_body_of_a_multipart_message_prefers_the_plain_text_part() -> No
 @pytest.mark.skipif(
     not _HAS_REAL_TEST_IMAP_ACCOUNT,
     reason=(
-        "Requires real, configured test-account IMAP credentials "
+        "Requires real, configured test-account IMAP/SMTP credentials "
         "(JARVIS_TEST_IMAP_HOST/etc, not set here) -- mirroring "
         "test_real_cdp_flow_against_a_local_page's own real-infrastructure "
         "precedent, honestly skipped in CI, matching "
         "m6a-communications.md's own acceptance criterion 6."
     ),
 )
-async def test_real_imap_flow_against_a_configured_mailbox() -> None:
-    """Never exercised by this pass -- no real test IMAP account is configured anywhere."""
-    pytest.skip("No real IMAP adapter wiring built in this pass to run this against yet.")
+async def test_real_imap_smtp_flow_against_a_configured_mailbox() -> None:
+    """Never exercised by this pass -- no real test IMAP/SMTP account is configured anywhere."""
+    pytest.skip("No real IMAP/SMTP adapter wiring built in this pass to run this against yet.")

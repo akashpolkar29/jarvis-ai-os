@@ -397,12 +397,12 @@ def build_default_registry() -> CapabilityRegistry:
         )
     )
     # communications.send_email/communications.create_calendar_event are
-    # deliberately NOT registered here -- send_message/create_event are not
-    # implemented by any real adapter yet (blocked on ADR-0057, Proposed,
-    # not Accepted). Once implemented, their real Effect would vary per
-    # invocation with the content's own classification anyway (the same
-    # reason memory.write/job_assistance.draft are never registered here
-    # either) -- see ports/email.py's/ports/calendar.py's own module
-    # docstrings.
+    # deliberately NOT registered here -- their real Effect varies per
+    # invocation with the outgoing content's own classification (and, for
+    # calendar, whether the draft has attendees), which a statically-
+    # registered CapabilityDescriptor cannot express, the same reason
+    # memory.write/job_assistance.draft are never registered here either.
+    # See kernel/communications.py's own module docstring, and
+    # EmailSendAuthorizer/CalendarEventAuthorizer (application/communications/writer.py).
 
     return registry

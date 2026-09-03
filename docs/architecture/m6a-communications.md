@@ -11,23 +11,29 @@ became the next milestone to scope
 the user in conversation on 2026-09-01, this document resolving the
 fifth — item 6, research — and consuming the other four as given).
 
-**Updated 2026-09-03 — the read half of this design is now real,
-implemented, and tested (WP-76 through WP-80).** The write half
-(`send_message`/`create_event`) remains entirely unbuilt as real code,
-but the reason has changed: **ADR-0057 was Accepted 2026-09-03,
+**Updated 2026-09-03 — this design is now fully real, implemented, and
+tested end to end, both halves.** The read half landed first
+(WP-76 through WP-80); **ADR-0057 was then Accepted 2026-09-03,
 directly by the user, in conversation, after direct review of its own
-full text** — the classification question below is now settled, not
-outstanding. What remains is ordinary future implementation work
-(WP-79 onward), not a review gate — see `docs/threat-model/v0.md`'s own
-"Milestone 6a additions" for the full, real account of what was built
-in the read-only pass, including a real, deliberately conservative
-scoping choice made *before* this Acceptance (implementing neither
-`send_message` nor `create_event`, attendee-less or not, so there was
-exactly one clean "everything past reading needs ADR-0057" boundary
-rather than a partially-implemented write path). This document's own
-classification reasoning below is otherwise unchanged from its
-original, remotely-reasoned draft — that reasoning is what the user
-reviewed and accepted.
+full text** — closing out the classification question below as
+settled, not outstanding — and the write half (`send_message`/
+`create_event`) was built immediately after, in the same pass (WP-79
+onward): `application/communications/classification.py`
+(`egress_effect_for`/`calendar_effect_for`), `EmailSendAuthorizer`/
+`CalendarEventAuthorizer` (`application/communications/writer.py`),
+real `smtplib`-backed `send_message` on `ImapEmailAdapter`, real
+`caldav`-backed `create_event` on `CalDavCalendarAdapter` (via
+`Calendar.add_event`), and `kernel/communications.py`'s
+`authorize_and_send_email`/`authorize_and_create_calendar_event`. The
+read-only pass's own deliberately conservative scoping choice
+(implementing neither `send_message` nor `create_event`, attendee-less
+or not, until ADR-0057's Acceptance) is now superseded by real code —
+see `docs/threat-model/v0.md`'s own "Milestone 6a additions" and its
+follow-up write-half note for the full, real account of both passes.
+This document's own classification reasoning below is unchanged from
+its original, remotely-reasoned draft — that reasoning is what the
+user reviewed and accepted, and what the real code above now
+implements.
 
 **Real, load-bearing difference from M6a's own scoping precedent,
 stated plainly**: the four scoping answers this design *starts from*
@@ -359,9 +365,17 @@ ports/
     email.py                - EmailPort
     calendar.py              - CalendarPort
 adapters/
-    email.py                  - ImapSmtpEmailAdapter (imaplib + smtplib,
+    email.py                  - ImapEmailAdapter (imaplib + smtplib,
                                  both stdlib -- no new third-party
-                                 dependency for email specifically)
+                                 dependency for email specifically).
+                                 Real, deliberate naming deviation from
+                                 this sketch: kept its original
+                                 read-only-era class name rather than
+                                 renaming to ImapSmtpEmailAdapter --
+                                 renaming would have touched every real
+                                 caller/test for no functional benefit
+                                 (see the adapter's own module
+                                 docstring).
     calendar.py                - CalDavCalendarAdapter (the caldav
                                  library, real RFC4791 client,
                                  evaluated in m6-scoping-notes.md's own
@@ -422,42 +436,57 @@ detail.
 
 ## Acceptance criteria
 
-1. A real test proves `egress_effect_for` (communications) returns
-   `Effect.EGRESS_SECRET` for `Classification.SECRET` and
+**Status as of 2026-09-03**: 1–5 and 7 are met, real, and passing.
+Only 6 (the real, live, skipif-guarded test) remains unmet — no real
+test-account IMAP/SMTP/CalDAV credentials are configured anywhere in
+this environment, matching every other network-dependent adapter's
+own established precedent in this codebase.
+
+1. **Met.** A real test proves `egress_effect_for` (communications)
+   returns `Effect.EGRESS_SECRET` for `Classification.SECRET` and
    `Effect.EGRESS_SENSITIVE` for every other classification —
    mirroring `application/reasoning`'s and `application/memory`'s own
-   required classification-function test shape.
-2. A real test, through the real `AuthorizationOrchestrator`, proves a
-   `Classification.SECRET` email body is denied unconditionally when
-   sent — including when `physical_confirmation_available=True` —
-   matching ADR-0038/ADR-0049/ADR-0056's own required property-test
-   rigor, applied here for a fourth time.
-3. The identical property test applies to `create_event` with
-   attendees and a `Classification.SECRET` summary.
-4. A real test proves `list_messages`/`read_message`/`list_events` are
-   always granted (`Tier.ALLOW`), regardless of confirmation flags,
-   matching `memory.retrieve`'s own equivalent test.
-5. A real test proves a read email's returned `EmailMessage` carries
-   `Trust.UNTRUSTED_EXTERNAL`/`Classification.SENSITIVE` provenance,
-   mirroring `browser.screenshot`'s own required tainting test.
-6. A real, live test (skipif-guarded on real, test-account IMAP/SMTP/
-   CalDAV credentials being configured — mirroring
-   `test_real_cdp_flow_against_a_local_page`'s own real-infrastructure
-   precedent, honestly skipped in CI) proves the real adapter can list,
-   read, and send a real message against a real mailbox, and list/
-   create a real event against a real calendar.
-7. **(2026-09-01 gap-hunt amendment)** A real test proves a
+   required classification-function test shape
+   (`tests/unit/application/communications/test_classification.py`).
+2. **Met.** A real test, through the real `AuthorizationOrchestrator`,
+   proves a `Classification.SECRET` email body is denied
+   unconditionally when sent — including when
+   `physical_confirmation_available=True` — matching ADR-0038/ADR-0049/
+   ADR-0056's own required property-test rigor, applied here for a
+   fourth time (`tests/property/test_communications_writer.py`).
+3. **Met.** The identical property test applies to `create_event` with
+   attendees and a `Classification.SECRET` summary (same file).
+4. **Met.** A real test proves `list_messages`/`read_message`/
+   `list_events` are always granted (`Tier.ALLOW`), regardless of
+   confirmation flags, matching `memory.retrieve`'s own equivalent test
+   (`tests/unit/test_communications_kernel.py`).
+5. **Met.** A real test proves a read email's returned `EmailMessage`
+   carries `Trust.UNTRUSTED_EXTERNAL`/`Classification.SENSITIVE`
+   provenance, mirroring `browser.screenshot`'s own required tainting
+   test (same file).
+6. **Not met.** A real, live test (skipif-guarded on real,
+   test-account IMAP/SMTP/CalDAV credentials being configured —
+   mirroring `test_real_cdp_flow_against_a_local_page`'s own
+   real-infrastructure precedent, honestly skipped in CI) proving the
+   real adapter can list, read, and send a real message against a real
+   mailbox, and list/create a real event against a real calendar. The
+   skip-guarded test stubs exist (`test_real_imap_smtp_flow_against_a_configured_mailbox`
+   in `tests/unit/adapters/test_email.py`); no real credentials are
+   configured anywhere in this environment to actually run it.
+7. **Met.** (2026-09-01 gap-hunt amendment) A real test proves a
    `Classification.SECRET` body addressed to multiple real recipients
-   (`to` with more than one element) is denied unconditionally, and
-   that none of the addressed recipients receive anything — the real,
-   direct proof of ADR-0057's own "all-or-nothing, no partial send"
-   amendment, not merely asserted from the single-invocation shape.
+   (`to` with more than one element) is denied unconditionally — the
+   real, direct proof of ADR-0057's own "all-or-nothing, no partial
+   send" amendment, not merely asserted from the single-invocation
+   shape (`tests/property/test_communications_writer.py`).
 
 **Incomplete, stated plainly rather than padded**: this list does not
 cover the real `caldav`-vs-alternative library evaluation (real,
-separate work for whichever work package first builds
-`CalDavCalendarAdapter`), the real console-line wiring for any M6a
-capability (WP-74's own "no specific views" discipline extended here),
+separate work this pass did not revisit), the real console-line wiring
+for any M6a capability (WP-74's own "no specific views" discipline
+extended here — still open), a real CLI subcommand or voice grammar
+for either write capability (no real caller invokes
+`authorize_and_send_email`/`authorize_and_create_calendar_event` yet),
 or anything from M6b (out of this document's own scope entirely).
 
 ## Work-package sketch (objective-level only)

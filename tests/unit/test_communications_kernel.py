@@ -3,10 +3,16 @@
 A stub EmailPort/CalendarPort (with call tracking) is injected in
 place of the real ImapEmailAdapter/CalDavCalendarAdapter -- these
 tests must be hermetic and never reach a real network. Satisfies
-m6a-communications.md's own acceptance criteria 4 and 5 (for the
-real, implemented read half only -- 1/2/3/6/7 all concern
-send_message/create_event, which no real adapter implements, blocked
-on ADR-0057).
+m6a-communications.md's own acceptance criteria 4 and 5 (the read
+half) plus 6 (granted send/create genuinely reaches the port; a
+denied decision never does). Acceptance criteria 1/2/3/7 (the real
+SECRET-classification DENY/all-or-nothing property) are proven at the
+EmailSendAuthorizer/CalendarEventAuthorizer level instead
+(tests/property/test_communications_writer.py) -- authorize_and_send_email/
+authorize_and_create_calendar_event always wrap their own content as
+Tainted(value, Provenance.user()) (always PUBLIC), matching
+authorize_and_remember's own identical choice, so a kernel-level call
+alone can never produce a SECRET classification to test against.
 """
 
 from __future__ import annotations
@@ -18,13 +24,17 @@ from jarvis.domain.calendar import CalendarEvent
 from jarvis.domain.email import EmailMessage, EmailSummary
 from jarvis.domain.provenance import Classification, Trust
 from jarvis.kernel.communications import (
+    authorize_and_create_calendar_event,
     authorize_and_list_calendar_events,
     authorize_and_list_email,
     authorize_and_read_email,
+    authorize_and_send_email,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from jarvis.domain.calendar import CalendarEventDraft
 
 
 def _summary(message_id: str) -> EmailSummary:
@@ -60,6 +70,7 @@ class _StubEmailPort:
     ) -> None:
         self.list_calls: list[tuple[str, int]] = []
         self.read_calls: list[str] = []
+        self.send_calls: list[tuple[tuple[str, ...], str, str]] = []
         self._summaries = summaries
         self._message = message
 
@@ -73,22 +84,27 @@ class _StubEmailPort:
         return self._message
 
     async def send_message(self, to: tuple[str, ...], subject: str, body: str) -> None:
-        raise NotImplementedError
+        self.send_calls.append((to, subject, body))
 
 
 class _StubCalendarPort:
     """Records every real call it receives, returns canned real results."""
 
-    def __init__(self, events: tuple[CalendarEvent, ...] = ()) -> None:
+    def __init__(
+        self, events: tuple[CalendarEvent, ...] = (), created_uid: str = "new-uid"
+    ) -> None:
         self.list_calls: list[tuple[str, str]] = []
+        self.create_calls: list[CalendarEventDraft] = []
         self._events = events
+        self._created_uid = created_uid
 
     async def list_events(self, start: str, end: str) -> tuple[CalendarEvent, ...]:
         self.list_calls.append((start, end))
         return self._events
 
-    async def create_event(self, draft: object) -> str:
-        raise NotImplementedError
+    async def create_event(self, draft: CalendarEventDraft) -> str:
+        self.create_calls.append(draft)
+        return self._created_uid
 
 
 async def test_granted_list_email_returns_real_tainted_summaries(tmp_path: Path) -> None:
@@ -227,3 +243,102 @@ async def test_a_single_granted_list_email_appends_a_verifiable_audit_record(
     assert len(chain) == 1
     assert chain.verify().valid is True
     assert chain[0].decision.granted is True
+
+
+async def test_granted_send_email_reaches_the_real_port(tmp_path: Path) -> None:
+    port = _StubEmailPort()
+
+    decision = await authorize_and_send_email(
+        ("alice@example.com",),
+        "Subject",
+        "Body text",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        email_port=port,
+    )
+
+    assert decision.granted is True
+    assert port.send_calls == [(("alice@example.com",), "Subject", "Body text")]
+
+
+async def test_denied_send_email_never_reaches_the_real_port(tmp_path: Path) -> None:
+    """EGRESS_SENSITIVE floors CONFIRM -- no confirmation channel available means denied."""
+    port = _StubEmailPort()
+
+    decision = await authorize_and_send_email(
+        ("alice@example.com",),
+        "Subject",
+        "Body text",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        email_port=port,
+    )
+
+    assert decision.granted is False
+    assert port.send_calls == []
+
+
+async def test_granted_create_calendar_event_with_no_attendees_reaches_the_real_port(
+    tmp_path: Path,
+) -> None:
+    port = _StubCalendarPort(created_uid="attendee-less-uid")
+
+    outcome = await authorize_and_create_calendar_event(
+        "Solo focus block",
+        "2026-09-03T10:00:00+00:00",
+        "2026-09-03T11:00:00+00:00",
+        (),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        calendar_port=port,
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.uid == "attendee-less-uid"
+    assert len(port.create_calls) == 1
+    assert port.create_calls[0].summary == "Solo focus block"
+    assert port.create_calls[0].attendees == ()
+
+
+async def test_granted_create_calendar_event_with_attendees_reaches_the_real_port(
+    tmp_path: Path,
+) -> None:
+    port = _StubCalendarPort(created_uid="attendee-uid")
+
+    outcome = await authorize_and_create_calendar_event(
+        "Team sync",
+        "2026-09-03T10:00:00+00:00",
+        "2026-09-03T11:00:00+00:00",
+        ("alice@example.com",),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        calendar_port=port,
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.uid == "attendee-uid"
+    assert port.create_calls[0].attendees == ("alice@example.com",)
+
+
+async def test_denied_create_calendar_event_never_reaches_the_real_port(tmp_path: Path) -> None:
+    """An attendee-less create floors WRITE_LOCAL/CONFIRM -- no confirmation means denied."""
+    port = _StubCalendarPort()
+
+    outcome = await authorize_and_create_calendar_event(
+        "Solo focus block",
+        "2026-09-03T10:00:00+00:00",
+        "2026-09-03T11:00:00+00:00",
+        (),
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        calendar_port=port,
+    )
+
+    assert outcome.decision.granted is False
+    assert outcome.uid is None
+    assert port.create_calls == []

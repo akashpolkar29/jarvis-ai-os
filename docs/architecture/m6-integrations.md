@@ -28,28 +28,30 @@ direct review of the ADR's own full text)** — the design's own
 classification reasoning (`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`,
 reused rather than a new effect) is now settled.
 
-**Read half implemented and tested (WP-76 through WP-80); write half
-not yet implemented as code — implementation, not review, is what
-remains.** `ports/email.py`,
-`ports/calendar.py`, `adapters/email.py` (real `ImapEmailAdapter`,
-stdlib `imaplib`), `adapters/calendar.py` (real `CalDavCalendarAdapter`,
-the real `caldav` library, a new dependency), and `kernel/communications.py`
-(real `communications.list_email`/`communications.read_email`/
-`communications.list_calendar_events` capabilities, `Effect.EGRESS_LOCAL`/
-`Tier.ALLOW`) all exist and are real, tested, invocable code. `EmailPort.send_message`/
-`CalendarPort.create_event` exist on their own Protocols but every
-real adapter's own implementation unconditionally raises
-`NotImplementedError` — proven structurally, not just by inspection
-(`tests/meta/test_communications_no_send_or_create.py`). `application/communications/`
-does not exist — WP-79's own dynamic-effect classification function
-and authorizers remain real, separate future work, no longer blocked
-on ADR review (ADR-0057 is Accepted; what remains is implementation).
-See
-`docs/threat-model/v0.md`'s own "Milestone 6a additions" for the full
-account, including a real, deliberately conservative scoping choice
-(even attendee-less `create_event`, which the design doc itself
-classifies as ungated by ADR-0057, is left unimplemented in this
-pass).
+**Both halves now implemented and tested, real, invocable code
+(WP-76 through WP-80 for reads, WP-79 onward for writes, all
+2026-09-03).** `ports/email.py`, `ports/calendar.py`,
+`adapters/email.py` (real `ImapEmailAdapter`, stdlib `imaplib` +
+`smtplib`), `adapters/calendar.py` (real `CalDavCalendarAdapter`, the
+real `caldav` library), `application/communications/` (real
+`classification.py`'s `egress_effect_for`/`calendar_effect_for`, real
+`writer.py`'s `EmailSendAuthorizer`/`CalendarEventAuthorizer`), and
+`kernel/communications.py` (`communications.list_email`/
+`communications.read_email`/`communications.list_calendar_events` as
+static `Effect.EGRESS_LOCAL`/`Tier.ALLOW` capabilities;
+`authorize_and_send_email`/`authorize_and_create_calendar_event` as
+dynamic-effect capabilities, mirroring `memory.write`'s own
+not-statically-registered precedent) all exist. `EmailPort.send_message`/
+`CalendarPort.create_event` are real implementations now — the
+structural meta-test that once proved neither existed
+(`tests/meta/test_communications_no_send_or_create.py`) has been
+retired, its invariant now intentionally superseded by ADR-0057's own
+Acceptance, not left stale. See `docs/threat-model/v0.md`'s own
+"Milestone 6a additions" and its write-half follow-up note for the
+full account, including the real, deliberately conservative scoping
+choice the read-only pass made before ADR-0057 was Accepted (even
+attendee-less `create_event` was left unimplemented until then, for
+exactly one clean boundary rather than a partial write path).
 
 ### Entry gate
 
@@ -59,11 +61,14 @@ M5, tagged `v0.5.0`, complete.
 
 Per-plugin conformance to the M0 capability/policy/audit model
 (unchanged from M6's own original objective) — plus, concretely,
-`m6a-communications.md`'s own six real acceptance criteria (real
-classification-function tests, real unconditional-DENY property tests
-for both email-send and attended-calendar-event creation, real
-always-ALLOW tests for reads, real provenance-tainting tests, and a
-real, skipif-guarded live test against a real mailbox/calendar).
+`m6a-communications.md`'s own seven real acceptance criteria: six of
+seven met (real classification-function tests, real unconditional-DENY
+property tests for both email-send and attended-calendar-event
+creation, real always-ALLOW tests for reads, real provenance-tainting
+tests, and the real all-or-nothing multi-recipient property test); only
+the real, skipif-guarded live test against a real mailbox/calendar
+remains unmet, honestly skipped, no real test-account credentials
+configured anywhere in this environment.
 
 ## M6b — Job Assistance
 
