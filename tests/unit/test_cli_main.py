@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.calendar import CalDavCalendarAdapter, CalendarEventCreationError
 from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
@@ -51,6 +52,7 @@ from jarvis.domain.capability import (
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
+from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
@@ -1011,6 +1013,282 @@ def test_send_email_subcommand_reports_secret_not_found_cleanly(
 def test_send_email_subcommand_requires_subject_and_body() -> None:
     with pytest.raises(SystemExit):
         main(["send-email", "alice@example.com"])
+
+
+_CREATE_EVENT_COMMON_FLAGS = [
+    "--summary",
+    "Team sync",
+    "--start",
+    "2026-09-03T10:00:00+00:00",
+    "--end",
+    "2026-09-03T11:00:00+00:00",
+    "--caldav-url",
+    "https://caldav.example.com",
+    "--username",
+    "user@example.com",
+    "--password-reference",
+    "example-ref",
+]
+
+
+def test_create_calendar_event_subcommand_routes_summary_start_end_attendees(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[str, str, str, tuple[str, ...]]] = []
+
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,
+        start: str,
+        end: str,
+        attendees: tuple[str, ...],
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> CalendarEventCreateOutcome:
+        received.append((summary, start, end, attendees))
+        decision = _make_decision(
+            granted=True, capability_id="communications.create_calendar_event"
+        )
+        return CalendarEventCreateOutcome(decision=decision, uid="new-uid")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--attendee",
+            "alice@example.com",
+            "--attendee",
+            "bob@example.com",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [
+        (
+            "Team sync",
+            "2026-09-03T10:00:00+00:00",
+            "2026-09-03T11:00:00+00:00",
+            ("alice@example.com", "bob@example.com"),
+        )
+    ]
+    assert exit_code == 0
+
+
+def test_create_calendar_event_subcommand_defaults_to_no_attendees(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[str, ...]] = []
+
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,  # noqa: ARG001
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        attendees: tuple[str, ...],
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> CalendarEventCreateOutcome:
+        received.append(attendees)
+        decision = _make_decision(
+            granted=True, capability_id="communications.create_calendar_event"
+        )
+        return CalendarEventCreateOutcome(decision=decision, uid="new-uid")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [()]
+    assert exit_code == 0
+
+
+def test_create_calendar_event_subcommand_constructs_a_real_adapter_with_the_given_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received_ports: list[CalDavCalendarAdapter] = []
+
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,  # noqa: ARG001
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        attendees: tuple[str, ...],  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: CalDavCalendarAdapter,
+    ) -> CalendarEventCreateOutcome:
+        received_ports.append(calendar_port)
+        decision = _make_decision(
+            granted=True, capability_id="communications.create_calendar_event"
+        )
+        return CalendarEventCreateOutcome(decision=decision, uid="new-uid")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert len(received_ports) == 1
+    assert isinstance(received_ports[0], CalDavCalendarAdapter)
+    assert exit_code == 0
+
+
+def test_create_calendar_event_subcommand_prints_the_decision_and_uid_when_granted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,  # noqa: ARG001
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        attendees: tuple[str, ...],  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> CalendarEventCreateOutcome:
+        decision = _make_decision(
+            granted=True, capability_id="communications.create_calendar_event"
+        )
+        return CalendarEventCreateOutcome(decision=decision, uid="brand-new-uid")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "create-calendar-event: GRANTED" in captured.out
+    assert "uid: brand-new-uid" in captured.out
+    assert exit_code == 0
+
+
+def test_create_calendar_event_subcommand_prints_denied_without_a_uid_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,  # noqa: ARG001
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        attendees: tuple[str, ...],  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> CalendarEventCreateOutcome:
+        decision = _make_decision(
+            granted=False, capability_id="communications.create_calendar_event"
+        )
+        return CalendarEventCreateOutcome(decision=decision, uid=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "create-calendar-event: DENIED" in captured.out
+    assert "uid:" not in captured.out
+    assert exit_code == 1
+
+
+def test_create_calendar_event_subcommand_reports_creation_error_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CalendarEventCreationError (a real CalDAV server anomaly) surfaces as a clean message."""
+
+    async def fake_authorize_and_create_calendar_event(  # noqa: PLR0913 -- mirrors the real signature
+        summary: str,  # noqa: ARG001
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        attendees: tuple[str, ...],  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> CalendarEventCreateOutcome:
+        msg = "Real CalDAV server returned no UID for the newly created event."
+        raise CalendarEventCreationError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_calendar_event",
+        fake_authorize_and_create_calendar_event,
+    )
+
+    exit_code = main(
+        [
+            "create-calendar-event",
+            *_CREATE_EVENT_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "no UID" in captured.err
+
+
+def test_create_calendar_event_subcommand_requires_summary_start_end() -> None:
+    with pytest.raises(SystemExit):
+        main(["create-calendar-event", "--caldav-url", "https://caldav.example.com"])
 
 
 def test_memory_pin_subcommand_prints_the_command_label(

@@ -78,6 +78,21 @@ rather than letting a kernel function default one internally.
 is), so this branch is the second place (after ``listen``) that wraps
 a kernel call in ``asyncio.run`` -- every other subcommand here calls
 a synchronous kernel function directly.
+
+``create-calendar-event`` (2026-09-03) is the identical wiring for
+``jarvis.kernel.communications.authorize_and_create_calendar_event`` --
+same flat, top-level shape as ``send-email``, same real-adapter-
+construction-in-``cli`` reasoning (``--caldav-url``/``--username``/
+``--password-reference`` construct a real ``CalDavCalendarAdapter``,
+no default, ``calendar_port`` is real per-deployment config this
+module does not decide either). ``--attendee`` is repeatable
+(``action="append"``, default ``[]``) -- an event with zero, one, or
+several real attendees is the same real distinction
+``calendar_effect_for`` itself branches on (attendee-less floors
+``WRITE_LOCAL``/``CONFIRM``; attendee-bearing floors through
+``egress_effect_for``, same as email). A granted create's real new
+``uid`` is printed, mirroring ``memory write``'s own ``identifier:``
+line.
 """
 
 from __future__ import annotations
@@ -89,12 +104,16 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.calendar import CalDavCalendarAdapter, CalendarEventCreationError
 from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.domain.errors import JarvisError
-from jarvis.kernel.communications import authorize_and_send_email
+from jarvis.kernel.communications import (
+    authorize_and_create_calendar_event,
+    authorize_and_send_email,
+)
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
 from jarvis.kernel.memory import (
     authorize_and_forget,
@@ -140,6 +159,67 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         default=_DEFAULT_CHAIN_PATH,
         help=f"Where the audit chain is persisted (default: {_DEFAULT_CHAIN_PATH}).",
     )
+
+
+def _add_communications_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Add the send-email/create-calendar-event subparsers, split out to keep _build_parser lean."""
+    send_email_parser = subparsers.add_parser(
+        "send-email", help="Send a real email to one or more real recipients."
+    )
+    send_email_parser.add_argument("to", nargs="+", help="One or more real recipient addresses.")
+    send_email_parser.add_argument("--subject", required=True, help="The real subject line.")
+    send_email_parser.add_argument("--body", required=True, help="The real message body.")
+    send_email_parser.add_argument(
+        "--imap-host", required=True, help="The real IMAP server hostname."
+    )
+    send_email_parser.add_argument(
+        "--smtp-host", required=True, help="The real SMTP server hostname."
+    )
+    send_email_parser.add_argument("--username", required=True, help="The real mailbox username.")
+    send_email_parser.add_argument(
+        "--password-reference",
+        required=True,
+        help=(
+            "The keyring reference for this mailbox's password -- "
+            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
+        ),
+    )
+    _add_common_flags(send_email_parser)
+
+    create_event_parser = subparsers.add_parser(
+        "create-calendar-event", help="Create a real calendar event, optionally with attendees."
+    )
+    create_event_parser.add_argument("--summary", required=True, help="The real event summary.")
+    create_event_parser.add_argument(
+        "--start", required=True, help="The real event start time (ISO-8601)."
+    )
+    create_event_parser.add_argument(
+        "--end", required=True, help="The real event end time (ISO-8601)."
+    )
+    create_event_parser.add_argument(
+        "--attendee",
+        action="append",
+        default=[],
+        dest="attendees",
+        help="A real attendee address. Repeatable for multiple attendees.",
+    )
+    create_event_parser.add_argument(
+        "--caldav-url", required=True, help="The real CalDAV server URL."
+    )
+    create_event_parser.add_argument(
+        "--username", required=True, help="The real CalDAV account username."
+    )
+    create_event_parser.add_argument(
+        "--password-reference",
+        required=True,
+        help=(
+            "The keyring reference for this account's password -- "
+            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
+        ),
+    )
+    _add_common_flags(create_event_parser)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -199,28 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_pin_parser.add_argument("identifier", help="The record's identifier.")
     _add_common_flags(memory_pin_parser)
 
-    send_email_parser = subparsers.add_parser(
-        "send-email", help="Send a real email to one or more real recipients."
-    )
-    send_email_parser.add_argument("to", nargs="+", help="One or more real recipient addresses.")
-    send_email_parser.add_argument("--subject", required=True, help="The real subject line.")
-    send_email_parser.add_argument("--body", required=True, help="The real message body.")
-    send_email_parser.add_argument(
-        "--imap-host", required=True, help="The real IMAP server hostname."
-    )
-    send_email_parser.add_argument(
-        "--smtp-host", required=True, help="The real SMTP server hostname."
-    )
-    send_email_parser.add_argument("--username", required=True, help="The real mailbox username.")
-    send_email_parser.add_argument(
-        "--password-reference",
-        required=True,
-        help=(
-            "The keyring reference for this mailbox's password -- "
-            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
-        ),
-    )
-    _add_common_flags(send_email_parser)
+    _add_communications_parsers(subparsers)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -338,6 +397,61 @@ def _run_memory_subcommand(
     return decision, None, None
 
 
+def _run_communications_subcommand(args: argparse.Namespace) -> tuple[Decision, str | None]:
+    """Dispatch ``send-email``/``create-calendar-event``, returning (decision, calendar_event_uid).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_memory_subcommand` is: one more subcommand family
+    inline in ``main`` would push it past ruff's ``PLR0912`` threshold.
+    Both branches construct their own real adapter here (``cli`` is
+    the one layer permitted to, mirroring ``_run_listen``'s own
+    ``Gtk4PhysicalConfirmationAdapter`` construction) and wrap their
+    kernel call in ``asyncio.run``, since both
+    ``authorize_and_send_email``/``authorize_and_create_calendar_event``
+    are ``async``.
+    """
+    if args.command == "send-email":
+        email_port = ImapEmailAdapter(
+            args.imap_host,
+            args.username,
+            SecretServiceAdapter(),
+            args.password_reference,
+            smtp_host=args.smtp_host,
+        )
+        decision = asyncio.run(
+            authorize_and_send_email(
+                tuple(args.to),
+                args.subject,
+                args.body,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+                email_port=email_port,
+            )
+        )
+        return decision, None
+
+    calendar_port = CalDavCalendarAdapter(
+        args.caldav_url,
+        args.username,
+        SecretServiceAdapter(),
+        args.password_reference,
+    )
+    create_outcome = asyncio.run(
+        authorize_and_create_calendar_event(
+            args.summary,
+            args.start,
+            args.end,
+            tuple(args.attendees),
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+            calendar_port=calendar_port,
+        )
+    )
+    return create_outcome.decision, create_outcome.uid
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse argv, authorize (and maybe run) the requested command, print the outcome.
 
@@ -357,6 +471,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     content: Tainted[str] | None = None
     memory_identifier: str | None = None
     memory_records: tuple[MemoryRecord, ...] | None = None
+    calendar_event_uid: str | None = None
     command_label = args.command
 
     try:
@@ -378,25 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "memory":
             command_label = f"memory {args.memory_command}"
             decision, memory_identifier, memory_records = _run_memory_subcommand(args)
-        elif args.command == "send-email":
-            email_port = ImapEmailAdapter(
-                args.imap_host,
-                args.username,
-                SecretServiceAdapter(),
-                args.password_reference,
-                smtp_host=args.smtp_host,
-            )
-            decision = asyncio.run(
-                authorize_and_send_email(
-                    tuple(args.to),
-                    args.subject,
-                    args.body,
-                    physical_confirmation_available=args.physical_confirmation_available,
-                    remote_confirmation_available=args.remote_confirmation_available,
-                    chain_path=args.chain_path,
-                    email_port=email_port,
-                )
-            )
+        elif args.command in ("send-email", "create-calendar-event"):
+            decision, calendar_event_uid = _run_communications_subcommand(args)
         else:
             decision = authorize_and_run_music_command(
                 MUSIC_COMMAND_NAMES[args.command],
@@ -413,6 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         UnsupportedMemoryValueError,
         MemoryIntegrityViolationError,
         SecretNotFoundError,
+        CalendarEventCreationError,
         OSError,
         UnicodeDecodeError,
         KeyError,
@@ -430,4 +529,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if memory_records is not None:
         for record in memory_records:
             print(f"{record.identifier}: {record.value.value}")
+    if calendar_event_uid is not None:
+        print(f"uid: {calendar_event_uid}")
     return 0 if decision.granted else 1
