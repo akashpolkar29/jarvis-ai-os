@@ -263,7 +263,7 @@ async def test_granted_send_email_reaches_the_real_port(tmp_path: Path) -> None:
 
 
 async def test_denied_send_email_never_reaches_the_real_port(tmp_path: Path) -> None:
-    """EGRESS_SENSITIVE floors CONFIRM -- no confirmation channel available means denied."""
+    """ADR-0059: floors at MANUAL_ONLY -- no physical confirmation means denied."""
     port = _StubEmailPort()
 
     decision = await authorize_and_send_email(
@@ -272,6 +272,24 @@ async def test_denied_send_email_never_reaches_the_real_port(tmp_path: Path) -> 
         "Body text",
         physical_confirmation_available=False,
         remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        email_port=port,
+    )
+
+    assert decision.granted is False
+    assert port.send_calls == []
+
+
+async def test_send_email_with_only_remote_confirmation_is_denied(tmp_path: Path) -> None:
+    """ADR-0059's own central guarantee: remote confirmation alone can never authorize a send."""
+    port = _StubEmailPort()
+
+    decision = await authorize_and_send_email(
+        ("alice@example.com",),
+        "Subject",
+        "Body text",
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
         chain_path=tmp_path / "audit_chain.json",
         email_port=port,
     )
@@ -342,3 +360,46 @@ async def test_denied_create_calendar_event_never_reaches_the_real_port(tmp_path
     assert outcome.decision.granted is False
     assert outcome.uid is None
     assert port.create_calls == []
+
+
+async def test_create_calendar_event_with_attendees_and_only_remote_confirmation_is_denied(
+    tmp_path: Path,
+) -> None:
+    """ADR-0059's own central guarantee: remote confirmation alone never authorizes an invite."""
+    port = _StubCalendarPort()
+
+    outcome = await authorize_and_create_calendar_event(
+        "Team sync",
+        "2026-09-03T10:00:00+00:00",
+        "2026-09-03T11:00:00+00:00",
+        ("alice@example.com",),
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=tmp_path / "audit_chain.json",
+        calendar_port=port,
+    )
+
+    assert outcome.decision.granted is False
+    assert outcome.uid is None
+    assert port.create_calls == []
+
+
+async def test_create_calendar_event_with_no_attendees_and_only_remote_confirmation_is_granted(
+    tmp_path: Path,
+) -> None:
+    """Unaffected by ADR-0059: an attendee-less event still floors at WRITE_LOCAL/CONFIRM."""
+    port = _StubCalendarPort(created_uid="attendee-less-uid")
+
+    outcome = await authorize_and_create_calendar_event(
+        "Solo focus block",
+        "2026-09-03T10:00:00+00:00",
+        "2026-09-03T11:00:00+00:00",
+        (),
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=tmp_path / "audit_chain.json",
+        calendar_port=port,
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.uid == "attendee-less-uid"

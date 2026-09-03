@@ -13,13 +13,28 @@ milestone-scoped packages.
 **ADR-0057's own real Decision (Accepted 2026-09-03, directly by the
 user, in conversation, after direct review of the ADR's own full
 text)**: email-send and attended-calendar-event creation reuse
-``Effect.EGRESS_SENSITIVE``/``Effect.EGRESS_SECRET`` directly -- no new
-effect. Unlike ``Effect.MEMORY_WRITE``'s own precedent (ADR-0049, which
-rejected reuse because a memory write never leaves the machine), reuse
-is the *correct* call here: sending a real email, or creating a real
-calendar event with real attendees, is exactly what these two effects
-already mean -- real content, leaving the machine, reaching a real
-party who was not already going to receive it.
+``Effect.EGRESS_SECRET`` directly for ``Classification.SECRET`` content
+-- no new effect for that half, unconditional ``Tier.DENY``, unaffected
+by the amendment below.
+
+**ADR-0059's own real Decision (Accepted 2026-09-03, directly by the
+user, in conversation) amends the non-``SECRET`` half**: ADR-0057's
+original reasoning reused ``Effect.EGRESS_SENSITIVE`` (``Tier.CONFIRM``,
+remote-satisfiable) for that case, by analogy to
+``EGRESS_SENSITIVE``/``EGRESS_SECRET``'s own existing precedent -- never
+independently checked against the project's own founding charter,
+which names "sending emails" explicitly among actions requiring
+"manual confirmation through the desktop interface," never voice/remote
+alone (see ADR-0059's own Context for the full finding).
+``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`` (``Tier.MANUAL_ONLY``,
+never remote-satisfiable -- ``domain/policy.py``'s own ``evaluate()``
+deliberately never reads ``remote_confirmation_available`` for this
+tier) is the real fix: the identical combination ``git.force_push``/
+``memory.forget`` already use, chosen deliberately over inventing a new
+``Effect`` member, matching those two capabilities' own real,
+already-Accepted precedent for "no built-in undo" finality -- a real
+email, once sent, cannot be recalled, the same as a force-pushed
+history rewrite or a permanently deleted memory record.
 """
 
 from __future__ import annotations
@@ -46,12 +61,15 @@ def egress_effect_for(classification: Classification) -> Effect:
         (unconditional ``Tier.DENY`` -- an email, or an invite, can
         never carry a value classified SECRET, full stop, the same
         zero-tolerance this project already applies to cloud-provider
-        egress and memory writes). ``Effect.EGRESS_SENSITIVE`` for
-        everything else (``Tier.CONFIRM`` -- ask first, every time).
+        egress and memory writes). ``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``
+        for everything else (``Tier.MANUAL_ONLY``, ADR-0059 -- a real
+        send/invite can never be authorized by remote confirmation
+        alone, mirroring ``git.force_push``'s/``memory.forget``'s own
+        identical effect combination and "no built-in undo" reasoning).
     """
     if classification is Classification.SECRET:
         return Effect.EGRESS_SECRET
-    return Effect.EGRESS_SENSITIVE
+    return Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
 
 
 def calendar_effect_for(classification: Classification, *, has_attendees: bool) -> Effect:
@@ -80,7 +98,9 @@ def calendar_effect_for(classification: Classification, *, has_attendees: bool) 
         Otherwise, delegates to :func:`egress_effect_for` -- most real
         CalDAV servers send invite emails to attendees automatically on
         real event creation, the exact same "reaches a new external
-        party" shape ``send_message`` has, classified the identical way.
+        party" shape ``send_message`` has, classified the identical way
+        (``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``/``Tier.MANUAL_ONLY``
+        for non-``SECRET`` content, per ADR-0059).
     """
     if not has_attendees:
         return Effect.WRITE_LOCAL

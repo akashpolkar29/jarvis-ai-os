@@ -8,6 +8,21 @@ Exercised through the real EmailSendAuthorizer/CalendarEventAuthorizer/
 AuthorizationOrchestrator code path, not just the domain-level property
 test tests/property/test_capability.py already covers.
 
+**Updated 2026-09-03 (ADR-0059, Accepted directly by the user, in
+conversation)**: the non-SECRET case no longer floors at
+EGRESS_SENSITIVE/CONFIRM (remote-satisfiable) -- it now floors at
+DESTRUCTIVE | IRREVERSIBLE/MANUAL_ONLY, mirroring
+tests/property/test_policy.py's own
+test_manual_only_requires_physical_confirmation_specifically exactly:
+`decision.granted == context.physical_confirmation_available`, remote
+confirmation never contributing regardless of its own value. The two
+tests below that previously asserted "remote confirmation alone
+suffices" (test_non_secret_email_bodies_are_never_denied_by_send_alone,
+test_non_secret_attendee_bearing_summary_floors_at_confirm) were wrong
+under the new floor and have been replaced, not left contradicting the
+real code -- this is the single most important property this ADR
+exists to guarantee.
+
 Tasks here use Trust.USER_DIRECT, not Provenance.external(): these
 tests isolate classification-based effect gating from the separate
 taint-escalation mechanism (CapabilityInvocation.effective_tier,
@@ -69,18 +84,21 @@ def test_secret_email_body_is_never_sent_under_any_circumstance(context: PolicyC
 
 
 @given(CONTEXTS, st.sampled_from(_NON_SECRET))
-def test_non_secret_email_bodies_are_never_denied_by_send_alone(
+def test_non_secret_email_bodies_require_physical_confirmation_specifically(
     context: PolicyContext, classification: Classification
 ) -> None:
-    """PUBLIC/PERSONAL/SENSITIVE bodies float at EGRESS_SENSITIVE's own CONFIRM floor."""
+    """ADR-0059: PUBLIC/PERSONAL/SENSITIVE bodies float at MANUAL_ONLY -- remote alone never grants.
+
+    Mirrors tests/property/test_policy.py's own
+    test_manual_only_requires_physical_confirmation_specifically
+    exactly: granted tracks physical_confirmation_available alone,
+    regardless of remote_confirmation_available's own value.
+    """
     decision = _email_authorizer().authorize_send(
         ("recipient@example.com",), "subject", _body(classification), context
     )
 
-    expected_granted = (
-        context.physical_confirmation_available or context.remote_confirmation_available
-    )
-    assert decision.granted is expected_granted
+    assert decision.granted == context.physical_confirmation_available
 
 
 @given(CONTEXTS, st.lists(st.text(min_size=1), min_size=2, max_size=5))
@@ -121,14 +139,12 @@ def test_secret_summary_without_attendees_is_not_specially_denied(context: Polic
 
 
 @given(CONTEXTS, st.sampled_from(_NON_SECRET))
-def test_non_secret_attendee_bearing_summary_floors_at_confirm(
+def test_non_secret_attendee_bearing_summary_requires_physical_confirmation_specifically(
     context: PolicyContext, classification: Classification
 ) -> None:
+    """ADR-0059: an attendee-bearing event floors at MANUAL_ONLY -- remote alone never suffices."""
     decision = _calendar_authorizer().authorize_create(
         _summary(classification), has_attendees=True, context=context
     )
 
-    expected_granted = (
-        context.physical_confirmation_available or context.remote_confirmation_available
-    )
-    assert decision.granted is expected_granted
+    assert decision.granted == context.physical_confirmation_available

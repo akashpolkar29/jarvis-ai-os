@@ -186,22 +186,32 @@ not JARVIS-generated ones.
 
 ### Effect/Tier classification for email — the real decision this document's own ADR-0057 records
 
-**Real, open question raised 2026-09-03, after ADR-0057's own
+**Real gap found and closed 2026-09-03, after ADR-0057's own
 Acceptance and this design's own implementation — see
 [`docs/adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md`](../adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md)
-(Proposed)**: this section's own `Tier.CONFIRM` floor for
-`send_message`/attendee-bearing `create_event` is remote-satisfiable
+(**Accepted, 2026-09-03, directly by the user, in conversation**)**:
+this section's own original `Tier.CONFIRM` floor for
+`send_message`/attendee-bearing `create_event` was remote-satisfiable
 by design (`domain/policy.py::evaluate()`), already directly proven by
 this codebase's own real tests. The project's own founding charter
 names "sending emails" explicitly among actions requiring "manual
 confirmation through the desktop interface," never voice/remote alone
-— a requirement this section's own reasoning below never checked
-itself against, only against `EGRESS_SENSITIVE`/`EGRESS_SECRET`'s own
-existing precedent (calibrated for a different, narrower risk: a cloud
-AI provider seeing text, not a real person receiving a real email).
-ADR-0059 lays out the real options without choosing one. **Voice
-grammar for either write capability remains blocked until this
-resolves**, per the same investigation's own explicit instruction.
+— a requirement this section's own original reasoning below never
+checked itself against, only against `EGRESS_SENSITIVE`/`EGRESS_SECRET`'s
+own existing precedent (calibrated for a different, narrower risk: a
+cloud AI provider seeing text, not a real person receiving a real
+email). **ADR-0059 now supersedes this section's own non-`SECRET`
+floor**: `egress_effect_for` (`application/communications/classification.py`)
+returns `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY`
+for non-`SECRET` content, not `Effect.EGRESS_SENSITIVE`/`Tier.CONFIRM`
+— reusing `git.force_push`'s/`memory.forget`'s own existing
+combination, never remote-satisfiable. The rest of this section's own
+reasoning below (the `SECRET`/`DENY` case, the classification
+function's own shape, the attendee-less/attendee-bearing split) is
+otherwise unchanged and still accurate. **Voice grammar for either
+write capability remains out of scope**, per the same acceptance's own
+explicit instruction — closing this gap does not by itself make voice
+grammar safe to add.
 
 **Reading** (`list_messages`/`read_message`): `Effect.EGRESS_LOCAL`
 (`Tier.ALLOW`), the identical shape `fs.read_file`/`memory.retrieve`/
@@ -246,10 +256,17 @@ the outgoing message body's real `Classification` and returns
 `Effect.EGRESS_SECRET` for `Classification.SECRET` (unconditional
 `Tier.DENY` — an email can never carry a value classified SECRET,
 full stop, the same zero-tolerance this project already applies to
-cloud-provider egress and memory writes) or `Effect.EGRESS_SENSITIVE`
-for everything else (`Tier.CONFIRM` — ask first, every time, matching
-this project's own "an ordinary local write already gets a CONFIRM
-gate" baseline, applied here to "an ordinary outbound message").
+cloud-provider egress and memory writes) or, as originally designed
+here, `Effect.EGRESS_SENSITIVE` for everything else (`Tier.CONFIRM` —
+ask first, every time, matching this project's own "an ordinary local
+write already gets a CONFIRM gate" baseline, applied here to "an
+ordinary outbound message"). **Superseded 2026-09-03 by ADR-0059,
+Accepted**: the non-`SECRET` branch now returns `Effect.DESTRUCTIVE |
+Effect.IRREVERSIBLE` (`Tier.MANUAL_ONLY`) instead — see this
+subsection's own opening note above for the full reasoning; this
+paragraph's own original `EGRESS_SENSITIVE`/`CONFIRM` text is preserved
+as the real, historical record of what was originally designed and
+accepted under ADR-0057, not as the current behavior.
 
 **Real, deliberately deferred question, named rather than assumed
 away**: the classification above is a *content* classification (what's
@@ -354,9 +371,12 @@ does. Classified the identical way: the same
 function, applied to the event's own real content (summary is the
 closest analog to a message body; a `Classification.SECRET` summary —
 implausible in practice, but not structurally impossible — still
-floors `DENY`, everything else floors `CONFIRM`). One real
-classification function serves both `send_message` and
-`create_event`-with-attendees; not two parallel copies.
+floors `DENY`, everything else floors, as originally designed here,
+`CONFIRM` — **superseded 2026-09-03 by ADR-0059, Accepted: now
+`MANUAL_ONLY`**, see the email classification subsection above for the
+full reasoning). One real classification function serves both
+`send_message` and `create_event`-with-attendees; not two parallel
+copies.
 
 **Real, named future bypass risk, flagged by the 2026-09-01 gap-hunt
 pass**: `CalendarPort` as designed here has no `update_event`/
@@ -460,11 +480,12 @@ this environment, matching every other network-dependent adapter's
 own established precedent in this codebase.
 
 1. **Met.** A real test proves `egress_effect_for` (communications)
-   returns `Effect.EGRESS_SECRET` for `Classification.SECRET` and
-   `Effect.EGRESS_SENSITIVE` for every other classification —
-   mirroring `application/reasoning`'s and `application/memory`'s own
-   required classification-function test shape
-   (`tests/unit/application/communications/test_classification.py`).
+   returns `Effect.EGRESS_SECRET` for `Classification.SECRET` and, as
+   of ADR-0059 (Accepted 2026-09-03), `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`
+   (originally `Effect.EGRESS_SENSITIVE`, before ADR-0059) for every
+   other classification — mirroring `application/reasoning`'s and
+   `application/memory`'s own required classification-function test
+   shape (`tests/unit/application/communications/test_classification.py`).
 2. **Met.** A real test, through the real `AuthorizationOrchestrator`,
    proves a `Classification.SECRET` email body is denied
    unconditionally when sent — including when

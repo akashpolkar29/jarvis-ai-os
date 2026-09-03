@@ -53,20 +53,26 @@ choice the read-only pass made before ADR-0057 was Accepted (even
 attendee-less `create_event` was left unimplemented until then, for
 exactly one clean boundary rather than a partial write path).
 
-**A real, open question raised 2026-09-03, after both write
-capabilities were built and CLI-wired**: does ADR-0057's own
+**A real gap found and closed 2026-09-03, after both write
+capabilities were built and CLI-wired**: ADR-0057's own original
 `Tier.CONFIRM` floor for `send_message`/attendee-bearing `create_event`
-actually satisfy the project's own founding charter, which names
-"sending emails" explicitly among actions requiring "manual
-confirmation through the desktop interface," never voice/remote alone?
-`Tier.CONFIRM` is remote-satisfiable by design
-(`domain/policy.py::evaluate()`), already directly proven by this
-codebase's own real tests
-(`tests/property/test_communications_writer.py`). See
+did not actually satisfy the project's own founding charter, which
+names "sending emails" explicitly among actions requiring "manual
+confirmation through the desktop interface," never voice/remote alone
+— `Tier.CONFIRM` is remote-satisfiable by design
+(`domain/policy.py::evaluate()`). See
 [`docs/adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md`](../adr/0059-email-and-attended-calendar-event-confirmation-tier-may-not-satisfy-the-charter.md)
-(**Proposed** — lays out real options without choosing one) and
-`docs/threat-model/v0.md`'s own matching note. **Voice grammar for
-either write capability remains blocked until this resolves.**
+(**Accepted, 2026-09-03, directly by the user, in conversation**) and
+`docs/threat-model/v0.md`'s own matching note. **The fix is real, not
+just documented**: `egress_effect_for` (`application/communications/classification.py`)
+now returns `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY`
+for non-`SECRET` content, reusing `git.force_push`'s/`memory.forget`'s
+own existing effect combination — never remote-satisfiable, proven by
+real property tests (`tests/property/test_communications_writer.py`)
+asserting `decision.granted == context.physical_confirmation_available`
+under every real `PolicyContext`. **Voice grammar for either write
+capability remains out of scope** — closing this gap does not, by
+itself, make voice grammar safe to add.
 
 ### Entry gate
 

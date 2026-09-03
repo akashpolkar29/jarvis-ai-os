@@ -22,6 +22,15 @@ finding 3), satisfied structurally, not just by convention**: each
 itself; the real send/create call is strictly the caller's own
 responsibility, only if ``decision.granted``, the identical shape
 ``MemoryWriteAuthorizer.authorize_write`` already established.
+
+**ADR-0059 (Accepted 2026-09-03, directly by the user, in
+conversation) amends the non-``SECRET`` floor these two classify to**:
+``application/communications/classification.py::egress_effect_for``
+now returns ``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`` (``Tier.MANUAL_ONLY``,
+never remote-satisfiable) rather than ``Effect.EGRESS_SENSITIVE``
+(``Tier.CONFIRM``) for non-``SECRET`` content -- neither authorizer
+class below needed to change for this; the effect substitution is
+entirely contained in the classification function they already call.
 """
 
 from __future__ import annotations

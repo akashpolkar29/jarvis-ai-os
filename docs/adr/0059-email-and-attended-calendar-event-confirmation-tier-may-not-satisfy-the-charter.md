@@ -1,14 +1,37 @@
-# ADR-0059: Does ADR-0057's `Tier.CONFIRM` for email-send/attended-calendar-event satisfy the charter's own "manual confirmation through the desktop interface" requirement?
+# ADR-0059: Email-send/attended-calendar-event creation require `Tier.MANUAL_ONLY`, not `Tier.CONFIRM`
 
 ## Status
 
-Proposed. This ADR does not choose an option — it names a real,
-evidenced gap and lays out three concrete resolutions for the user to
-choose directly, the same way ADR-0058's own most consequential
-question ("is 'no auto-apply' structural or a policy-tier gate?") was
-routed to the user rather than resolved remotely. **Do not accept
-without the user's own direct choice among the options below** (or a
-different option they name instead).
+**Accepted (2026-09-03, directly by the user, in conversation — see
+below for the real acceptance record).**
+
+**Real, load-bearing difference from ADR-0057's own provenance, stated
+plainly**: this ADR's core Decision was **not** worked out remotely by
+this pass and merely reported to the user afterward. It was drafted
+Proposed, laying out three real options without choosing one (preserved
+below, unedited, for the real record of what was actually offered), and
+the user answered directly, in this same conversation, choosing among
+them:
+
+> Email-send and attended-calendar-event creation should require
+> `Tier.MANUAL_ONLY` — the same floor `memory.forget` and `git.force_push`
+> already use — not the remote-satisfiable `Tier.CONFIRM` they currently
+> float at. No remote-only path should ever be able to authorize either
+> action, matching the charter's own "manual confirmation through the
+> desktop interface" requirement exactly.
+
+**Option (a) was chosen** — a real, narrower fix, not option (b)'s
+more general (and more invasive) tier-model change, and not option
+(c)'s "accept the current design as already sufficient" reading (which
+this ADR's own Context section had already shown depends on a real
+remote-confirmation mechanism that does not exist yet). Concretely,
+per the user's own direct instruction: reuse the existing
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE` combination
+`git.force_push`/`memory.forget` already use — mirroring their own
+real, already-Accepted "no built-in undo" precedent — rather than
+inventing a new `Effect` member, which option (a)'s own original text
+below had left as one of two possible shapes. See "Implementation
+(2026-09-03)" below for what was actually changed.
 
 ## Date
 
@@ -121,11 +144,16 @@ codebase currently classifies at `Tier.CONFIRM`, remote-satisfiable.
 
 ## Decision
 
-**Undecided — deliberately left to the user, not resolved remotely,
-matching this project's own established precedent for decisions of
-this shape** (ADR-0058's own "no auto-apply" boundary was the user's
-own direct answer, not inferred). Three real options, laid out without
-a preference baked in:
+**Option (a) — a `Tier.MANUAL_ONLY` floor for email-send and
+attendee-bearing calendar-event creation, reusing `Effect.DESTRUCTIVE
+| Effect.IRREVERSIBLE` (`git.force_push`'s/`memory.forget`'s own
+existing combination, not a new `Effect` member) — chosen directly by
+the user, 2026-09-03, in conversation.** The three options below are
+preserved exactly as originally drafted, unedited, for the real record
+of what was actually offered before the user chose among them (see
+`## Status` above for the real acceptance record and exactly which of
+the two shapes option (a) itself left open — new effect vs. reused
+combination — was chosen).
 
 **(a) Give email-send and attendee-bearing calendar-event creation
 their own `Tier.MANUAL_ONLY` floor.** Closer to `memory.forget`'s/
@@ -165,34 +193,69 @@ plainly, "Real presence/hardware detection is future work." Choosing
 (c) means accepting that gap as it stands today, not that it is
 already closed.
 
-No option is chosen here. **Whichever is chosen, no voice grammar for
-`send_email`/`create_calendar_event` should be added until this is
-resolved** (per the user's own explicit instruction accompanying this
-investigation) — voice invocation stacked on a possibly-remote-
-confirmable send is exactly the failure mode the charter's own
-sentence names.
+**Voice grammar for `send_email`/`create_calendar_event` remains
+explicitly out of scope for this Decision and this ADR's own
+implementation pass** (per the user's own explicit instruction
+accompanying both this investigation and its acceptance) — closing the
+`Tier.CONFIRM` gap does not, by itself, mean voice grammar is now safe
+to add; that remains a real, separate, future decision.
+
+## Implementation (2026-09-03)
+
+`application/communications/classification.py::egress_effect_for`
+changed from returning `Effect.EGRESS_SENSITIVE` to returning
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE` for every non-`SECRET`
+classification (the `Classification.SECRET` → `Effect.EGRESS_SECRET`
+branch is unchanged, unaffected by this ADR). `calendar_effect_for`
+needed no code change of its own — it already delegates to
+`egress_effect_for` for the attendee-bearing case, so the new floor
+applies automatically; the attendee-less branch (`Effect.WRITE_LOCAL`)
+is untouched. Neither `EmailSendAuthorizer` nor `CalendarEventAuthorizer`
+(`application/communications/writer.py`) needed to change — the effect
+substitution is entirely contained in the classification function both
+already call.
+
+`tests/property/test_communications_writer.py`'s own
+`test_non_secret_email_bodies_are_never_denied_by_send_alone` and
+`test_non_secret_attendee_bearing_summary_floors_at_confirm` — which
+had asserted the now-wrong "remote confirmation alone suffices"
+property — were replaced (not left contradicting the real code) with
+`test_non_secret_email_bodies_require_physical_confirmation_specifically`/
+`test_non_secret_attendee_bearing_summary_requires_physical_confirmation_specifically`,
+each asserting `decision.granted == context.physical_confirmation_available`
+under every real `PolicyContext`, mirroring
+`tests/property/test_policy.py`'s own
+`test_manual_only_requires_physical_confirmation_specifically` exactly
+— the real, required proof this ADR exists to guarantee.
+`tests/unit/application/communications/test_classification.py`'s own
+non-`SECRET` cases were updated the same way. `tests/unit/test_communications_kernel.py`
+gained two new, explicit denial tests
+(`test_send_email_with_only_remote_confirmation_is_denied`,
+`test_create_calendar_event_with_attendees_and_only_remote_confirmation_is_denied`)
+proving the same property end to end through the real composition-root
+functions, plus one confirming the attendee-less case is genuinely
+unaffected (still grantable by remote confirmation alone). All
+existing granted-path tests (which already used
+`physical_confirmation_available=True`) needed no change — they were
+already correct under the new floor, not merely lucky.
 
 ## Consequences
 
-Whatever is decided binds real, existing code that already ships and
-is already CLI-invocable (`jarvis send-email`, `jarvis
-create-calendar-event`, merged 2026-09-03) — this is not a
+This binds real, existing code that already shipped and was already
+CLI-invocable (`jarvis send-email`, `jarvis create-calendar-event`,
+merged 2026-09-03) before this ADR's own acceptance — not a
 speculative, pre-implementation question the way ADR-0057's own
-original draft was answering. If (a) or (b) is chosen,
-`EmailSendAuthorizer`/`CalendarEventAuthorizer`
-(`application/communications/writer.py`) and the classification
-functions in `application/communications/classification.py` both need
-real code changes, plus updated property tests replacing the current
-"remote alone suffices" assertions in
-`tests/property/test_communications_writer.py` with the opposite
-claim for the affected paths — `test_non_secret_email_bodies_are_never_denied_by_send_alone`
-and `test_non_secret_attendee_bearing_summary_floors_at_confirm` would
-both need to change from proving remote-alone-suffices to proving the
-opposite. If (c) is chosen, this ADR's own finding should be recorded
-as a real, deliberate, reasoned acceptance — not silently dropped —
-and a real remote-confirmation mechanism becomes a real, load-bearing
-prerequisite that reading depends on, named explicitly rather than
-assumed to already exist.
+original draft was answering. `jarvis send-email --remote-confirmation-available`
+(no `--physical-confirmation-available`) — which authorized a real
+send before this Decision — is now denied, closing the real gap this
+ADR was written to name. Physical confirmation itself remains
+self-declared and unverified at the CLI layer today (`ManualConfirmationAdapter`'s
+own documented "future work" gap, unaffected by this ADR) — this
+Decision closes the *tier* gap (remote alone can no longer substitute
+for physical), not the separate, pre-existing gap of whether a
+`--physical-confirmation-available` flag itself is ever really
+verified. That gap is real, already named in this ADR's own Context,
+and remains real, deferred work.
 
 This ADR does not touch ADR-0019's own effect-based `MANUAL_ONLY`
 criteria, ADR-0038's own `EGRESS_SECRET`/`DENY` reasoning (unaffected

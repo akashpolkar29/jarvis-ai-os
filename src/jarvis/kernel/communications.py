@@ -42,15 +42,22 @@ draft has attendees at all), which a statically-registered
 `CapabilityDescriptor` cannot express. Both wrap their real,
 directly-typed/spoken content as `Tainted(value, Provenance.user())`,
 matching `authorize_and_remember`'s own identical choice -- always
-`Classification.PUBLIC` here, so these calls float at
-`EGRESS_SENSITIVE`/`CONFIRM` (email, or an attendee-bearing event)
-never the unconditional `EGRESS_SECRET`/`DENY` floor a genuinely
-`SECRET`-classified value would hit. **The identical trust-boundary
-caveat `authorize_and_remember`'s own docstring already states applies
-here too**: a future caller constructing this value from a
-less-trusted or more sensitive source is responsible for giving it the
-correct provenance before calling this function -- this function does
-not, and cannot, second-guess a provenance it did not compute.
+`Classification.PUBLIC` here. **Updated 2026-09-03 (ADR-0059, Accepted
+directly by the user, in conversation)**: a `Classification.PUBLIC`
+body/attendee-bearing summary now floors at
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY`, not the
+remote-satisfiable `EGRESS_SENSITIVE`/`CONFIRM` this module originally
+floored at -- a real send/invite can only be authorized by physical
+confirmation, matching `git.force_push`'s/`memory.forget`'s own
+identical floor, per the project's own charter requirement for
+"sending emails" specifically. Still never the unconditional
+`EGRESS_SECRET`/`DENY` floor a genuinely `SECRET`-classified value
+would hit. **The identical trust-boundary caveat `authorize_and_remember`'s
+own docstring already states applies here too**: a future caller
+constructing this value from a less-trusted or more sensitive source
+is responsible for giving it the correct provenance before calling
+this function -- this function does not, and cannot, second-guess a
+provenance it did not compute.
 
 **`email_port`/`calendar_port` have no default, on purpose** --
 mirroring `kernel/job_assistance.py`'s own `providers` "no implicit
@@ -269,10 +276,11 @@ async def authorize_and_send_email(  # noqa: PLR0913 -- one per composition-func
         body: The real message body, typed or spoken directly by the
             user -- wrapped as ``Tainted(body, Provenance.user())``,
             matching ``authorize_and_remember``'s own identical choice.
-            ``egress_effect_for()`` (ADR-0057) resolves the real
-            ``Effect`` this declares from that provenance's own
+            ``egress_effect_for()`` (ADR-0057/ADR-0059) resolves the
+            real ``Effect`` this declares from that provenance's own
             classification -- ``PUBLIC`` here, so this call always
-            floors at ``EGRESS_SENSITIVE``/``CONFIRM``, never the
+            floors at ``DESTRUCTIVE | IRREVERSIBLE``/``MANUAL_ONLY``
+            (ADR-0059 -- never remote-satisfiable), never the
             unconditional ``EGRESS_SECRET``/``DENY`` floor a
             ``SECRET``-classified value would hit. A future caller
             constructing this value from a less-trusted or more
