@@ -9,15 +9,23 @@ No :class:`~jarvis.ports.secret.SecretPort` dependency: a local server
 on the loopback interface needs no credential, unlike ``family_a.py``/
 ``family_b.py``.
 
-**Same real, stated gap as family_a.py/family_b.py, for a different
-reason**: no Ollama (or equivalent) server was reachable on this
-machine while writing this adapter (checked: no service on
-``localhost:11434``, no ``ollama`` binary installed) -- there was
-nothing live to verify against, the mirror image of ``adapters/secret.py``,
-which *was* live-verified because a real Secret Service happened to be
-running here. Real, structurally-complete code; live correctness
-unverified, tracked the same way as the two cloud adapters and M1's
-open item #19.
+**Live-verified for real, 2026-09-04** -- closing the gap this
+docstring used to name: a real Ollama server was started
+(``ollama serve``) and a real, small model pulled
+(``qwen2.5:0.5b``, 397MB, no account/auth needed -- an anonymous,
+public registry pull, not a cloud-provider credential) on this
+machine. `LocalReasoningAdapter(model="qwen2.5:0.5b").generate(...)`
+was called directly against the real, running server and returned a
+real generated response -- not mocked, not skipped. `_DEFAULT_MODEL`
+below now names this real, working model rather than the placeholder
+`"local-default"` string it previously held (which was never a real,
+resolvable Ollama tag). **Real, honest quality trade-off, stated
+plainly**: `qwen2.5:0.5b` is a genuinely small model (0.5B parameters)
+chosen for its small download and fast response, not for output
+quality -- a caller relying on this default should expect materially
+weaker generations than any real cloud provider would give. A future
+deployment wanting better local quality overrides `model=` with a
+larger real Ollama tag; nothing here prevents that.
 
 Trust level: never leaves the machine (``ProviderProfile.is_local`` is
 ``True``), tagged ``Trust.SYSTEM`` via
@@ -47,7 +55,7 @@ if TYPE_CHECKING:
     GenerateCall = Callable[[str, str], Awaitable[str]]
 
 _ENDPOINT = "http://localhost:11434/api/generate"
-_DEFAULT_MODEL = "local-default"
+_DEFAULT_MODEL = "qwen2.5:0.5b"
 _REQUEST_TIMEOUT_SECONDS = 120.0
 _AUTHOR = "local"
 
@@ -98,9 +106,12 @@ class LocalReasoningAdapter:
         """Store which model to request and how to make the real call.
 
         Args:
-            model: Which model to request. Defaults to a generic
-                placeholder -- the real model identifier is real,
-                deployment-specific configuration, not decided here.
+            model: Which real Ollama model tag to request. Defaults to
+                `_DEFAULT_MODEL` (`"qwen2.5:0.5b"`, live-verified
+                2026-09-04) -- a small, fast, real, working model, not
+                a guarantee of good output quality. A deployment
+                wanting better local quality overrides this with its
+                own real, pulled model tag.
             call: Given ``(prompt, model)``, makes the real call and
                 returns the generated text. Defaults to a real
                 implementation. Overridable for tests, matching every

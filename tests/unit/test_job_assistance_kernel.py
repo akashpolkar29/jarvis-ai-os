@@ -6,11 +6,21 @@ AuthorizationOrchestrator/DraftWriteAuthorizer/UnverifiableTaskHandler/
 ModelRouter chain -- mirroring test_coding_kernel.py's own "only the
 true external-I/O edges are faked" discipline. Satisfies
 m6b-job-assistance.md's own acceptance criteria 2 and 3.
+
+``test_real_default_providers_reaches_a_locally_running_ollama_server``
+is the one real, live exception -- skipif-guarded on a real
+reachability probe against ``localhost:11434``, mirroring
+``tests/unit/test_coding_kernel.py``'s own identical guard.
+Live-verified manually on this development machine 2026-09-04
+(``qwen2.5:0.5b``).
 """
 
 from __future__ import annotations
 
+import urllib.request
 from typing import TYPE_CHECKING
+
+import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.domain.evidence import Candidate
@@ -22,6 +32,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from jarvis.domain.evidence import Attempt
+
+
+def _real_ollama_server_is_reachable() -> bool:
+    try:
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1)
+    except OSError:
+        return False
+    return True
+
 
 _PROFILE_A = ProviderProfile(name="local-a", is_local=True)
 _PROFILE_B = ProviderProfile(name="local-b", is_local=True)
@@ -210,3 +229,24 @@ async def test_denied_draft_never_shows_a_console_line(tmp_path: Path) -> None:
     )
 
     assert console.shown == []
+
+
+@pytest.mark.skipif(
+    not _real_ollama_server_is_reachable(),
+    reason="Requires a real, locally running Ollama server on localhost:11434, not assumed in CI.",
+)
+async def test_real_default_providers_reaches_a_locally_running_ollama_server(
+    tmp_path: Path,
+) -> None:
+    """Omitting providers really reaches the real local model -- not a stub, not a skip."""
+    outcome = await authorize_and_draft_document(
+        "draft a one-sentence cover letter opener",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        presentation=_FakePresentation(),
+        draft_storage=_FakeDraftStorage(tmp_path),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.path is not None

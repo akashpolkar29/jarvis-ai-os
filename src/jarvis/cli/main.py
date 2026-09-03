@@ -93,6 +93,17 @@ several real attendees is the same real distinction
 ``egress_effect_for``, same as email). A granted create's real new
 ``uid`` is printed, mirroring ``memory write``'s own ``identifier:``
 line.
+
+``code``/``draft`` (2026-09-04) are the first real CLI callers of
+``jarvis.kernel.coding.authorize_and_run_coding_task``/
+``jarvis.kernel.job_assistance.authorize_and_draft_document``, now that
+both have a real, local-only default provider (see each module's own
+docstring). Neither takes a cloud-provider override flag -- see
+``_add_reasoning_parsers``'s own docstring for why building one here
+would violate this project's own hard gate against configuring real
+cloud-provider credentials unattended. Both wrap their kernel call in
+``asyncio.run``, the same shape ``send-email``/``create-calendar-event``
+already use.
 """
 
 from __future__ import annotations
@@ -101,6 +112,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -109,12 +121,15 @@ from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.adapters.secret import SecretServiceAdapter
+from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.domain.errors import JarvisError
+from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
     authorize_and_send_email,
 )
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
+from jarvis.kernel.job_assistance import authorize_and_draft_document
 from jarvis.kernel.memory import (
     authorize_and_forget,
     authorize_and_pin,
@@ -222,6 +237,48 @@ def _add_communications_parsers(
     _add_common_flags(create_event_parser)
 
 
+def _add_reasoning_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Add the code/draft subparsers -- both use the real, local-only default provider(s).
+
+    Neither takes a cloud-provider override flag in this pass, on
+    purpose: building one would mean wiring a real vendor-family
+    adapter/model/keyring reference here, exactly the real
+    cloud-provider configuration this project's own hard gate forbids
+    doing unattended. A caller that wants real cloud escalation calls
+    `authorize_and_run_coding_task`/`authorize_and_draft_document`
+    directly with an explicit `dispatcher_factory`/`providers`,
+    bypassing the CLI -- this is a real, deliberate scope limit, not an
+    oversight.
+    """
+    code_parser = subparsers.add_parser(
+        "code", help="Run a real, local-only coding-agent task against a target repository."
+    )
+    code_parser.add_argument("task", help="The real coding task's own plain-text description.")
+    code_parser.add_argument("repo_path", type=Path, help="The real target repository.")
+    code_parser.add_argument(
+        "--max-climbs",
+        type=int,
+        default=DEFAULT_MAX_CLIMBS,
+        help=f"The real ceiling on Dispatcher.run() climbs (default: {DEFAULT_MAX_CLIMBS}).",
+    )
+    _add_common_flags(code_parser)
+
+    draft_parser = subparsers.add_parser(
+        "draft",
+        help="Draft a real document (e.g. a cover letter) using the real, local-only model.",
+    )
+    draft_parser.add_argument("task", help="The real drafting task's own plain-text description.")
+    draft_parser.add_argument(
+        "--drafts-dir",
+        type=Path,
+        default=None,
+        help="Where the real drafted file is saved (default: ./drafts).",
+    )
+    _add_common_flags(draft_parser)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser: one subcommand per authorizable command."""
     parser = argparse.ArgumentParser(
@@ -280,6 +337,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_common_flags(memory_pin_parser)
 
     _add_communications_parsers(subparsers)
+    _add_reasoning_parsers(subparsers)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -452,6 +510,115 @@ def _run_communications_subcommand(args: argparse.Namespace) -> tuple[Decision, 
     return create_outcome.decision, create_outcome.uid
 
 
+def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str | None]:
+    """Dispatch ``code``/``draft``, returning (decision, result_label).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_memory_subcommand`/:func:`_run_communications_subcommand`
+    are. Both branches omit `dispatcher_factory`/`providers` entirely --
+    the real, local-only default (`kernel/coding.py`'s
+    `_local_only_dispatcher_factory`/`kernel/job_assistance.py`'s
+    `_local_only_providers`) resolves automatically. Both kernel
+    functions are `async`, so this wraps its own call in `asyncio.run`,
+    the same shape `_run_communications_subcommand` already uses.
+    """
+    if args.command == "code":
+        decision, coding_result = asyncio.run(
+            authorize_and_run_coding_task(
+                args.task,
+                args.repo_path,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+                max_climbs=args.max_climbs,
+            )
+        )
+        outcome_label = coding_result.outcome.value if coding_result is not None else None
+        return decision, outcome_label
+
+    draft_outcome = asyncio.run(
+        authorize_and_draft_document(
+            args.task,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+            drafts_dir=args.drafts_dir,
+        )
+    )
+    return draft_outcome.decision, (str(draft_outcome.path) if draft_outcome.path else None)
+
+
+@dataclass(frozen=True)
+class _CommandOutcome:
+    """Everything main() needs to print, gathered from one dispatched command.
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_memory_subcommand` is: keeping every possible optional
+    print-payload as a separate local inside ``main`` itself would grow
+    its own branch/statement count without bound as more subcommand
+    families are added. All fields but ``decision``/``command_label``
+    are ``None`` for most commands.
+    """
+
+    decision: Decision
+    command_label: str
+    content: Tainted[str] | None = None
+    memory_identifier: str | None = None
+    memory_records: tuple[MemoryRecord, ...] | None = None
+    calendar_event_uid: str | None = None
+    reasoning_result_label: str | None = None
+
+
+def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
+    """Route ``args.command`` to its matching kernel call, gathering everything to print.
+
+    Split out from :func:`main` to keep `main` itself under ruff's
+    `PLR0912` branch-count threshold as more subcommand families are
+    added -- the same "split out to keep the caller's own count down"
+    pattern `_run_memory_subcommand`/`_run_communications_subcommand`/
+    `_run_reasoning_subcommand` already establish one level down.
+    """
+    if args.command == "ping":
+        decision = authorize_ping(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+    if args.command == "read":
+        outcome = authorize_and_read_file(
+            args.path,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(outcome.decision, args.command, content=outcome.content)
+    if args.command == "memory":
+        decision, memory_identifier, memory_records = _run_memory_subcommand(args)
+        return _CommandOutcome(
+            decision,
+            f"memory {args.memory_command}",
+            memory_identifier=memory_identifier,
+            memory_records=memory_records,
+        )
+    if args.command in ("send-email", "create-calendar-event"):
+        decision, calendar_event_uid = _run_communications_subcommand(args)
+        return _CommandOutcome(decision, args.command, calendar_event_uid=calendar_event_uid)
+    if args.command in ("code", "draft"):
+        decision, reasoning_result_label = _run_reasoning_subcommand(args)
+        return _CommandOutcome(
+            decision, args.command, reasoning_result_label=reasoning_result_label
+        )
+
+    decision = authorize_and_run_music_command(
+        MUSIC_COMMAND_NAMES[args.command],
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(decision, args.command)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse argv, authorize (and maybe run) the requested command, print the outcome.
 
@@ -468,40 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "listen":
         return _run_listen(args.chain_path, verbose=args.verbose)
 
-    content: Tainted[str] | None = None
-    memory_identifier: str | None = None
-    memory_records: tuple[MemoryRecord, ...] | None = None
-    calendar_event_uid: str | None = None
-    command_label = args.command
-
     try:
-        if args.command == "ping":
-            decision = authorize_ping(
-                physical_confirmation_available=args.physical_confirmation_available,
-                remote_confirmation_available=args.remote_confirmation_available,
-                chain_path=args.chain_path,
-            )
-        elif args.command == "read":
-            outcome = authorize_and_read_file(
-                args.path,
-                physical_confirmation_available=args.physical_confirmation_available,
-                remote_confirmation_available=args.remote_confirmation_available,
-                chain_path=args.chain_path,
-            )
-            decision = outcome.decision
-            content = outcome.content
-        elif args.command == "memory":
-            command_label = f"memory {args.memory_command}"
-            decision, memory_identifier, memory_records = _run_memory_subcommand(args)
-        elif args.command in ("send-email", "create-calendar-event"):
-            decision, calendar_event_uid = _run_communications_subcommand(args)
-        else:
-            decision = authorize_and_run_music_command(
-                MUSIC_COMMAND_NAMES[args.command],
-                physical_confirmation_available=args.physical_confirmation_available,
-                remote_confirmation_available=args.remote_confirmation_available,
-                chain_path=args.chain_path,
-            )
+        outcome = _dispatch_command(args)
     except (
         JarvisError,
         NoMediaPlayerRunningError,
@@ -520,15 +655,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    decision = outcome.decision
     status = "GRANTED" if decision.granted else "DENIED"
-    print(f"{command_label}: {status} (tier={decision.tier.name}, reasons={decision.reasons})")
-    if content is not None:
-        print(content.value)
-    if memory_identifier is not None:
-        print(f"identifier: {memory_identifier}")
-    if memory_records is not None:
-        for record in memory_records:
+    print(
+        f"{outcome.command_label}: {status} (tier={decision.tier.name}, reasons={decision.reasons})"
+    )
+    if outcome.content is not None:
+        print(outcome.content.value)
+    if outcome.memory_identifier is not None:
+        print(f"identifier: {outcome.memory_identifier}")
+    if outcome.memory_records is not None:
+        for record in outcome.memory_records:
             print(f"{record.identifier}: {record.value.value}")
-    if calendar_event_uid is not None:
-        print(f"uid: {calendar_event_uid}")
+    if outcome.calendar_event_uid is not None:
+        print(f"uid: {outcome.calendar_event_uid}")
+    if outcome.reasoning_result_label is not None:
+        print(f"result: {outcome.reasoning_result_label}")
     return 0 if decision.granted else 1

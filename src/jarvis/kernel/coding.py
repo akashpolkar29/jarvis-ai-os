@@ -28,24 +28,38 @@ the outer gate, every provider-call authorization inside `Dispatcher`,
 and every per-path write authorization -- lands in the same,
 single, tamper-evident record.
 
-**``dispatcher_factory`` has no default, on purpose** -- mirroring
-``kernel/desktop.py``'s ``authorize_and_run_terminal_command``'s own
-"no implicit default for a genuinely undecided, high-consequence
-choice" precedent. Which real ``ReasoningPort`` providers service
-``SELF_REPAIR``/``SECOND_PROVIDER`` (`application/reasoning/dispatcher.py`'s
-own docstring: "an injected, overridable choice, not a global policy")
-was never decided anywhere in this codebase's real ADRs, and inventing
-a real default cloud-provider assignment here -- which vendor-family
-adapter, which model, which keyring secret reference -- would be new,
-undecided policy this work package was not asked to make. A caller
-that wants real ``SECOND_PROVIDER`` cloud escalation supplies its own
-``dispatcher_factory``; :func:`_local_only_dispatcher_factory` (used by
-this module's own tests, not the default) is a real, honest,
-credential-free option any real caller may reuse or start from: a real
-``LocalReasoningAdapter`` at ``SELF_REPAIR`` alone, nothing registered
-at ``SECOND_PROVIDER`` -- a valid, real outcome
-``Dispatcher.__init__``'s own docstring already documents ("An empty or
-missing entry for a rung means no provider is tried there at all").
+**Updated 2026-09-04: ``dispatcher_factory`` now has a real, local-only
+default** -- :func:`_local_only_dispatcher_factory`, unchanged in
+shape, is what a ``None`` argument resolves to. This is a real,
+deliberate widening of what was previously stated here as "no default,
+on purpose," made on the user's own direct instruction after
+independently re-reading this exact module: the original reasoning
+conflated two separate questions -- "should a real *cloud-provider*
+default be invented here" (still, correctly, no -- see below) and
+"should *any* default exist at all" (the local-only option was already
+real, honest, and credential-free; leaving it unused as a default was
+the real gap this update closes). **What remains unchanged**: which
+real ``ReasoningPort`` providers service ``SELF_REPAIR``/``SECOND_PROVIDER``
+(`application/reasoning/dispatcher.py`'s own docstring: "an injected,
+overridable choice, not a global policy") was never decided anywhere in
+this codebase's real ADRs for the *cloud* case, and inventing a real
+default cloud-provider assignment here -- which vendor-family adapter,
+which model, which keyring secret reference -- remains new, undecided
+policy this codebase does not make. A caller that wants real
+``SECOND_PROVIDER`` cloud escalation still supplies its own explicit
+``dispatcher_factory``, overriding the local-only default -- this is
+additive, not a narrowing of what was already possible.
+:func:`_local_only_dispatcher_factory` is a real ``LocalReasoningAdapter``
+at ``SELF_REPAIR`` alone, nothing registered at ``SECOND_PROVIDER`` --
+a valid, real outcome ``Dispatcher.__init__``'s own docstring already
+documents ("An empty or missing entry for a rung means no provider is
+tried there at all"). **Real, honest trade-off, stated plainly, not
+hidden**: local-model output quality is materially unproven relative to
+a cloud provider's -- ``adapters/reasoning/local.py``'s own docstring
+already names the real, structurally-complete-but-live-unverified
+status this default inherits; a caller invoking this default gets
+whatever a real, local Ollama-compatible server at ``localhost:11434``
+actually produces, not a guaranteed-competent result.
 
 **``sandbox``/``workspace_factory`` do have real defaults**
 (``BwrapSandboxAdapter()``/``LocalWorkspaceAdapter``) -- unlike the
@@ -104,10 +118,11 @@ if TYPE_CHECKING:
 def _local_only_dispatcher_factory(orchestrator: AuthorizationOrchestrator) -> DispatcherFactory:
     """Build a real, credential-free DispatcherFactory: local provider only, no cloud escalation.
 
-    Not this module's own default (see module docstring for why) --
-    exported for a real caller to reuse directly, or as a starting
-    point for a caller that wants to add its own SECOND_PROVIDER
-    entries around the same real ladder/arbiter/router shape.
+    This module's own real default (2026-09-04) when no
+    `dispatcher_factory` is supplied -- also exported for a real caller
+    to reuse directly, or as a starting point for a caller that wants
+    to add its own SECOND_PROVIDER entries around the same real
+    ladder/arbiter/router shape.
     """
 
     def _build(workspace: WorkspacePort) -> Dispatcher:
@@ -124,7 +139,7 @@ def _local_only_dispatcher_factory(orchestrator: AuthorizationOrchestrator) -> D
 async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition-function pass-through
     task: str,
     target_repo: Path,
-    dispatcher_factory: DispatcherFactory,
+    dispatcher_factory: DispatcherFactory | None = None,
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
@@ -146,8 +161,11 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
             mechanism) -- only ever written to, at most once, by
             `run_coding_task`'s own final, separately authorized write.
         dispatcher_factory: Builds a real, fully-wired `Dispatcher`
-            per climb -- see module docstring for why this has no
-            default.
+            per climb. Defaults to `_local_only_dispatcher_factory`
+            (a real, credential-free, local-model-only `Dispatcher`) --
+            see module docstring for why only the *local* default
+            exists, not a cloud one. Pass an explicit factory to use a
+            real cloud provider instead.
         physical_confirmation_available: Whether a human is physically
             present, passed straight through to the constructed
             `ManualConfirmationAdapter`.
@@ -195,7 +213,8 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
             dependencies = CodingLoopDependencies(
                 sandbox=sandbox or BwrapSandboxAdapter(),
                 workspace_factory=workspace_factory or LocalWorkspaceAdapter,
-                dispatcher_factory=dispatcher_factory,
+                dispatcher_factory=dispatcher_factory
+                or _local_only_dispatcher_factory(orchestrator),
                 authorizer=CodeWriteAuthorizer(orchestrator),
             )
             request = CodingTaskRequest(

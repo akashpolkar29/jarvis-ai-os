@@ -41,6 +41,7 @@ from jarvis.adapters.calendar import CalDavCalendarAdapter, CalendarEventCreatio
 from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
+from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
 from jarvis.cli.main import main
 from jarvis.domain.capability import (
     CapabilityDescriptor,
@@ -54,6 +55,7 @@ from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.job_assistance import DraftOutcome
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.media_player import NoMediaPlayerRunningError
@@ -1310,3 +1312,174 @@ def test_memory_pin_subcommand_prints_the_command_label(
 
     assert "memory pin: DENIED" in captured.out
     assert exit_code == 1
+
+
+def test_code_subcommand_routes_task_and_repo_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[str, Path]] = []
+    repo_path = tmp_path / "target_repo"
+
+    async def fake_authorize_and_run_coding_task(  # noqa: PLR0913 -- mirrors the real signature
+        task: str,
+        target_repo: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        max_climbs: int,  # noqa: ARG001
+    ) -> tuple[Decision, CodingLoopResult]:
+        received.append((task, target_repo))
+        decision = _make_decision(granted=True, capability_id="coding.run_task")
+        return decision, CodingLoopResult(CodingLoopOutcome.WRITTEN, ())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_run_coding_task",
+        fake_authorize_and_run_coding_task,
+    )
+
+    exit_code = main(
+        ["code", "fix the bug", str(repo_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [("fix the bug", repo_path)]
+    assert exit_code == 0
+
+
+def test_code_subcommand_prints_the_result_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_run_coding_task(  # noqa: PLR0913 -- mirrors the real signature
+        task: str,  # noqa: ARG001
+        target_repo: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        max_climbs: int,  # noqa: ARG001
+    ) -> tuple[Decision, CodingLoopResult]:
+        decision = _make_decision(granted=True, capability_id="coding.run_task")
+        return decision, CodingLoopResult(CodingLoopOutcome.WRITTEN, ())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_run_coding_task",
+        fake_authorize_and_run_coding_task,
+    )
+
+    exit_code = main(
+        [
+            "code",
+            "fix the bug",
+            str(tmp_path / "target_repo"),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "code: GRANTED" in captured.out
+    assert "result: written" in captured.out
+    assert exit_code == 0
+
+
+def test_code_subcommand_requires_task_and_repo_path() -> None:
+    with pytest.raises(SystemExit):
+        main(["code", "fix the bug"])
+
+
+def test_draft_subcommand_routes_the_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    received: list[str] = []
+
+    async def fake_authorize_and_draft_document(
+        task: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        drafts_dir: Path | None,  # noqa: ARG001
+    ) -> DraftOutcome:
+        received.append(task)
+        decision = _make_decision(granted=True, capability_id="job_assistance.draft")
+        return DraftOutcome(decision=decision, path=tmp_path / "draft.txt")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_draft_document",
+        fake_authorize_and_draft_document,
+    )
+
+    exit_code = main(
+        ["draft", "draft a cover letter", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == ["draft a cover letter"]
+    assert exit_code == 0
+
+
+def test_draft_subcommand_prints_the_result_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    draft_path = tmp_path / "draft.txt"
+
+    async def fake_authorize_and_draft_document(
+        task: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        drafts_dir: Path | None,  # noqa: ARG001
+    ) -> DraftOutcome:
+        decision = _make_decision(granted=True, capability_id="job_assistance.draft")
+        return DraftOutcome(decision=decision, path=draft_path)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_draft_document",
+        fake_authorize_and_draft_document,
+    )
+
+    exit_code = main(
+        ["draft", "draft a cover letter", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "draft: GRANTED" in captured.out
+    assert f"result: {draft_path}" in captured.out
+    assert exit_code == 0
+
+
+def test_draft_subcommand_denied_prints_no_result_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_draft_document(
+        task: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        drafts_dir: Path | None,  # noqa: ARG001
+    ) -> DraftOutcome:
+        decision = _make_decision(granted=False, capability_id="job_assistance.draft")
+        return DraftOutcome(decision=decision, path=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_draft_document",
+        fake_authorize_and_draft_document,
+    )
+
+    exit_code = main(
+        ["draft", "draft a cover letter", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "draft: DENIED" in captured.out
+    assert "result:" not in captured.out
+    assert exit_code == 1
+
+
+def test_draft_subcommand_requires_task() -> None:
+    with pytest.raises(SystemExit):
+        main(["draft"])

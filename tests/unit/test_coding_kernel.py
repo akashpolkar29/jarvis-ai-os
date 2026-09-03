@@ -5,15 +5,27 @@ Dispatcher/EscalationLadder/Arbiter/ModelRouter/PytestValidator/
 LocalWorkspaceAdapter/BwrapSandboxAdapter chain, mirroring
 `tests/integration/test_coding_loop.py`'s own real-components
 discipline -- only the true external-I/O edge (the reasoning provider)
-is faked. `_local_only_dispatcher_factory` is tested separately,
-without ever calling `.generate()` for real: `adapters/reasoning/local.py`'s
-own docstring already states no local model server is reachable in
-this environment, the same reason no test here invokes it live.
+is faked. `_local_only_dispatcher_factory` is tested structurally
+here, without ever calling `.generate()` for real.
+
+``test_real_default_dispatcher_factory_reaches_a_locally_running_ollama_server``
+is the one real, live exception -- skipif-guarded on a real
+reachability probe against ``localhost:11434``, mirroring
+``tests/unit/adapters/reasoning/test_local.py``'s own identical guard.
+Live-verified manually on this development machine 2026-09-04
+(``qwen2.5:0.5b``): the real default genuinely reaches the real local
+server -- the test only asserts a real, non-``None`` ``CodingLoopResult``
+comes back, not that the tiny local model produces a *working* patch,
+which is not a fair bar for a 0.5B-parameter model and not what this
+test exists to prove.
 """
 
 from __future__ import annotations
 
+import urllib.request
 from typing import TYPE_CHECKING
+
+import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.validation.pytest_validator import PytestValidator
@@ -35,6 +47,15 @@ if TYPE_CHECKING:
     from jarvis.application.coding.loop import DispatcherFactory
     from jarvis.domain.evidence import Attempt
     from jarvis.ports.workspace import WorkspacePort
+
+
+def _real_ollama_server_is_reachable() -> bool:
+    try:
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1)
+    except OSError:
+        return False
+    return True
+
 
 _LOCAL_PROFILE = ProviderProfile(name="local", is_local=True)
 _NOT_A_REAL_PATCH = "this is not a real unified diff at all"
@@ -172,6 +193,31 @@ def test_local_only_dispatcher_factory_registers_the_real_local_provider_alone()
     assert self_repair[0][0].name == "local"
     assert self_repair[0][0].is_local is True
     assert second_provider == ()
+
+
+@pytest.mark.skipif(
+    not _real_ollama_server_is_reachable(),
+    reason="Requires a real, locally running Ollama server on localhost:11434, not assumed in CI.",
+)
+async def test_real_default_dispatcher_factory_reaches_a_locally_running_ollama_server(
+    tmp_path: Path,
+) -> None:
+    """Omitting dispatcher_factory really reaches the real local model -- not a stub, not a skip."""
+    target_repo = tmp_path / "target_repo"
+    target_repo.mkdir()
+
+    decision, result = await authorize_and_run_coding_task(
+        "add a comment to the top of any file",
+        target_repo,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        max_climbs=1,
+        protected_patterns=("test_*.py", "*_test.py", "tests/*"),
+    )
+
+    assert decision.granted is True
+    assert result is not None
 
 
 class _DummyWorkspace:

@@ -39,12 +39,17 @@ through ``ModelRouter.authorize_provider_call`` -- the same
 gate every other reasoning-provider call in this codebase already
 uses. No new ``Effect``/``Tier`` decision for that part.
 
-**``providers`` has no default, on purpose** -- mirroring
-``kernel/coding.py``'s own ``dispatcher_factory`` "no implicit default
-for a genuinely undecided, high-consequence choice" precedent exactly:
-which real ``ReasoningPort`` providers draft a real cover letter was
-never decided by any ADR here either. **``presentation`` does have a
-real default** (``TtsTextCandidatePresentationAdapter`` over a real
+**Updated 2026-09-04: ``providers`` now has a real, local-only
+default** -- mirroring ``kernel/coding.py``'s own identical update the
+same night, on the user's own direct instruction: a real,
+credential-free ``LocalReasoningAdapter`` (`_local_only_providers()`
+below) is what a ``None`` argument resolves to. Which real cloud
+``ReasoningPort`` providers should draft a real cover letter remains
+genuinely undecided by any ADR here -- a real caller that wants cloud
+providers still supplies its own explicit ``providers`` tuple,
+overriding the local-only default; this is additive, not a narrowing.
+**``presentation`` does have a real default**
+(``TtsTextCandidatePresentationAdapter`` over a real
 ``PiperTtsAdapter``) -- unlike provider assignment, there is exactly
 one real adapter for this port with no policy ambiguity to invent, the
 same "real default, overridable for tests" shape ``embedding_port``/
@@ -82,6 +87,8 @@ from jarvis.adapters.candidate_presentation import TtsTextCandidatePresentationA
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.console import GtkConsoleAdapter
 from jarvis.adapters.draft_storage import LocalDraftStorageAdapter
+from jarvis.adapters.reasoning.local import PROFILE as LOCAL_PROVIDER_PROFILE
+from jarvis.adapters.reasoning.local import LocalReasoningAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
 from jarvis.application.job_assistance.drafting import DraftWriteAuthorizer
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -108,6 +115,16 @@ def _default_presentation() -> TtsTextCandidatePresentationAdapter:
     return TtsTextCandidatePresentationAdapter(tts=PiperTtsAdapter())
 
 
+def _local_only_providers() -> tuple[tuple[ProviderProfile, ReasoningPort], ...]:
+    """Build a real, credential-free providers tuple: local model only, no cloud provider.
+
+    This module's own real default (2026-09-04) when no ``providers``
+    argument is supplied -- mirrors ``kernel/coding.py``'s own
+    ``_local_only_dispatcher_factory`` exactly.
+    """
+    return ((LOCAL_PROVIDER_PROFILE, LocalReasoningAdapter()),)
+
+
 def _console(console: ConsolePort | None) -> ConsolePort:
     return console or GtkConsoleAdapter()
 
@@ -129,7 +146,7 @@ class DraftOutcome:
 
 async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-function pass-through
     task: str,
-    providers: tuple[tuple[ProviderProfile, ReasoningPort], ...],
+    providers: tuple[tuple[ProviderProfile, ReasoningPort], ...] | None = None,
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
@@ -152,9 +169,12 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
             does not, and cannot, second-guess a provenance it did not
             compute (the identical trust boundary
             ``authorize_and_remember``'s own docstring already states).
-        providers: Every real ``ReasoningPort`` to try, in parallel --
-            see this module's own docstring for why this has no
-            default.
+        providers: Every real ``ReasoningPort`` to try, in parallel.
+            Defaults to `_local_only_providers()` (a real,
+            credential-free, local-model-only tuple) -- see this
+            module's own docstring for why only the *local* default
+            exists, not a cloud one. Pass an explicit tuple to use a
+            real cloud provider instead.
         physical_confirmation_available: Whether a human is physically
             present, passed straight through to the constructed
             ``ManualConfirmationAdapter``.
@@ -199,7 +219,9 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
         if decision.granted:
             router = ModelRouter(orchestrator)
             handler = UnverifiableTaskHandler(
-                providers, router, presentation or _default_presentation()
+                providers or _local_only_providers(),
+                router,
+                presentation or _default_presentation(),
             )
             candidate = await handler.handle(value, orchestrator.get_current_context())
             store = draft_storage or LocalDraftStorageAdapter(drafts_dir or _DEFAULT_DRAFTS_DIR)
