@@ -11,6 +11,22 @@ became the next milestone to scope
 the user in conversation on 2026-09-01, this document resolving the
 fifth — item 6, research — and consuming the other four as given).
 
+**Updated 2026-09-03 — the read half of this design is now real,
+implemented, and tested (WP-76 through WP-80).** The write half
+(`send_message`/`create_event`) remains entirely unbuilt, exactly as
+this document's own classification reasoning below required: ADR-0057
+is still `Proposed`, not `Accepted`, so nothing whose real `Effect`/`Tier`
+depends on it was implemented — see `docs/threat-model/v0.md`'s own
+"Milestone 6a additions" for the full, real account of what was built,
+including a real, deliberately conservative scoping choice
+(implementing neither `send_message` nor `create_event`, attendee-less
+or not, so there is exactly one clean "everything past reading needs
+ADR-0057" boundary rather than a partially-implemented write path).
+This document's own text below is otherwise unchanged from its
+original, remotely-reasoned draft — its classification reasoning
+still awaits the user's own direct review before ADR-0057 can be
+Accepted.
+
 **Real, load-bearing difference from M6a's own scoping precedent,
 stated plainly**: the four scoping answers this design *starts from*
 (Docker/ROS2 dropped, IMAP/CalDAV chosen, M6a/M6b split) were each

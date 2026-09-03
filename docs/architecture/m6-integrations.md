@@ -29,12 +29,25 @@ rather than a new effect) needs the user's own direct review before
 acceptance, matching M5's own "accept only once built and proven"
 discipline.
 
-**Not yet implemented.** No `ports/email.py`, `ports/calendar.py`,
-`adapters/email.py`, `adapters/calendar.py`,
-`application/communications/`, or `kernel/communications.py` exist in
-this codebase yet — `m6a-communications.md`'s own work-package sketch
-(WP-76 through WP-81) is real, objective-level planning, not a
-completed or started implementation.
+**Read half implemented and tested (WP-76 through WP-80); write half
+entirely unbuilt, explicitly blocked on ADR-0057.** `ports/email.py`,
+`ports/calendar.py`, `adapters/email.py` (real `ImapEmailAdapter`,
+stdlib `imaplib`), `adapters/calendar.py` (real `CalDavCalendarAdapter`,
+the real `caldav` library, a new dependency), and `kernel/communications.py`
+(real `communications.list_email`/`communications.read_email`/
+`communications.list_calendar_events` capabilities, `Effect.EGRESS_LOCAL`/
+`Tier.ALLOW`) all exist and are real, tested, invocable code. `EmailPort.send_message`/
+`CalendarPort.create_event` exist on their own Protocols but every
+real adapter's own implementation unconditionally raises
+`NotImplementedError` — proven structurally, not just by inspection
+(`tests/meta/test_communications_no_send_or_create.py`). `application/communications/`
+does not exist — WP-79's own dynamic-effect classification function
+and authorizers remain real, separate, blocked future work. See
+`docs/threat-model/v0.md`'s own "Milestone 6a additions" for the full
+account, including a real, deliberately conservative scoping choice
+(even attendee-less `create_event`, which the design doc itself
+classifies as ungated by ADR-0057, is left unimplemented in this
+pass).
 
 ### Entry gate
 
