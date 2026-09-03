@@ -69,6 +69,9 @@ BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
 BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
 BROWSER_CLOSE_PAGE_CAPABILITY_ID = CapabilityId("browser.close_page")
 CODING_RUN_TASK_CAPABILITY_ID = CapabilityId("coding.run_task")
+EMAIL_LIST_MESSAGES_CAPABILITY_ID = CapabilityId("communications.list_email")
+EMAIL_READ_MESSAGE_CAPABILITY_ID = CapabilityId("communications.read_email")
+CALENDAR_LIST_EVENTS_CAPABILITY_ID = CapabilityId("communications.list_calendar_events")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -365,5 +368,41 @@ def build_default_registry() -> CapabilityRegistry:
             ),
         )
     )
+
+    registry.register(
+        CapabilityDescriptor(
+            id=EMAIL_LIST_MESSAGES_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "List real message summaries from a real IMAP mailbox folder. "
+                "EGRESS_LOCAL, not READ_LOCAL, matching fs.read_file's/"
+                "browser.screenshot's own reasoning: extracting real content "
+                "out to the caller is an egress even though it never leaves "
+                "the machine (m6a-communications.md)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=EMAIL_READ_MESSAGE_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description="Read one real message's full content from a real IMAP mailbox.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=CALENDAR_LIST_EVENTS_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description="List real events in a real date range from a real CalDAV calendar.",
+        )
+    )
+    # communications.send_email/communications.create_calendar_event are
+    # deliberately NOT registered here -- send_message/create_event are not
+    # implemented by any real adapter yet (blocked on ADR-0057, Proposed,
+    # not Accepted). Once implemented, their real Effect would vary per
+    # invocation with the content's own classification anyway (the same
+    # reason memory.write/job_assistance.draft are never registered here
+    # either) -- see ports/email.py's/ports/calendar.py's own module
+    # docstrings.
 
     return registry
