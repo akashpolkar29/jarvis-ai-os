@@ -106,10 +106,19 @@ jobs:
             -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.users=testuser:testpass@localhost -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled" \
             -p 3025:3025 -p 3143:3143 -p 3110:3110 \
             greenmail/standalone:latest
+          ready=""
           for _ in $(seq 1 30); do
-            (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1 && break
+            if (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 1
           done
+          if [ -z "$ready" ]; then
+            echo "::error::GreenMail never became reachable on 127.0.0.1:3143 within 30s"
+            docker logs jarvis-test-greenmail || true
+            exit 1
+          fi
 
       - name: Start local Radicale CalDAV test server
         run: |
@@ -117,11 +126,20 @@ jobs:
             -p 5232:5232 \
             -v "$(pwd)/tests/fixtures/radicale-config:/config:ro" \
             tomsquest/docker-radicale:latest
+          ready=""
           for _ in $(seq 1 30); do
-            status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5232/ 2>/dev/null)
-            [ -n "$status" ] && [ "$status" != "000" ] && break
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5232/ || true)
+            if [ -n "$status" ] && [ "$status" != "000" ]; then
+              ready=1
+              break
+            fi
             sleep 1
           done
+          if [ -z "$ready" ]; then
+            echo "::error::Radicale never became reachable on 127.0.0.1:5232 within 30s"
+            docker logs jarvis-test-radicale || true
+            exit 1
+          fi
 
       - name: ruff check
         run: uv run ruff check .
