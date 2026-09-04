@@ -46,6 +46,46 @@ _PROFILE_A = ProviderProfile(name="local-a", is_local=True)
 _PROFILE_B = ProviderProfile(name="local-b", is_local=True)
 
 
+class _RealConsoleConstructedInATestError(AssertionError):
+    """Raised if this module ever constructs a real GtkConsoleAdapter -- see the fixture below."""
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_console_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real-window regression guard (found and fixed 2026-09-05).
+
+    Four tests in this module called `authorize_and_draft_document`
+    with a granted decision and no `console=` override, silently
+    falling through to `_console()`'s own real default
+    (`GtkConsoleAdapter()`) -- each one opened a real, unclosed GTK4
+    window on the real desktop during an ordinary automated test run
+    (observed directly: a real window titled with the drafted task's
+    own text, e.g. "job_assistance.draft: draft a cover letter",
+    stacking up unclosed across repeated runs). Fixed by passing a
+    real `_StubConsole()` at every granted call site in this module.
+
+    This autouse fixture is the real, durable regression guard: it
+    patches the exact class `_console()` falls back to
+    (`jarvis.kernel.job_assistance.GtkConsoleAdapter`) with one that
+    raises immediately if ever constructed, for every test in this
+    module, whether or not that test remembers to pass `console=`
+    itself. A future test that reintroduces this gap fails loudly and
+    immediately -- pointing straight at the real cause -- rather than
+    silently leaking another real window.
+    """
+
+    def _raise_if_constructed(*_args: object, **_kwargs: object) -> None:
+        msg = (
+            "A real GtkConsoleAdapter was constructed inside a test -- this test is "
+            "missing its own console= override (a _StubConsole()), and would open a "
+            "real, unclosed GTK4 window on the real desktop. Pass console=_StubConsole() "
+            "to the authorize_and_draft_document() call this test makes."
+        )
+        raise _RealConsoleConstructedInATestError(msg)
+
+    monkeypatch.setattr("jarvis.kernel.job_assistance.GtkConsoleAdapter", _raise_if_constructed)
+
+
 class _CountingProvider:
     """A minimal, test-local ReasoningPort that records every real call it receives."""
 
@@ -115,6 +155,7 @@ async def test_granted_draft_invokes_every_provider_and_saves_the_selected_candi
         chain_path=tmp_path / "audit_chain.json",
         presentation=presentation,
         draft_storage=storage,
+        console=_StubConsole(),
     )
 
     assert outcome.decision.granted is True
@@ -164,6 +205,7 @@ async def test_remote_confirmation_alone_is_sufficient_to_grant(tmp_path: Path) 
         chain_path=tmp_path / "audit_chain.json",
         presentation=_FakePresentation(),
         draft_storage=storage,
+        console=_StubConsole(),
     )
 
     assert outcome.decision.granted is True
@@ -181,6 +223,7 @@ async def test_a_single_granted_draft_appends_a_verifiable_audit_record(tmp_path
         chain_path=chain_path,
         presentation=_FakePresentation(),
         draft_storage=_FakeDraftStorage(tmp_path),
+        console=_StubConsole(),
     )
 
     chain = JsonFileAuditStorageAdapter(chain_path).load()
@@ -246,7 +289,31 @@ async def test_real_default_providers_reaches_a_locally_running_ollama_server(
         chain_path=tmp_path / "audit_chain.json",
         presentation=_FakePresentation(),
         draft_storage=_FakeDraftStorage(tmp_path),
+        console=_StubConsole(),
     )
 
     assert outcome.decision.granted is True
     assert outcome.path is not None
+
+
+async def test_a_granted_draft_missing_its_console_override_is_caught_by_the_real_window_guard(
+    tmp_path: Path,
+) -> None:
+    """Real proof the regression guard above actually fires -- not just present, but working.
+
+    Deliberately reproduces the exact real gap this pass fixed (a
+    granted draft call with no `console=` override) and confirms
+    `_forbid_real_console_windows` catches it immediately, before any
+    real `GtkConsoleAdapter` -- and therefore any real window -- could
+    ever be constructed.
+    """
+    with pytest.raises(_RealConsoleConstructedInATestError):
+        await authorize_and_draft_document(
+            "draft a cover letter",
+            ((_PROFILE_A, _CountingProvider("local-a", "content")),),
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            presentation=_FakePresentation(),
+            draft_storage=_FakeDraftStorage(tmp_path),
+        )
