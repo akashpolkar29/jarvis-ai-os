@@ -2,11 +2,26 @@
 
 ## Status
 
-Proposed. Mirrors ADR-0055's/ADR-0056's own "build and prove first,
-accept after" sequencing exactly -- this ADR records a real,
-already-implemented, already-tested classification, not a
-pre-implementation proposal. **Do not accept without the user's own
-direct review.**
+**Accepted (2026-09-04, directly by the user, in conversation, after
+direct review of this ADR's own full, verbatim text).**
+
+Mirrors ADR-0055's/ADR-0056's own "build and prove first, accept
+after" sequencing: this ADR recorded a real, already-implemented,
+already-tested classification, not a pre-implementation proposal, and
+was surfaced in full -- every section, including the protected-path
+reasoning that rejected both `resolve_protected_patterns` reuse and a
+denylist in favor of `Tier.MANUAL_ONLY`'s own physical confirmation as
+the structural safeguard for `fs.delete_file` -- before the user
+answered. Presented with three real options (accept as-written, want
+changes first, reject) and chose to accept as-written, with no changes
+requested. This satisfies the same "reviewed the document, not merely
+relayed a decision" bar ADR-0057/ADR-0058/ADR-0059 each already met.
+
+No code changes accompany this acceptance -- the classification and
+protected-path reasoning below describe real code that was already
+built, tested, and merged (Track 2, 2026-09-04); accepting this ADR
+records that the user has now reviewed and agreed with that already-
+built design, not that anything new was implemented as a result.
 
 ## Date
 
