@@ -60,6 +60,7 @@ dev = [
     "ruff",
     "import-linter",
     "pre-commit",
+    "cosmic-ray>=8.7.0",
 ]
 
 [tool.ruff]

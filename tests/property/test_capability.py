@@ -162,3 +162,28 @@ def test_effective_tier_never_exceeds_deny(
     """effective_tier is clamped: it can never exceed Tier.DENY."""
     invocation = CapabilityInvocation(descriptor, Tainted(arguments_value, provenance))
     assert invocation.effective_tier <= Tier.DENY
+
+
+@given(DESCRIPTOR, ARGUMENTS_VALUE, TAINTED_PROVENANCE)
+def test_tainted_escalates_by_exactly_one_step_not_more(
+    descriptor: CapabilityDescriptor,
+    arguments_value: dict[str, int],
+    tainted_provenance: Provenance,
+) -> None:
+    """A real, previously-uncovered gap (found by mutation testing, overnight Track 2,
+    2026-09-04): `escalated = min(required.value + 1, Tier.DENY.value)` survived a
+    mutant changing `+ 1` to `+ 2` -- `test_tainted_escalates_unless_already_deny`
+    above proves escalation happens (`>`) but never proves it happens by exactly one
+    real step, not two or more. A two-step escalation (e.g. ALLOW jumping straight to
+    MANUAL_ONLY, skipping CONFIRM) would still pass every existing test, silently
+    granting untrusted, tainted input a far more restrictive-looking but *wrong* tier
+    -- wrong in a way that could mask a real classification bug rather than surface it
+    as intended. Proves the exact magnitude, clamped correctly at the one real boundary
+    (required already at DENY -- clamping means the delta is 0 there, not 1)."""
+    untainted = CapabilityInvocation(descriptor, Tainted(arguments_value, Provenance.user()))
+    tainted = CapabilityInvocation(descriptor, Tainted(arguments_value, tainted_provenance))
+    required = descriptor.required_tier
+    if required == Tier.DENY:
+        assert tainted.effective_tier == Tier.DENY
+    else:
+        assert tainted.effective_tier == Tier(untainted.effective_tier.value + 1)

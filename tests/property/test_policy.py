@@ -13,7 +13,7 @@ from jarvis.domain.capability import (
     CapabilityInvocation,
     Effect,
 )
-from jarvis.domain.policy import PolicyContext, evaluate
+from jarvis.domain.policy import DecisionReason, PolicyContext, evaluate
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 
 
@@ -127,3 +127,48 @@ def test_granted_is_non_increasing_across_tiers(context: PolicyContext) -> None:
     ]
     for earlier, later in pairwise(granted_by_tier):
         assert earlier >= later
+
+
+@given(CONTEXT)
+def test_taint_escalation_reason_tracks_whether_the_tier_was_actually_escalated(
+    context: PolicyContext,
+) -> None:
+    """A real, previously-uncovered gap (found by mutation testing, overnight Track 2,
+    2026-09-04): every mutant on evaluate()'s own `tier > invocation.descriptor.required_tier`
+    comparison (line 107, deciding TAINT_ESCALATION vs BASE_TIER) survived the full test
+    suite -- nothing anywhere asserted this reason at all, despite _DENY_INVOCATION's own
+    docstring already stating it exists specifically to exercise the escalation path.
+
+    Proves both directions precisely, for every real tier this codebase's own capability
+    registry can produce: a tainted invocation whose tier was genuinely pushed up by
+    taint gets TAINT_ESCALATION, never BASE_TIER; a non-tainted invocation (which can
+    never be escalated -- effective_tier only escalates when tainted) always gets
+    BASE_TIER, never TAINT_ESCALATION. This is exactly the property that kills every one
+    of the eight surviving comparison-operator/AddNot mutants at once, not just one of
+    them -- the real bug each represents (a wrong TAINT_ESCALATION/BASE_TIER reason
+    reaching a real audit log entry) is a single real property, not eight separate ones.
+    """
+    for effects, expect_escalation in (
+        # required_tier is ALLOW/CONFIRM/MANUAL_ONLY respectively --
+        # each genuinely has room to climb one real step when tainted.
+        (Effect.READ_LOCAL, True),
+        (Effect.EXECUTE, True),
+        (Effect.DESTRUCTIVE, True),
+        # required_tier is already DENY -- min(required + 1, DENY)
+        # clamps to the same value, so taint changes nothing real here,
+        # even though the invocation itself is genuinely tainted.
+        (Effect.EGRESS_SECRET, False),
+    ):
+        non_tainted = _invocation(effects, tainted=False)
+        decision = evaluate(non_tainted, context)
+        assert DecisionReason.BASE_TIER in decision.reasons
+        assert DecisionReason.TAINT_ESCALATION not in decision.reasons
+
+        tainted = _invocation(effects, tainted=True)
+        decision = evaluate(tainted, context)
+        if expect_escalation:
+            assert DecisionReason.TAINT_ESCALATION in decision.reasons
+            assert DecisionReason.BASE_TIER not in decision.reasons
+        else:
+            assert DecisionReason.BASE_TIER in decision.reasons
+            assert DecisionReason.TAINT_ESCALATION not in decision.reasons

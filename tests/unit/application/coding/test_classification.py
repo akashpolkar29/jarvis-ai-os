@@ -107,6 +107,30 @@ def test_malformed_setup_cfg_is_not_detected_not_raised(tmp_path: Path) -> None:
     assert detect_protected_patterns(tmp_path) is None
 
 
+def test_setup_cfg_without_pytest_section_is_not_detected(tmp_path: Path) -> None:
+    """A real, valid setup.cfg that parses cleanly but lacks [tool:pytest] entirely.
+
+    Found by mutation testing (overnight Track 2, 2026-09-04): the real
+    `_ini_file_has_section` internal helper is `bool(read_files) and
+    parser.has_section(section)`, and no existing test distinguished
+    "file could not be read at all" (read_files == []) from "file was
+    read fine but the target section just isn't in it" (read_files
+    non-empty, has_section() False) -- an `and`-to-`or` mutant on that
+    line survived because every prior test only ever exercised the
+    read_files == [] side of that expression, never this side.
+    """
+    (tmp_path / "setup.cfg").write_text("[metadata]\nname = example\n", encoding="utf-8")
+
+    assert detect_protected_patterns(tmp_path) is None
+
+
+def test_tox_ini_without_pytest_section_is_not_detected(tmp_path: Path) -> None:
+    """Mirrors test_setup_cfg_without_pytest_section_is_not_detected for tox.ini's own [pytest]."""
+    (tmp_path / "tox.ini").write_text("[testenv]\ndeps = pytest\n", encoding="utf-8")
+
+    assert detect_protected_patterns(tmp_path) is None
+
+
 # --- detect_protected_patterns: Go ------------------------------------------
 
 
