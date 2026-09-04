@@ -40,6 +40,31 @@ class EmailMessageNotFoundError(Exception):
     """
 
 
+class EmailConnectionError(Exception):
+    """Raised when a real mailbox connection fails or is lost mid-session.
+
+    Found by real resilience testing (property-matrix/fuzzing/
+    concurrency-adjacent pass, adapter-resilience Track 1, 2026-09-04):
+    unlike every other real network-facing adapter in this codebase
+    (``urllib``/``requests``-backed ones, whose connectivity failures
+    are all real ``OSError`` subclasses, already caught cleanly by
+    ``cli/main.py``'s and ``kernel/voice_loop.py``'s own broad except
+    tuples), Python's stdlib ``imaplib`` raises its own
+    ``IMAP4.error``/``IMAP4.abort`` hierarchy for connection and
+    protocol-level failures -- a bare ``Exception`` subclass, not an
+    ``OSError`` one. A real, confirmed-by-test connection genuinely
+    established and then lost mid-session (the real server stopped)
+    raised a raw, uncaught-shaped ``imaplib.IMAP4.abort`` before this
+    fix, which would have bypassed every existing broad except tuple
+    in this codebase the moment a real caller (CLI or voice grammar)
+    is ever wired up for ``communications.list_email``/``read_email``
+    (neither is wired to a real entry point yet, but the gap was real
+    regardless of whether it had a live caller today). Defined on the
+    port, not the adapter, for the same technology-independence
+    reasoning as :class:`EmailMessageNotFoundError`.
+    """
+
+
 @runtime_checkable
 class EmailPort(Protocol):
     """A real mailbox this codebase can list, read, and send through."""

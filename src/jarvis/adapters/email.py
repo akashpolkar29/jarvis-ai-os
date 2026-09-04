@@ -40,7 +40,7 @@ from email.utils import parseaddr
 from typing import TYPE_CHECKING, Protocol
 
 from jarvis.domain.email import EmailMessage, EmailSummary
-from jarvis.ports.email import EmailMessageNotFoundError
+from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -196,59 +196,67 @@ class ImapEmailAdapter:
         return connection
 
     def _list_messages_sync(self, folder: str, limit: int) -> tuple[EmailSummary, ...]:
-        connection = self._connect()
         try:
-            connection.select(folder, readonly=True)
-            _typ, data = connection.search(None, "ALL")
-            message_numbers = data[0].split() if data and data[0] else []
-            summaries = []
-            for number in message_numbers[-limit:]:
-                _typ, msg_data = connection.fetch(number.decode("ascii"), "(RFC822.HEADER)")
-                first = msg_data[0]
-                if not isinstance(first, tuple):
-                    continue
-                parsed = email_stdlib.message_from_bytes(first[1])
-                summaries.append(
-                    EmailSummary(
-                        message_id=parsed.get("Message-ID", "").strip(),
-                        sender=parseaddr(_decode_mime_header(parsed.get("From")))[1],
-                        subject=_decode_mime_header(parsed.get("Subject")),
-                        received_at=parsed.get("Date", ""),
+            connection = self._connect()
+            try:
+                connection.select(folder, readonly=True)
+                _typ, data = connection.search(None, "ALL")
+                message_numbers = data[0].split() if data and data[0] else []
+                summaries = []
+                for number in message_numbers[-limit:]:
+                    _typ, msg_data = connection.fetch(number.decode("ascii"), "(RFC822.HEADER)")
+                    first = msg_data[0]
+                    if not isinstance(first, tuple):
+                        continue
+                    parsed = email_stdlib.message_from_bytes(first[1])
+                    summaries.append(
+                        EmailSummary(
+                            message_id=parsed.get("Message-ID", "").strip(),
+                            sender=parseaddr(_decode_mime_header(parsed.get("From")))[1],
+                            subject=_decode_mime_header(parsed.get("Subject")),
+                            received_at=parsed.get("Date", ""),
+                        )
                     )
-                )
-            return tuple(summaries)
-        finally:
-            connection.logout()
+                return tuple(summaries)
+            finally:
+                connection.logout()
+        except imaplib.IMAP4.error as exc:
+            msg = f"Real IMAP connection to {self._host!r} failed or was lost: {exc}"
+            raise EmailConnectionError(msg) from exc
 
     async def list_messages(self, folder: str, limit: int) -> tuple[EmailSummary, ...]:
         """See `EmailPort.list_messages`. Runs the real, blocking IMAP call off the event loop."""
         return await asyncio.to_thread(self._list_messages_sync, folder, limit)
 
     def _read_message_sync(self, message_id: str) -> EmailMessage:
-        connection = self._connect()
         try:
-            connection.select("INBOX", readonly=True)
-            _typ, data = connection.search(None, f'(HEADER Message-ID "{message_id}")')
-            message_numbers = data[0].split() if data and data[0] else []
-            if not message_numbers:
-                msg = f"No message found with Message-ID {message_id!r}."
-                raise EmailMessageNotFoundError(msg)
-            _typ, msg_data = connection.fetch(message_numbers[0].decode("ascii"), "(RFC822)")
-            first = msg_data[0]
-            if not isinstance(first, tuple):
-                msg = f"No message found with Message-ID {message_id!r}."
-                raise EmailMessageNotFoundError(msg)
-            parsed = email_stdlib.message_from_bytes(first[1])
-            return EmailMessage(
-                message_id=parsed.get("Message-ID", "").strip(),
-                sender=parseaddr(_decode_mime_header(parsed.get("From")))[1],
-                recipients=_parse_recipients(parsed),
-                subject=_decode_mime_header(parsed.get("Subject")),
-                body=_extract_body(parsed),
-                received_at=parsed.get("Date", ""),
-            )
-        finally:
-            connection.logout()
+            connection = self._connect()
+            try:
+                connection.select("INBOX", readonly=True)
+                _typ, data = connection.search(None, f'(HEADER Message-ID "{message_id}")')
+                message_numbers = data[0].split() if data and data[0] else []
+                if not message_numbers:
+                    msg = f"No message found with Message-ID {message_id!r}."
+                    raise EmailMessageNotFoundError(msg)
+                _typ, msg_data = connection.fetch(message_numbers[0].decode("ascii"), "(RFC822)")
+                first = msg_data[0]
+                if not isinstance(first, tuple):
+                    msg = f"No message found with Message-ID {message_id!r}."
+                    raise EmailMessageNotFoundError(msg)
+                parsed = email_stdlib.message_from_bytes(first[1])
+                return EmailMessage(
+                    message_id=parsed.get("Message-ID", "").strip(),
+                    sender=parseaddr(_decode_mime_header(parsed.get("From")))[1],
+                    recipients=_parse_recipients(parsed),
+                    subject=_decode_mime_header(parsed.get("Subject")),
+                    body=_extract_body(parsed),
+                    received_at=parsed.get("Date", ""),
+                )
+            finally:
+                connection.logout()
+        except imaplib.IMAP4.error as exc:
+            msg = f"Real IMAP connection to {self._host!r} failed or was lost: {exc}"
+            raise EmailConnectionError(msg) from exc
 
     async def read_message(self, message_id: str) -> EmailMessage:
         """See `EmailPort.read_message`. Runs the real, blocking IMAP call off the event loop.
