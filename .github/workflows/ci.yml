@@ -87,6 +87,42 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
+      # Real, local, credential-free IMAP/CalDAV test servers for
+      # tests/integration/test_email_calendar_against_local_servers.py
+      # (Track 1, 2026-09-04) -- closes the actual "live-credential-
+      # gated integration test remains unmet" gap named repeatedly in
+      # past reports, with a real local server instead of real
+      # credentials. Launched as plain `docker run` steps here, not a
+      # job-level `services:` block: GitHub Actions starts service
+      # containers before any step (including checkout) runs, so a
+      # `services:`-level volume mount of Radicale's own config file
+      # (checked out by the step above, not yet present when services
+      # start) would not reliably be readable at Radicale's own
+      # startup. Running them as ordinary steps after checkout avoids
+      # that real ordering problem entirely.
+      - name: Start local GreenMail IMAP/SMTP test server
+        run: |
+          docker run -d --name jarvis-test-greenmail \
+            -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.users=testuser:testpass@localhost -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled" \
+            -p 3025:3025 -p 3143:3143 -p 3110:3110 \
+            greenmail/standalone:latest
+          for _ in $(seq 1 30); do
+            (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Start local Radicale CalDAV test server
+        run: |
+          docker run -d --name jarvis-test-radicale \
+            -p 5232:5232 \
+            -v "$(pwd)/tests/fixtures/radicale-config:/config:ro" \
+            tomsquest/docker-radicale:latest
+          for _ in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5232/ 2>/dev/null)
+            [ -n "$status" ] && [ "$status" != "000" ] && break
+            sleep 1
+          done
+
       - name: ruff check
         run: uv run ruff check .
 
