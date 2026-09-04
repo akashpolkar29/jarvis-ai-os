@@ -44,6 +44,29 @@ attempts the call -- never a crash, never a silent no-op. Because
 ``_authorize_and_execute`` is ``async`` too now, awaited at its one
 call site in ``_handle_utterance``.
 
+``authorize_and_send_email``/``authorize_and_create_calendar_event``
+(overnight Track 3 pass) join the same dispatch, following the
+identical "no safe default, optional pre-configured parameter" shape
+``coding_target_repo``/``coding_dispatcher_factory`` already
+established: ``run_voice_loop`` gains ``email_port``/``calendar_port``,
+both ``None`` by default, both required by their own composition
+functions (no real per-deployment IMAP/SMTP/CalDAV configuration is
+this module's decision, the same reasoning ``kernel/communications.py``'s
+own module docstring already gives). If a "send email"/"create event"
+command resolves while the matching port is ``None``, this module
+speaks a real, honest "not configured" message and never attempts the
+call. **Voice does not bypass ADR-0059's ``Tier.MANUAL_ONLY`` floor in
+any way**: both composition functions are called completely
+unmodified, with ``approved`` (this module's own physical-confirmation
+answer) passed straight through as ``physical_confirmation_available``
+and ``remote_confirmation_available`` always ``False``, exactly like
+every other dispatch branch -- a granted "send email"/attendee-bearing
+"create event" still requires the same physical presence check any
+other caller does; see ``kernel/intent.py``'s own module docstring for
+the real, matching grammar (" subject "/" body " for email; " from "/
+" to "/" with " for the event) and its own named limitation (start/end
+times are matched verbatim, not parsed from natural spoken language).
+
 Per utterance: a confirmed :class:`~jarvis.domain.wake_word.WakeEvent`
 (carrying its own audio, per ADR-0033) is handed to
 :class:`~jarvis.ports.vad.VadPort`, which may find zero, one, or
@@ -133,7 +156,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
@@ -142,6 +165,10 @@ from jarvis.adapters.stt import FasterWhisperAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
 from jarvis.adapters.vad import SileroVadAdapter
 from jarvis.adapters.wake_word import OpenWakeWordAdapter
+from jarvis.application.communications.writer import (
+    CALENDAR_CREATE_EVENT_CAPABILITY_ID,
+    EMAIL_SEND_CAPABILITY_ID,
+)
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
@@ -150,6 +177,10 @@ from jarvis.kernel.capabilities import (
     READ_FILE_CAPABILITY_ID,
 )
 from jarvis.kernel.coding import authorize_and_run_coding_task
+from jarvis.kernel.communications import (
+    authorize_and_create_calendar_event,
+    authorize_and_send_email,
+)
 from jarvis.kernel.files import authorize_and_read_file
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
@@ -164,6 +195,8 @@ if TYPE_CHECKING:
     from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
     from jarvis.kernel.music import MusicCommand
+    from jarvis.ports.calendar import CalendarPort
+    from jarvis.ports.email import EmailPort
     from jarvis.ports.embedding import EmbeddingPort
     from jarvis.ports.file_system import FileSystemPort
     from jarvis.ports.media_player import MediaPlayerPort
@@ -220,7 +253,7 @@ async def _speak(tts: TtsPort, play_fn: PlayFn, text: str) -> None:
     play_fn(audio)
 
 
-def _confirmation_prompt(resolved: ResolvedIntent) -> str:
+def _confirmation_prompt(resolved: ResolvedIntent) -> str:  # noqa: PLR0911 -- one return per resolved capability
     """Build a human-readable prompt describing the resolved action to approve or deny."""
     if resolved.capability_id == READ_FILE_CAPABILITY_ID:
         path_text = resolved.arguments.value.get("path")
@@ -234,6 +267,14 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:
     if resolved.capability_id == CODING_RUN_TASK_CAPABILITY_ID:
         task_text = resolved.arguments.value.get("task")
         return f"JARVIS wants to: run a coding task -- '{task_text}'. Approve?"
+    if resolved.capability_id == EMAIL_SEND_CAPABILITY_ID:
+        to = resolved.arguments.value.get("to")
+        subject_text = resolved.arguments.value.get("subject")
+        recipients = ", ".join(to) if isinstance(to, tuple) else str(to)
+        return f"JARVIS wants to: send an email to {recipients}, subject '{subject_text}'. Approve?"
+    if resolved.capability_id == CALENDAR_CREATE_EVENT_CAPABILITY_ID:
+        summary_text = resolved.arguments.value.get("summary")
+        return f"JARVIS wants to: create a calendar event -- '{summary_text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -242,7 +283,7 @@ def _describe(decision: Decision) -> str:
     return "Done." if decision.granted else "Sorry, that wasn't approved."
 
 
-async def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per composition function, one return per dispatch branch
+async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one param/branch per composition function dispatch
     resolved: ResolvedIntent,
     *,
     approved: bool,
@@ -254,6 +295,8 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per com
     embedding_port: EmbeddingPort | None,
     coding_target_repo: Path | None,
     coding_dispatcher_factory: DispatcherFactory | None,
+    email_port: EmailPort | None,
+    calendar_port: CalendarPort | None,
 ) -> str:
     """Dispatch the resolved capability to its (unchanged, M0) composition function.
 
@@ -279,6 +322,11 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per com
     module docstring for why they have no safe default and why a
     missing one speaks an honest "not configured" message instead of
     calling through.
+
+    ``email_port``/``calendar_port`` are the identical pass-through
+    shape, for resolved "send email"/"create event" commands
+    respectively -- see the module docstring for the same "no safe
+    default" reasoning.
 
     Returns the text to speak back: a file's content on a granted
     read, otherwise a short granted/denied description.
@@ -349,6 +397,42 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911 -- one param per com
         )
         return _describe(coding_decision)
 
+    if resolved.capability_id == EMAIL_SEND_CAPABILITY_ID:
+        if email_port is None:
+            return "Email isn't configured on this device."
+        to = cast("tuple[str, ...]", resolved.arguments.value["to"])
+        subject_text = str(resolved.arguments.value["subject"])
+        body_text = str(resolved.arguments.value["body"])
+        email_decision = await authorize_and_send_email(
+            to,
+            subject_text,
+            body_text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            email_port=email_port,
+        )
+        return _describe(email_decision)
+
+    if resolved.capability_id == CALENDAR_CREATE_EVENT_CAPABILITY_ID:
+        if calendar_port is None:
+            return "Calendar isn't configured on this device."
+        summary_text = str(resolved.arguments.value["summary"])
+        start_text = str(resolved.arguments.value["start"])
+        end_text = str(resolved.arguments.value["end"])
+        attendees = cast("tuple[str, ...]", resolved.arguments.value["attendees"])
+        event_outcome = await authorize_and_create_calendar_event(
+            summary_text,
+            start_text,
+            end_text,
+            attendees,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            calendar_port=calendar_port,
+        )
+        return _describe(event_outcome.decision)
+
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(
         music_command,
@@ -377,6 +461,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
     embedding_port: EmbeddingPort | None,
     coding_target_repo: Path | None,
     coding_dispatcher_factory: DispatcherFactory | None,
+    email_port: EmailPort | None,
+    calendar_port: CalendarPort | None,
 ) -> None:
     """Transcribe, resolve, confirm, and authorize+execute one VAD-confirmed speech segment."""
     transcript = await stt.transcribe(segment)
@@ -411,6 +497,8 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         embedding_port=embedding_port,
         coding_target_repo=coding_target_repo,
         coding_dispatcher_factory=coding_dispatcher_factory,
+        email_port=email_port,
+        calendar_port=calendar_port,
     )
     await _speak(tts, play_fn, response_text)
 
@@ -433,6 +521,8 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
     embedding_port: EmbeddingPort | None = None,
     coding_target_repo: Path | None = None,
     coding_dispatcher_factory: DispatcherFactory | None = None,
+    email_port: EmailPort | None = None,
+    calendar_port: CalendarPort | None = None,
 ) -> None:
     """Run the voice pipeline until ``wake_word``'s stream ends (never, for the real adapter).
 
@@ -491,6 +581,17 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
             ``authorize_and_run_coding_task``'s own existing required
             ``dispatcher_factory`` parameter. No default, for the same
             reason as ``coding_target_repo``.
+        email_port: Pass-through to ``authorize_and_send_email``'s own
+            existing required ``email_port`` parameter, for a resolved
+            "send email" command. No default -- see the module
+            docstring for why. If ``None`` when a "send email" command
+            resolves, this module speaks an honest "not configured"
+            message instead of calling through.
+        calendar_port: Pass-through to
+            ``authorize_and_create_calendar_event``'s own existing
+            required ``calendar_port`` parameter, for a resolved
+            "create event" command. No default, for the same reason as
+            ``email_port``.
     """
     wake_word = wake_word or OpenWakeWordAdapter()
     vad = vad or SileroVadAdapter()
@@ -518,4 +619,6 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
                 embedding_port=embedding_port,
                 coding_target_repo=coding_target_repo,
                 coding_dispatcher_factory=coding_dispatcher_factory,
+                email_port=email_port,
+                calendar_port=calendar_port,
             )

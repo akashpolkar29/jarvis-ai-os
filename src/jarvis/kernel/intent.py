@@ -92,6 +92,39 @@ real target repository a "code" command runs against, and which real
 ``ReasoningPort`` providers service it, are not something a single
 voice phrase can safely express; see ``kernel/voice_loop.py``'s own
 module docstring for how those get supplied.
+
+"send email"/"create event" (overnight Track 3 pass) are this
+module's first *two-word* command keywords -- every prior command
+matches on its first word alone, but "send" and "create" alone are
+too generic to commit to a single meaning ahead of a real M6b
+"drafting" command or similar future addition, so both are matched as
+fixed two-word prefixes first, in :func:`_resolve_two_word_command`,
+before the single-word dispatch runs at all (see
+:func:`resolve_intent`). Both resolve to
+``jarvis.application.communications.writer``'s own
+``EMAIL_SEND_CAPABILITY_ID``/``CALENDAR_CREATE_EVENT_CAPABILITY_ID`` --
+not a ``kernel.capabilities`` id, mirroring "remember"'s own
+dynamic-effect precedent exactly (neither is registered in
+``build_default_registry()``; see ``kernel/communications.py``'s own
+module docstring for why). Unlike every single-argument command
+before them, a real email needs three distinct pieces of content
+(recipients/subject/body) and a real calendar event needs three or
+four (summary/start/end/optional attendees) that one verbatim string
+cannot safely separate, so both introduce a small, real, fixed
+keyword grammar (" subject "/" body " for email; " from "/" to "/
+" with " for the event) -- see :func:`_resolve_send_email`/
+:func:`_resolve_create_event` for the exact parsing and their own
+real, named limitation (event start/end times are matched verbatim,
+not parsed from natural spoken language like "tomorrow at 3"; a
+caller must speak or otherwise supply an exact ISO-8601 string).
+**Voice does not bypass ADR-0059 in any way**: both resolved
+capabilities still route through
+``authorize_and_send_email``/``authorize_and_create_calendar_event``
+unmodified, the same ``Tier.MANUAL_ONLY`` floor (for email always;
+for calendar, whenever attendees are present) that denies whenever
+``physical_confirmation_available`` is ``False``, regardless of the
+voice loop's own confirmation prompt answer -- proven by a real test
+in ``tests/unit/test_voice_loop.py``.
 """
 
 from __future__ import annotations
@@ -99,6 +132,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from jarvis.application.communications.writer import (
+    CALENDAR_CREATE_EVENT_CAPABILITY_ID,
+    EMAIL_SEND_CAPABILITY_ID,
+)
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
@@ -179,6 +216,94 @@ def _resolve_code(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     )
 
 
+def _split_recipients(text: str) -> tuple[str, ...]:
+    """Split a spoken recipient list on "," or " and ", trimming each address."""
+    normalized = text.replace(" and ", ",")
+    return tuple(part.strip() for part in normalized.split(",") if part.strip())
+
+
+def _resolve_send_email(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "send email to <recipients> subject <subject> body <body>".
+
+    A minimal, real keyword grammar -- mirrors "read"/"remember"'s own
+    "everything after the keyword is the argument" shape, extended
+    with two more fixed keywords (" subject "/" body ") since a real
+    email needs three distinct pieces of content a single verbatim
+    string cannot safely separate. Matches ``_resolve_create_event``'s
+    identical approach for calendar events.
+    """
+    lowered = rest.lower()
+    if not lowered.startswith("to "):
+        return _UNRECOGNIZED
+    subject_index = lowered.find(" subject ")
+    body_index = lowered.find(" body ")
+    if subject_index == -1 or body_index == -1 or body_index <= subject_index:
+        return _UNRECOGNIZED
+
+    to_text = rest[len("to ") : subject_index].strip()
+    subject_text = rest[subject_index + len(" subject ") : body_index].strip()
+    body_text = rest[body_index + len(" body ") :].strip()
+    recipients = _split_recipients(to_text)
+    if not recipients or not subject_text or not body_text:
+        return _UNRECOGNIZED
+
+    return ResolvedIntent(
+        capability_id=EMAIL_SEND_CAPABILITY_ID,
+        arguments=Tainted(
+            {"to": recipients, "subject": subject_text, "body": body_text}, Provenance.user()
+        ),
+    )
+
+
+def _resolve_create_event(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "create event <summary> from <start> to <end> [with <attendees>]".
+
+    ``start``/``end`` are matched verbatim, unparsed -- see the module
+    docstring's own real, honest limitation: a spoken utterance is
+    unlikely to ever produce a literal ISO-8601 timestamp on its own,
+    so this grammar exists for a real caller who speaks (or a future
+    upstream normalization step produces) exact times, not as a claim
+    that natural spoken dates ("tomorrow at 3") resolve today. The
+    trailing ``with <attendees>`` clause is optional -- its presence is
+    what makes ``authorize_and_create_calendar_event`` float to
+    ``Tier.MANUAL_ONLY`` at all (ADR-0059); an event with no attendees
+    still floors at the ordinary ``Tier.CONFIRM``.
+    """
+    lowered = rest.lower()
+    from_index = lowered.find(" from ")
+    if from_index == -1:
+        return _UNRECOGNIZED
+    summary_text = rest[:from_index].strip()
+    after_from = rest[from_index + len(" from ") :]
+    lowered_after_from = after_from.lower()
+
+    to_index = lowered_after_from.find(" to ")
+    if to_index == -1:
+        return _UNRECOGNIZED
+    start_text = after_from[:to_index].strip()
+    after_to = after_from[to_index + len(" to ") :]
+    lowered_after_to = after_to.lower()
+
+    with_index = lowered_after_to.find(" with ")
+    if with_index == -1:
+        end_text = after_to.strip()
+        attendees: tuple[str, ...] = ()
+    else:
+        end_text = after_to[:with_index].strip()
+        attendees = _split_recipients(after_to[with_index + len(" with ") :].strip())
+
+    if not summary_text or not start_text or not end_text:
+        return _UNRECOGNIZED
+
+    return ResolvedIntent(
+        capability_id=CALENDAR_CREATE_EVENT_CAPABILITY_ID,
+        arguments=Tainted(
+            {"summary": summary_text, "start": start_text, "end": end_text, "attendees": attendees},
+            Provenance.user(),
+        ),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -193,21 +318,61 @@ def _resolve_zero_argument_command(command: str) -> ResolvedIntent | Unrecognize
     return _UNRECOGNIZED
 
 
+def _split_two_word_command(text: str, command: str) -> str | None:
+    """If ``text`` starts with the two-word ``command`` (case-insensitive), return the rest.
+
+    Returns ``None`` if ``text`` doesn't start with ``command`` at all
+    -- distinct from returning ``""``, which means the command matched
+    with no arguments following it (itself unrecognized for these two,
+    both of which require real content; see their own resolvers).
+    """
+    lowered = text.lower()
+    if lowered == command:
+        return ""
+    prefix = command + " "
+    if lowered.startswith(prefix):
+        return text[len(prefix) :].strip()
+    return None
+
+
+def _resolve_two_word_command(text: str) -> ResolvedIntent | UnrecognizedIntent | None:
+    """Try "send email"/"create event" -- the only two-word command keywords this module has.
+
+    Returns ``None`` (not ``UnrecognizedIntent``) when neither
+    two-word prefix matches at all, so :func:`resolve_intent` falls
+    through to its existing single-word dispatch.
+    """
+    rest = _split_two_word_command(text, "send email")
+    if rest is not None:
+        return _resolve_send_email(rest)
+    rest = _split_two_word_command(text, "create event")
+    if rest is not None:
+        return _resolve_create_event(rest)
+    return None
+
+
 def resolve_intent(  # noqa: PLR0911 -- one return per command keyword, mirrors the module's flat dispatch shape
     transcript: Transcript,
 ) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve ``transcript``'s text to a known command, or ``UnrecognizedIntent`` if none matches.
 
-    Matching is case-insensitive (on the command word only) and
-    whitespace-trimmed. The first word selects the command; for every
-    command except "read"/"remember"/"recall"/"code", any remaining
-    text makes the match fail (a zero-argument command does not
-    silently ignore trailing words) rather than resolving anyway.
+    Matching is case-insensitive (on the command word(s) only) and
+    whitespace-trimmed. "send email"/"create event" are matched as a
+    fixed two-word prefix first (see :func:`_resolve_two_word_command`);
+    every other command matches on its first word alone. For every
+    single-word command except "read"/"remember"/"recall"/"code", any
+    remaining text makes the match fail (a zero-argument command does
+    not silently ignore trailing words) rather than resolving anyway.
     """
-    words = transcript.text.strip().split(maxsplit=1)
-    if not words:
+    text = transcript.text.strip()
+    if not text:
         return _UNRECOGNIZED
 
+    two_word_result = _resolve_two_word_command(text)
+    if two_word_result is not None:
+        return two_word_result
+
+    words = text.split(maxsplit=1)
     command = words[0].lower()
     rest = words[1].strip() if len(words) > 1 else ""
 

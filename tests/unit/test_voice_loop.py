@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from jarvis.application.coding.loop import DispatcherFactory
+    from jarvis.domain.calendar import CalendarEvent, CalendarEventDraft
+    from jarvis.domain.email import EmailMessage, EmailSummary
     from jarvis.domain.evidence import Attempt
     from jarvis.ports.workspace import WorkspacePort
 
@@ -124,6 +126,43 @@ class _FakePhysicalConfirmationPort:
 def _no_playback(audio: AudioStream) -> None:
     """A play_fn that touches no real audio hardware."""
     del audio
+
+
+class _FakeEmailPort:
+    """Records every real send_message call it receives -- no real IMAP/SMTP is touched.
+
+    read_message/list_messages are never called by anything
+    "send email" voice grammar exercises, so they raise if reached --
+    the same "unused Protocol method never silently succeeds" caution
+    tests/unit/test_communications_kernel.py's own fakes take.
+    """
+
+    def __init__(self) -> None:
+        self.send_calls: list[tuple[tuple[str, ...], str, str]] = []
+
+    async def list_messages(self, folder: str, limit: int) -> tuple[EmailSummary, ...]:
+        raise NotImplementedError
+
+    async def read_message(self, message_id: str) -> EmailMessage:
+        raise NotImplementedError
+
+    async def send_message(self, to: tuple[str, ...], subject: str, body: str) -> None:
+        self.send_calls.append((to, subject, body))
+
+
+class _FakeCalendarPort:
+    """Records every real create_event call it receives -- no real CalDAV is touched."""
+
+    def __init__(self, created_uid: str = "new-uid") -> None:
+        self.create_calls: list[CalendarEventDraft] = []
+        self._created_uid = created_uid
+
+    async def list_events(self, start: str, end: str) -> tuple[CalendarEvent, ...]:
+        raise NotImplementedError
+
+    async def create_event(self, draft: CalendarEventDraft) -> str:
+        self.create_calls.append(draft)
+        return self._created_uid
 
 
 class _FakeMediaPlayerPort:
@@ -637,3 +676,174 @@ async def test_the_confirmation_prompt_names_the_coding_task(tmp_path: Path) -> 
     assert len(confirmation.prompts) == 1
     prompt_text, _timeout = confirmation.prompts[0]
     assert "fix the failing test" in prompt_text
+
+
+async def test_a_recognized_send_email_command_is_granted_and_sends_a_real_email(
+    tmp_path: Path,
+) -> None:
+    """ "send email ..." -> confirmed -> granted -> the real EmailPort actually sends."""
+    tts = _FakeTtsPort()
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    email_port = _FakeEmailPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("send email to alice@example.com subject Hello body See you soon"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        email_port=email_port,
+    )
+
+    assert tts.spoken == ["Done."]
+    assert email_port.send_calls == [(("alice@example.com",), "Hello", "See you soon")]
+
+
+async def test_a_denied_send_email_command_never_sends_a_real_email(tmp_path: Path) -> None:
+    """A "send email" request denied at physical confirmation is never actually sent --
+    proving voice does not bypass ADR-0059's Tier.MANUAL_ONLY floor in any way."""
+    tts = _FakeTtsPort()
+    email_port = _FakeEmailPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("send email to alice@example.com subject Hello body See you soon"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        email_port=email_port,
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    assert email_port.send_calls == []
+
+
+async def test_a_send_email_command_with_no_email_configuration_speaks_an_honest_fallback(
+    tmp_path: Path,
+) -> None:
+    """With email_port omitted, "send email" never crashes and never silently no-ops."""
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("send email to alice@example.com subject Hello body See you soon"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+    )
+
+    assert tts.spoken == ["Email isn't configured on this device."]
+
+
+async def test_a_recognized_create_event_command_is_granted_and_creates_a_real_event(
+    tmp_path: Path,
+) -> None:
+    """ "create event ..." with attendees -> confirmed -> granted -> the real CalendarPort
+    actually creates the event, at the same Tier.MANUAL_ONLY floor an attendee-bearing
+    event requires (ADR-0059) -- physical confirmation alone makes this succeed."""
+    tts = _FakeTtsPort()
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    calendar_port = _FakeCalendarPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort(
+            "create event Team sync from 2026-09-05T10:00:00 to 2026-09-05T10:30:00 "
+            "with alice@example.com"
+        ),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        calendar_port=calendar_port,
+    )
+
+    assert tts.spoken == ["Done."]
+    assert len(calendar_port.create_calls) == 1
+    draft = calendar_port.create_calls[0]
+    assert draft.summary == "Team sync"
+    assert draft.attendees == ("alice@example.com",)
+
+
+async def test_a_denied_attendee_bearing_create_event_command_never_creates_a_real_event(
+    tmp_path: Path,
+) -> None:
+    """An attendee-bearing "create event" request denied at physical confirmation is never
+    actually created -- the single most important proof: voice cannot satisfy
+    Tier.MANUAL_ONLY through remote confirmation alone (remote_confirmation_available is
+    always False from this module, but this proves denial holds regardless)."""
+    tts = _FakeTtsPort()
+    calendar_port = _FakeCalendarPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort(
+            "create event Team sync from 2026-09-05T10:00:00 to 2026-09-05T10:30:00 "
+            "with alice@example.com"
+        ),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        calendar_port=calendar_port,
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    assert calendar_port.create_calls == []
+
+
+async def test_a_create_event_command_with_no_calendar_configuration_speaks_an_honest_fallback(
+    tmp_path: Path,
+) -> None:
+    """With calendar_port omitted, "create event" never crashes and never silently no-ops."""
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("create event Team sync from 2026-09-05T10:00:00 to 2026-09-05T10:30:00"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+    )
+
+    assert tts.spoken == ["Calendar isn't configured on this device."]
+
+
+async def test_the_confirmation_prompt_names_the_email_recipients_and_subject(
+    tmp_path: Path,
+) -> None:
+    """The prompt shown for physical confirmation names the real recipients and subject."""
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("send email to alice@example.com subject Hello body See you soon"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+        email_port=_FakeEmailPort(),
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "alice@example.com" in prompt_text
+    assert "Hello" in prompt_text
