@@ -182,3 +182,12 @@ it.
   is a structural boundary or a policy-tier gate) was deliberately left
   untouched by M6a's own real design pass — real design work for M6b
   has not started.
+- **M7 (not yet a real ROADMAP row)**: [`docs/architecture/m7-scoping-notes.md`](architecture/m7-scoping-notes.md) —
+  research only, written 2026-09-04, investigating two carried-forward
+  gaps: whether M2's `Dispatcher`/`EscalationLadder` mapping to the
+  charter's "intelligent task planning" is honest (real finding: it is
+  retry/escalation for one task, never multi-step decomposition), and
+  what LSP-based code intelligence would actually take, plus whether
+  `coding.run_task` already gets enough repository context without it
+  (real finding: no, it currently gets none at all beyond the caller's
+  own task text). Options laid out, no decision made — nothing built.

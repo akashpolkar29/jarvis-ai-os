@@ -482,3 +482,19 @@ not assumed.
 - Any real iterative, multi-turn editing machinery, if Part 1 item 3
   decides the existing single-candidate-per-rung shape is insufficient
   for real coding-agent work.
+
+## Addendum, 2026-09-04: LSP was never answered, M5 shipped without it
+
+M5 has since been built (code-complete, tagged `v0.5.0`) without
+resolving Part 2's own LSP question above — CLAUDE.md's own M5 status
+names this plainly: "LSP-based code intelligence — half of this
+milestone's own original working assumption — was never answered or
+built, real, unresolved scope carried forward, not quietly dropped."
+This document's own Part 2 research (the real client-landscape survey)
+remains the live, not-yet-superseded reference. A follow-up
+investigation — what the real, now-built `coding.run_task` actually
+sends a provider, and whether it already gets enough context without
+LSP (real finding: no, it currently gets none at all beyond the
+caller's own task text) — is recorded in
+[`docs/architecture/m7-scoping-notes.md`](m7-scoping-notes.md), item 2,
+rather than reopening this already-thorough document.
