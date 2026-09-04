@@ -24,9 +24,11 @@ history establishes a real "capabilities deliberately get no CLI"
 convention to mirror. The actual, only precedent this file has ever
 had for "what a CLI wrapper around a capability looks like" is
 ``ping``/``play``/``pause``/``next``/``previous``/``read`` themselves
--- ``memory``'s subcommands follow that shape instead. Docker/Git
-remain unwired for now, unrelated to this correction and out of this
-pass's own named scope.
+-- ``memory``'s subcommands follow that shape instead. **Docker/Git,
+and the rest of `kernel/desktop.py`'s real capabilities, were wired
+in later** (see the ``open-brave-url``/... paragraph below) -- this
+paragraph is kept as the real, historical record of the misreading
+that was corrected, not because the gap it describes is still open.
 
 ``listen`` (WP-26) is the one subcommand that does not fit that
 shape: it runs ``jarvis.kernel.voice_loop.run_voice_loop`` as a
@@ -104,6 +106,27 @@ would violate this project's own hard gate against configuring real
 cloud-provider credentials unattended. Both wrap their kernel call in
 ``asyncio.run``, the same shape ``send-email``/``create-calendar-event``
 already use.
+
+``open-brave-url``/``open-vscode-file``/``send-claude-text``/
+``send-chatgpt-text``/``list-docker-containers``/
+``stop-docker-container``/``git-status``/``git-create-branch``/
+``git-commit``/``git-push``/``git-force-push`` (real CLI wiring pass)
+close the real "``kernel/desktop.py``'s capabilities are real but
+never wired into this module" gap Track 6's own charter-completeness
+re-check named. Eleven flat, top-level subcommands, one per distinct
+``CapabilityId`` ``kernel/desktop.py`` already implements -- mirroring
+``play``/``pause``/``next``/``previous``'s own "one subcommand per
+capability" granularity, not a nested ``desktop <verb>`` shape.
+``send-claude-text``/``send-chatgpt-text`` construct a real
+``AtspiDesktopWindowAdapter()`` directly (see
+``_run_desktop_app_subcommand``'s own docstring for why ``kernel``
+itself cannot default one). **Two real capabilities are deliberately
+absent, not overlooked**: ``terminal.run`` (needs
+``SyntheticInputPort``, explicitly out of scope for the pass that
+added this wiring) and ``docker.run_container``/``docker.build_image``
+(DESTRUCTIVE-tier Docker actions, explicitly named "do not touch" by
+that same pass's own hard gate) -- see
+``_add_desktop_parsers``'s own docstring for the full reasoning.
 """
 
 from __future__ import annotations
@@ -117,6 +140,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.calendar import CalDavCalendarAdapter, CalendarEventCreationError
+from jarvis.adapters.desktop_window import AtspiDesktopWindowAdapter
 from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
@@ -127,6 +151,19 @@ from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
     authorize_and_send_email,
+)
+from jarvis.kernel.desktop import (
+    ChatApp,
+    authorize_and_commit_git,
+    authorize_and_create_git_branch,
+    authorize_and_force_push_git,
+    authorize_and_get_git_status,
+    authorize_and_list_docker_containers,
+    authorize_and_open_brave_url,
+    authorize_and_open_vscode_file,
+    authorize_and_push_git,
+    authorize_and_send_text_to_chat_app,
+    authorize_and_stop_docker_container,
 )
 from jarvis.kernel.files import (
     PathOutsideAllowedScopeError,
@@ -314,6 +351,102 @@ def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_common_flags(delete_file_parser)
 
 
+_CLAUDE_APP_LAUNCH_COMMAND = ("claude-desktop",)
+"""The one real, confirmed launch command for the Claude desktop app.
+
+Mirrors `kernel/desktop.py`'s own module-level note: confirmed against
+a real, installed `claude-desktop` binary during WP-43's spike. No
+equivalent exists for the ChatGPT app (never found installed), so
+`send-chatgpt-text` passes `launch_command=None` -- an honest "no
+confirmed default", not a guess.
+"""
+
+
+def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the desktop.*/docker.*/git.* subparsers wiring kernel/desktop.py's real capabilities.
+
+    Two real capabilities are deliberately NOT wired here: `terminal.run`
+    (needs `SyntheticInputPort`, explicitly out of scope -- untouched
+    per this pass's own hard gate) and `docker.run_container`/
+    `docker.build_image` (DESTRUCTIVE-tier Docker actions, explicitly
+    named "do not touch" by this pass's own hard gate). Every other
+    real `kernel/desktop.py` capability gets its own flat subcommand,
+    mirroring `play`/`pause`/`next`/`previous`'s own "one subcommand
+    per distinct CapabilityId" precedent, not a nested `desktop <verb>`
+    shape.
+    """
+    open_brave_parser = subparsers.add_parser(
+        "open-brave-url", help="Launch or focus Brave, navigated to a URL."
+    )
+    open_brave_parser.add_argument("url", help="The URL to open.")
+    _add_common_flags(open_brave_parser)
+
+    open_vscode_parser = subparsers.add_parser(
+        "open-vscode-file", help="Launch or focus VS Code, opened to a file."
+    )
+    open_vscode_parser.add_argument("path", help="The file path to open.")
+    _add_common_flags(open_vscode_parser)
+
+    send_claude_parser = subparsers.add_parser(
+        "send-claude-text", help="Type text into the Claude desktop app's input box."
+    )
+    send_claude_parser.add_argument("text", help="The text to type.")
+    _add_common_flags(send_claude_parser)
+
+    send_chatgpt_parser = subparsers.add_parser(
+        "send-chatgpt-text", help="Type text into the ChatGPT desktop app's input box."
+    )
+    send_chatgpt_parser.add_argument("text", help="The text to type.")
+    _add_common_flags(send_chatgpt_parser)
+
+    list_docker_parser = subparsers.add_parser(
+        "list-docker-containers", help="List every Docker container's name, read-only."
+    )
+    _add_common_flags(list_docker_parser)
+
+    stop_docker_parser = subparsers.add_parser(
+        "stop-docker-container", help="Stop a running Docker container -- recoverable."
+    )
+    stop_docker_parser.add_argument("container", help="The container's name or id.")
+    _add_common_flags(stop_docker_parser)
+
+    git_status_parser = subparsers.add_parser(
+        "git-status", help="Show a git repository's working-tree status, read-only."
+    )
+    git_status_parser.add_argument("repo_dir", type=Path, help="The real git repository.")
+    _add_common_flags(git_status_parser)
+
+    git_create_branch_parser = subparsers.add_parser(
+        "git-create-branch", help="Create and switch to a new git branch."
+    )
+    git_create_branch_parser.add_argument("repo_dir", type=Path, help="The real git repository.")
+    git_create_branch_parser.add_argument("branch_name", help="The new branch's name.")
+    _add_common_flags(git_create_branch_parser)
+
+    git_commit_parser = subparsers.add_parser(
+        "git-commit", help="Commit already-tracked, modified files."
+    )
+    git_commit_parser.add_argument("repo_dir", type=Path, help="The real git repository.")
+    git_commit_parser.add_argument("message", help="The commit message.")
+    _add_common_flags(git_commit_parser)
+
+    git_push_parser = subparsers.add_parser(
+        "git-push", help="An ordinary fast-forward push to a branch you already own."
+    )
+    git_push_parser.add_argument("repo_dir", type=Path, help="The real git repository.")
+    git_push_parser.add_argument("remote", help="The remote name (e.g. origin).")
+    git_push_parser.add_argument("branch", help="The branch to push.")
+    _add_common_flags(git_push_parser)
+
+    git_force_push_parser = subparsers.add_parser(
+        "git-force-push", help="A force-push. Always MANUAL_ONLY -- no undo."
+    )
+    git_force_push_parser.add_argument("repo_dir", type=Path, help="The real git repository.")
+    git_force_push_parser.add_argument("remote", help="The remote name (e.g. origin).")
+    git_force_push_parser.add_argument("branch", help="The branch to force-push.")
+    _add_common_flags(git_force_push_parser)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser: one subcommand per authorizable command."""
     parser = argparse.ArgumentParser(
@@ -374,6 +507,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_communications_parsers(subparsers)
     _add_reasoning_parsers(subparsers)
     _add_file_parsers(subparsers)
+    _add_desktop_parsers(subparsers)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -626,6 +760,154 @@ def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirE
     return decision, None
 
 
+def _run_desktop_app_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch open-brave-url/open-vscode-file/send-claude-text/send-chatgpt-text.
+
+    Constructs a real `AtspiDesktopWindowAdapter()` directly for the
+    two chat-app commands -- `kernel/desktop.py`'s own
+    `authorize_and_send_text_to_chat_app` takes no default for this
+    port (a C6 "no GLib in the core" restriction), and its own module
+    docstring names `cli` as exactly the right, unrestricted place to
+    supply the real one, mirroring `Gtk4PhysicalConfirmationAdapter`'s
+    own identical precedent already in this module.
+    """
+    if args.command == "open-brave-url":
+        decision = authorize_and_open_brave_url(
+            args.url,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+    if args.command == "open-vscode-file":
+        decision = authorize_and_open_vscode_file(
+            args.path,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+
+    app = ChatApp.CLAUDE if args.command == "send-claude-text" else ChatApp.CHATGPT
+    launch_command = _CLAUDE_APP_LAUNCH_COMMAND if app is ChatApp.CLAUDE else None
+    decision = authorize_and_send_text_to_chat_app(
+        app,
+        args.text,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+        desktop_window=AtspiDesktopWindowAdapter(),
+        launch_command=launch_command,
+    )
+    return _CommandOutcome(decision, args.command)
+
+
+def _run_desktop_docker_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch list-docker-containers/stop-docker-container.
+
+    `docker.run_container`/`docker.build_image` are deliberately absent
+    -- see `_add_desktop_parsers`'s own docstring.
+    """
+    if args.command == "list-docker-containers":
+        outcome = authorize_and_list_docker_containers(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(outcome.decision, args.command, docker_containers=outcome.containers)
+
+    decision = authorize_and_stop_docker_container(
+        args.container,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(decision, args.command)
+
+
+def _run_desktop_git_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch git-status/git-create-branch/git-commit/git-push/git-force-push."""
+    if args.command == "git-status":
+        outcome = authorize_and_get_git_status(
+            args.repo_dir,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(outcome.decision, args.command, git_status_text=outcome.status)
+    if args.command == "git-create-branch":
+        decision = authorize_and_create_git_branch(
+            args.repo_dir,
+            args.branch_name,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+    if args.command == "git-commit":
+        decision = authorize_and_commit_git(
+            args.repo_dir,
+            args.message,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+    if args.command == "git-push":
+        decision = authorize_and_push_git(
+            args.repo_dir,
+            args.remote,
+            args.branch,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+
+    decision = authorize_and_force_push_git(
+        args.repo_dir,
+        args.remote,
+        args.branch,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(decision, args.command)
+
+
+_DESKTOP_APP_COMMANDS = (
+    "open-brave-url",
+    "open-vscode-file",
+    "send-claude-text",
+    "send-chatgpt-text",
+)
+_DESKTOP_DOCKER_COMMANDS = ("list-docker-containers", "stop-docker-container")
+_DESKTOP_GIT_COMMANDS = (
+    "git-status",
+    "git-create-branch",
+    "git-commit",
+    "git-push",
+    "git-force-push",
+)
+_ALL_DESKTOP_COMMANDS = _DESKTOP_APP_COMMANDS + _DESKTOP_DOCKER_COMMANDS + _DESKTOP_GIT_COMMANDS
+
+
+def _run_desktop_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Route any of the eleven wired desktop.*/docker.*/git.* commands to its own helper.
+
+    Folds all three desktop-family helpers behind a single branch in
+    :func:`_dispatch_command`, keeping that function's own
+    return-statement count from growing by one per desktop command --
+    the same "split out to keep the caller's own count down" pattern
+    applied one level deeper.
+    """
+    if args.command in _DESKTOP_APP_COMMANDS:
+        return _run_desktop_app_subcommand(args)
+    if args.command in _DESKTOP_DOCKER_COMMANDS:
+        return _run_desktop_docker_subcommand(args)
+    return _run_desktop_git_subcommand(args)
+
+
 @dataclass(frozen=True)
 class _CommandOutcome:
     """Everything main() needs to print, gathered from one dispatched command.
@@ -646,6 +928,8 @@ class _CommandOutcome:
     calendar_event_uid: str | None = None
     reasoning_result_label: str | None = None
     dir_entries: tuple[DirEntry, ...] | None = None
+    docker_containers: tuple[str, ...] | None = None
+    git_status_text: str | None = None
 
 
 def _run_basic_subcommand(args: argparse.Namespace) -> _CommandOutcome:
@@ -674,7 +958,9 @@ def _run_basic_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     return _CommandOutcome(outcome.decision, args.command, content=outcome.content)
 
 
-def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
+def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mirrors this module's flat dispatch shape
+    args: argparse.Namespace,
+) -> _CommandOutcome:
     """Route ``args.command`` to its matching kernel call, gathering everything to print.
 
     Split out from :func:`main` to keep `main` itself under ruff's
@@ -704,6 +990,8 @@ def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
+    if args.command in _ALL_DESKTOP_COMMANDS:
+        return _run_desktop_subcommand(args)
 
     decision = authorize_and_run_music_command(
         MUSIC_COMMAND_NAMES[args.command],
@@ -712,6 +1000,36 @@ def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
         chain_path=args.chain_path,
     )
     return _CommandOutcome(decision, args.command)
+
+
+def _print_outcome(outcome: _CommandOutcome) -> None:
+    """Print every real payload a dispatched command produced, beyond the decision line.
+
+    Split out from :func:`main` purely to keep its own branch count
+    under ruff's `PLR0912` threshold as more optional payload fields
+    are added to `_CommandOutcome` -- the file's own established
+    "split out to keep the caller's own count down" pattern, applied
+    to the print side this time rather than the dispatch side.
+    """
+    if outcome.content is not None:
+        print(outcome.content.value)
+    if outcome.memory_identifier is not None:
+        print(f"identifier: {outcome.memory_identifier}")
+    if outcome.memory_records is not None:
+        for record in outcome.memory_records:
+            print(f"{record.identifier}: {record.value.value}")
+    if outcome.calendar_event_uid is not None:
+        print(f"uid: {outcome.calendar_event_uid}")
+    if outcome.reasoning_result_label is not None:
+        print(f"result: {outcome.reasoning_result_label}")
+    if outcome.dir_entries is not None:
+        for entry in outcome.dir_entries:
+            print(f"{entry.name}{'/' if entry.is_dir else ''}")
+    if outcome.docker_containers is not None:
+        for container in outcome.docker_containers:
+            print(container)
+    if outcome.git_status_text is not None:
+        print(outcome.git_status_text)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -755,18 +1073,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"{outcome.command_label}: {status} (tier={decision.tier.name}, reasons={decision.reasons})"
     )
-    if outcome.content is not None:
-        print(outcome.content.value)
-    if outcome.memory_identifier is not None:
-        print(f"identifier: {outcome.memory_identifier}")
-    if outcome.memory_records is not None:
-        for record in outcome.memory_records:
-            print(f"{record.identifier}: {record.value.value}")
-    if outcome.calendar_event_uid is not None:
-        print(f"uid: {outcome.calendar_event_uid}")
-    if outcome.reasoning_result_label is not None:
-        print(f"result: {outcome.reasoning_result_label}")
-    if outcome.dir_entries is not None:
-        for entry in outcome.dir_entries:
-            print(f"{entry.name}{'/' if entry.is_dir else ''}")
+    _print_outcome(outcome)
     return 0 if decision.granted else 1

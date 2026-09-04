@@ -55,6 +55,7 @@ from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
+from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.job_assistance import DraftOutcome
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
@@ -1690,3 +1691,432 @@ def test_delete_file_subcommand_denied_without_physical_confirmation(
 def test_delete_file_subcommand_requires_path() -> None:
     with pytest.raises(SystemExit):
         main(["delete-file"])
+
+
+_DESKTOP_CONFIRM_OR_ABOVE_INVOCATIONS: tuple[tuple[str, list[str]], ...] = (
+    ("open-brave-url", ["open-brave-url", "https://example.com"]),
+    ("open-vscode-file", ["open-vscode-file", "notes.txt"]),
+    ("send-claude-text", ["send-claude-text", "hello"]),
+    ("send-chatgpt-text", ["send-chatgpt-text", "hello"]),
+    ("stop-docker-container", ["stop-docker-container", "some-container"]),
+    ("git-create-branch", ["git-create-branch", "some-repo", "feature-x"]),
+    ("git-commit", ["git-commit", "some-repo", "a real commit message"]),
+    ("git-push", ["git-push", "some-repo", "origin", "main"]),
+    ("git-force-push", ["git-force-push", "some-repo", "origin", "main"]),
+)
+
+
+@pytest.mark.parametrize(
+    ("command_label", "argv"), _DESKTOP_CONFIRM_OR_ABOVE_INVOCATIONS, ids=lambda p: p[0]
+)
+def test_desktop_confirm_or_above_command_is_denied_with_no_confirmation_flags(
+    command_label: str,  # noqa: ARG001 -- used only for the pytest id, not the test body
+    argv: list[str],
+    tmp_path: Path,
+) -> None:
+    """CLI invocation alone, with no confirmation flag at all, denies every real
+    kernel/desktop.py capability at Tier.CONFIRM or above -- the real, unmocked
+    kernel function is exercised directly (not faked), proving the CLI's own
+    default confirmation flags (both False) do not silently grant anything.
+    Real adapter construction (BraveCliAdapter/GitCliAdapter/etc.) only ever
+    happens inside `if decision.granted:` in kernel/desktop.py itself, so this
+    never touches a real browser, editor, or git/docker binary even though
+    nothing here is mocked."""
+    exit_code = main([*argv, "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert exit_code == 1
+
+
+def test_open_brave_url_subcommand_routes_the_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_open_brave_url(
+        url: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(url)
+        return _make_decision(granted=True, capability_id="desktop.brave_open_url")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_brave_url",
+        fake_authorize_and_open_brave_url,
+    )
+
+    exit_code = main(
+        [
+            "open-brave-url",
+            "https://example.com",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["https://example.com"]
+    assert exit_code == 0
+
+
+def test_open_vscode_file_subcommand_routes_the_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_open_vscode_file(
+        path: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(path)
+        return _make_decision(granted=True, capability_id="desktop.vscode_open_file")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_vscode_file",
+        fake_authorize_and_open_vscode_file,
+    )
+
+    exit_code = main(
+        ["open-vscode-file", "notes.txt", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == ["notes.txt"]
+    assert exit_code == 0
+
+
+def test_send_claude_text_subcommand_routes_the_app_and_text_and_launch_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[ChatApp, str, tuple[str, ...] | None]] = []
+
+    def fake_authorize_and_send_text_to_chat_app(  # noqa: PLR0913 -- mirrors the real signature
+        app: ChatApp,
+        text: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        desktop_window: object,  # noqa: ARG001
+        launch_command: tuple[str, ...] | None,
+    ) -> Decision:
+        received.append((app, text, launch_command))
+        return _make_decision(granted=True, capability_id="desktop.claude_app_send_text")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_send_text_to_chat_app",
+        fake_authorize_and_send_text_to_chat_app,
+    )
+
+    exit_code = main(
+        ["send-claude-text", "hello there", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [(ChatApp.CLAUDE, "hello there", ("claude-desktop",))]
+    assert exit_code == 0
+
+
+def test_send_chatgpt_text_subcommand_routes_with_no_launch_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Unlike Claude, no confirmed real launch command exists for the ChatGPT app --
+    the CLI passes launch_command=None honestly, never a guessed value."""
+    received: list[tuple[ChatApp, str, tuple[str, ...] | None]] = []
+
+    def fake_authorize_and_send_text_to_chat_app(  # noqa: PLR0913 -- mirrors the real signature
+        app: ChatApp,
+        text: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        desktop_window: object,  # noqa: ARG001
+        launch_command: tuple[str, ...] | None,
+    ) -> Decision:
+        received.append((app, text, launch_command))
+        return _make_decision(granted=True, capability_id="desktop.chatgpt_app_send_text")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_send_text_to_chat_app",
+        fake_authorize_and_send_text_to_chat_app,
+    )
+
+    exit_code = main(
+        ["send-chatgpt-text", "hello there", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [(ChatApp.CHATGPT, "hello there", None)]
+    assert exit_code == 0
+
+
+def test_list_docker_containers_subcommand_prints_each_container(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_docker_containers(
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DockerListContainersOutcome:
+        decision = _make_decision(granted=True, capability_id="docker.list_containers")
+        return DockerListContainersOutcome(decision=decision, containers=("web", "db"))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_docker_containers",
+        fake_authorize_and_list_docker_containers,
+    )
+
+    exit_code = main(["list-docker-containers", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "list-docker-containers: GRANTED" in captured.out
+    assert "web" in captured.out
+    assert "db" in captured.out
+    assert exit_code == 0
+
+
+def test_stop_docker_container_subcommand_routes_the_container(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_stop_docker_container(
+        container: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(container)
+        return _make_decision(granted=True, capability_id="docker.stop_container")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_stop_docker_container",
+        fake_authorize_and_stop_docker_container,
+    )
+
+    exit_code = main(
+        [
+            "stop-docker-container",
+            "web",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["web"]
+    assert exit_code == 0
+
+
+def test_git_status_subcommand_prints_the_real_status_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_git_status(
+        repo_dir: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> GitStatusOutcome:
+        decision = _make_decision(granted=True, capability_id="git.status")
+        return GitStatusOutcome(decision=decision, status="On branch main\nnothing to commit")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_get_git_status",
+        fake_authorize_and_get_git_status,
+    )
+
+    exit_code = main(
+        ["git-status", str(tmp_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "git-status: GRANTED" in captured.out
+    assert "On branch main" in captured.out
+    assert exit_code == 0
+
+
+def test_git_create_branch_subcommand_routes_repo_dir_and_branch_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, str]] = []
+
+    def fake_authorize_and_create_git_branch(
+        repo_dir: Path,
+        branch_name: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((repo_dir, branch_name))
+        return _make_decision(granted=True, capability_id="git.create_branch")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_git_branch",
+        fake_authorize_and_create_git_branch,
+    )
+
+    exit_code = main(
+        [
+            "git-create-branch",
+            str(tmp_path),
+            "feature-x",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(tmp_path, "feature-x")]
+    assert exit_code == 0
+
+
+def test_git_commit_subcommand_routes_repo_dir_and_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, str]] = []
+
+    def fake_authorize_and_commit_git(
+        repo_dir: Path,
+        message: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((repo_dir, message))
+        return _make_decision(granted=True, capability_id="git.commit")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_commit_git", fake_authorize_and_commit_git
+    )
+
+    exit_code = main(
+        [
+            "git-commit",
+            str(tmp_path),
+            "a real commit message",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(tmp_path, "a real commit message")]
+    assert exit_code == 0
+
+
+def test_git_push_subcommand_routes_repo_dir_remote_and_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, str, str]] = []
+
+    def fake_authorize_and_push_git(  # noqa: PLR0913 -- mirrors the real signature
+        repo_dir: Path,
+        remote: str,
+        branch: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((repo_dir, remote, branch))
+        return _make_decision(granted=True, capability_id="git.push")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_push_git", fake_authorize_and_push_git
+    )
+
+    exit_code = main(
+        [
+            "git-push",
+            str(tmp_path),
+            "origin",
+            "main",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(tmp_path, "origin", "main")]
+    assert exit_code == 0
+
+
+def test_git_force_push_subcommand_routes_repo_dir_remote_and_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, str, str]] = []
+
+    def fake_authorize_and_force_push_git(  # noqa: PLR0913 -- mirrors the real signature
+        repo_dir: Path,
+        remote: str,
+        branch: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((repo_dir, remote, branch))
+        return _make_decision(granted=True, capability_id="git.force_push")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_force_push_git",
+        fake_authorize_and_force_push_git,
+    )
+
+    exit_code = main(
+        [
+            "git-force-push",
+            str(tmp_path),
+            "origin",
+            "main",
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(tmp_path, "origin", "main")]
+    assert exit_code == 0
+
+
+def test_git_force_push_subcommand_denied_with_only_remote_confirmation(
+    tmp_path: Path,
+) -> None:
+    """The single most important desktop-wiring proof: git.force_push's real
+    Tier.MANUAL_ONLY floor is never satisfiable by --remote-confirmation-available
+    alone through the CLI, exercising the real, unmocked kernel function."""
+    exit_code = main(
+        [
+            "git-force-push",
+            str(tmp_path),
+            "origin",
+            "main",
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_open_brave_url_subcommand_requires_url() -> None:
+    with pytest.raises(SystemExit):
+        main(["open-brave-url"])
+
+
+def test_git_push_subcommand_requires_repo_dir_remote_and_branch() -> None:
+    with pytest.raises(SystemExit):
+        main(["git-push", "some-repo"])
