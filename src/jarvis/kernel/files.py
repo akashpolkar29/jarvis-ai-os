@@ -1,4 +1,23 @@
-"""The composition root for fs.read_file: reading a real, scope-bounded local file.
+"""The composition root for fs.*: read/list/move/delete real, scope-bounded local files.
+
+**Updated 2026-09-04 (ADR-0060, Proposed)**: :func:`authorize_and_list_dir`,
+:func:`authorize_and_move_file`, and :func:`authorize_and_delete_file`
+join :func:`authorize_and_read_file` -- the real file-management gap a
+charter-completeness re-check found. All four reuse the identical
+:func:`_resolve_within_scope` boundary (`allowed_root`, default
+``Path.home()``) -- an allowlist, not a denylist of sensitive
+subpaths, matching this module's own already-established
+"allowlist-over-denylist" posture. `fs.move_file` checks *both*
+`source` and `destination` against that same boundary before anything
+else happens. See ADR-0060's own Context/Decision for the real,
+considered reasoning on why no *additional* protected-path check
+(mirroring ADR-0056's `resolve_protected_patterns`) was added for
+`fs.move_file`/`fs.delete_file` -- in short: that mechanism's own real
+purpose (protecting a coding agent's *target repository* from its own
+writes) does not transfer to general file management, and
+`fs.delete_file`'s own `Tier.MANUAL_ONLY` floor already gives every
+real deletion a live, physical human checkpoint ADR-0056's own
+scenario specifically lacks.
 
 :func:`authorize_and_read_file` follows the same composition-root
 shape as :func:`~jarvis.kernel.music.authorize_and_run_music_command`:
@@ -70,9 +89,16 @@ from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.file_system import LocalFileSystemAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Classification, Provenance, Tainted
-from jarvis.kernel.capabilities import READ_FILE_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.capabilities import (
+    DELETE_FILE_CAPABILITY_ID,
+    LIST_DIR_CAPABILITY_ID,
+    MOVE_FILE_CAPABILITY_ID,
+    READ_FILE_CAPABILITY_ID,
+    build_default_registry,
+)
 
 if TYPE_CHECKING:
+    from jarvis.domain.file_system import DirEntry
     from jarvis.domain.policy import Decision
     from jarvis.ports.file_system import FileSystemPort
 
@@ -219,3 +245,247 @@ def authorize_and_read_file(  # noqa: PLR0913 -- one more than music's 5, for al
         storage.save(chain)
 
     return FileReadOutcome(decision=decision, content=content)
+
+
+@dataclass(frozen=True)
+class DirListOutcome:
+    """The result of one authorize_and_list_dir() call.
+
+    Attributes:
+        decision: The Decision for this listing -- durably appended to
+            the chain regardless of outcome (unless the request never
+            reached authorization at all; see
+            :class:`PathOutsideAllowedScopeError`).
+        entries: Every real entry directly inside the listed
+            directory, tagged with its own provenance, if the decision
+            was granted. ``None`` if denied.
+    """
+
+    decision: Decision
+    entries: tuple[Tainted[DirEntry], ...] | None
+
+
+def authorize_and_list_dir(  # noqa: PLR0913 -- one more than music's 5, for allowed_root/file_system
+    path: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> DirListOutcome:
+    """Wire up the stack, authorize listing ``path``, and list it only if granted.
+
+    Mirrors :func:`authorize_and_read_file` exactly -- see its own
+    docstring for the shared scope-check/argument/return shape.
+
+    Args:
+        path: The directory to list. Resolved and scope-checked before
+            anything else happens.
+        physical_confirmation_available: As above -- threaded through
+            for consistency, though ``fs.list_dir``'s ALLOW tier means
+            it does not affect the outcome.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary. Defaults to the real
+            ``Path.home()``. Overridable for tests.
+        file_system: The port the directory is listed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        A ``DirListOutcome`` -- see its own docstring.
+
+    Raises:
+        PathOutsideAllowedScopeError: If ``path`` resolves outside
+            ``allowed_root``. Raised before authorization runs.
+        FileNotFoundError: If a granted listing's path does not exist.
+        NotADirectoryError: If a granted listing's path is not a directory.
+        PermissionError: If a granted listing's path cannot be listed.
+    """
+    resolved_path = _resolve_within_scope(path, allowed_root or Path.home())
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        LIST_DIR_CAPABILITY_ID,
+        Tainted({"path": str(resolved_path)}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    entries: tuple[Tainted[DirEntry], ...] | None = None
+    try:
+        if decision.granted:
+            lister = file_system if file_system is not None else LocalFileSystemAdapter()
+            raw_entries = lister.list_dir(resolved_path)
+            entries = tuple(
+                Tainted(
+                    entry,
+                    Provenance.external(
+                        source=str(resolved_path / entry.name),
+                        classification=Classification.SENSITIVE,
+                    ),
+                )
+                for entry in raw_entries
+            )
+    finally:
+        storage.save(chain)
+
+    return DirListOutcome(decision=decision, entries=entries)
+
+
+def authorize_and_move_file(  # noqa: PLR0913 -- one per composition-function pass-through
+    source: Path,
+    destination: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize moving ``source`` to ``destination``, and move only if granted.
+
+    Args:
+        source: The real file or directory to move. Resolved and
+            scope-checked before anything else happens.
+        destination: Where to move it to. Resolved and scope-checked
+            the identical way -- a real move must stay entirely within
+            ``allowed_root`` at both ends, not just at the source.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary. Defaults to the real
+            ``Path.home()``. Overridable for tests.
+        file_system: The port the move is performed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        The real ``Decision`` -- already durably appended to the
+        injected ``AuditChain`` by the time this returns. The real
+        move happens only if ``granted``.
+
+    Raises:
+        PathOutsideAllowedScopeError: If ``source`` or ``destination``
+            resolves outside ``allowed_root``. Raised before
+            authorization runs, for either path.
+        FileNotFoundError: If a granted move's source does not exist.
+        PermissionError: If a granted move cannot access either path.
+        OSError: For other real, underlying filesystem failures.
+    """
+    resolved_root = allowed_root or Path.home()
+    resolved_source = _resolve_within_scope(source, resolved_root)
+    resolved_destination = _resolve_within_scope(destination, resolved_root)
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MOVE_FILE_CAPABILITY_ID,
+        Tainted(
+            {"source": str(resolved_source), "destination": str(resolved_destination)},
+            Provenance.user(),
+        ),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            mover = file_system if file_system is not None else LocalFileSystemAdapter()
+            mover.move(resolved_source, resolved_destination)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_delete_file(  # noqa: PLR0913 -- one more than music's 5, for allowed_root/file_system
+    path: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize permanently deleting ``path``, and delete only if granted.
+
+    ``fs.delete_file`` floors at ``Tier.MANUAL_ONLY`` (ADR-0060) --
+    never satisfiable by remote confirmation alone, mirroring
+    ``git.force_push``/``memory.forget``.
+
+    Args:
+        path: The real file to delete. Resolved and scope-checked
+            before anything else happens. Files only -- see
+            ``ports/file_system.py``'s own module docstring for why
+            recursive directory deletion is out of scope.
+        physical_confirmation_available: Whether a human is physically
+            present -- the only channel that can grant this call.
+        remote_confirmation_available: Threaded through for
+            consistency; never sufficient alone for this capability.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary. Defaults to the real
+            ``Path.home()``. Overridable for tests.
+        file_system: The port the deletion is performed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        The real ``Decision`` -- already durably appended to the
+        injected ``AuditChain`` by the time this returns. The real,
+        permanent deletion happens only if ``granted``.
+
+    Raises:
+        PathOutsideAllowedScopeError: If ``path`` resolves outside
+            ``allowed_root``. Raised before authorization runs.
+        FileNotFoundError: If a granted deletion's path does not exist.
+        IsADirectoryError: If a granted deletion's path is a directory.
+        PermissionError: If a granted deletion's path cannot be deleted.
+    """
+    resolved_path = _resolve_within_scope(path, allowed_root or Path.home())
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        DELETE_FILE_CAPABILITY_ID,
+        Tainted({"path": str(resolved_path)}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            deleter = file_system if file_system is not None else LocalFileSystemAdapter()
+            deleter.delete(resolved_path)
+    finally:
+        storage.save(chain)
+
+    return decision

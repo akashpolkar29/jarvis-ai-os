@@ -17,6 +17,6 @@ def test_an_object_missing_read_text_does_not_satisfy_file_system_port() -> None
     """The isinstance check is meaningful: it actually rejects non-conforming objects."""
 
     class NotAFileSystemSource:
-        """Deliberately lacks read_text()."""
+        """Deliberately lacks read_text()/list_dir()/move()/delete()."""
 
     assert isinstance(NotAFileSystemSource(), FileSystemPort) is False

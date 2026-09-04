@@ -47,6 +47,9 @@ MUSIC_PAUSE_CAPABILITY_ID = CapabilityId("music.pause")
 MUSIC_NEXT_CAPABILITY_ID = CapabilityId("music.next")
 MUSIC_PREVIOUS_CAPABILITY_ID = CapabilityId("music.previous")
 READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
+LIST_DIR_CAPABILITY_ID = CapabilityId("fs.list_dir")
+MOVE_FILE_CAPABILITY_ID = CapabilityId("fs.move_file")
+DELETE_FILE_CAPABILITY_ID = CapabilityId("fs.delete_file")
 DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
 DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file")
 DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.claude_app_send_text")
@@ -134,6 +137,39 @@ def build_default_registry() -> CapabilityRegistry:
             id=READ_FILE_CAPABILITY_ID,
             effects=Effect.EGRESS_LOCAL,
             description="Read a local file's contents, scoped to the allowed root.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=LIST_DIR_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "List a local directory's real entries, scoped to the allowed root. Same "
+                "EGRESS_LOCAL/ALLOW floor as fs.read_file -- listing names is no more "
+                "sensitive than reading one file's content (ADR-0060)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MOVE_FILE_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description=(
+                "Move a real local file or directory, both endpoints scoped to the allowed "
+                "root. An ordinary local write -- mirrors the attendee-less-calendar-event "
+                "precedent exactly, nothing leaves the machine (ADR-0060)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=DELETE_FILE_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.IRREVERSIBLE,
+            description=(
+                "Permanently delete a single real local file, scoped to the allowed root. "
+                "No undo -- the same 'no built-in recovery' finality as git.force_push/"
+                "memory.forget -- always MANUAL_ONLY (ADR-0060)."
+            ),
         )
     )
 

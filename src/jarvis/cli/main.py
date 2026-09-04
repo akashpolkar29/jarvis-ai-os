@@ -128,7 +128,13 @@ from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
     authorize_and_send_email,
 )
-from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
+from jarvis.kernel.files import (
+    PathOutsideAllowedScopeError,
+    authorize_and_delete_file,
+    authorize_and_list_dir,
+    authorize_and_move_file,
+    authorize_and_read_file,
+)
 from jarvis.kernel.job_assistance import authorize_and_draft_document
 from jarvis.kernel.memory import (
     authorize_and_forget,
@@ -147,6 +153,7 @@ from jarvis.ports.secret import SecretNotFoundError
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from jarvis.domain.file_system import DirEntry
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
     from jarvis.domain.provenance import Tainted
@@ -279,6 +286,34 @@ def _add_reasoning_parsers(
     _add_common_flags(draft_parser)
 
 
+def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the list-dir/move-file/delete-file subparsers (ADR-0060).
+
+    All three use the real default `allowed_root` (`Path.home()`) --
+    no CLI flag overrides it, mirroring `fs.read_file`'s own existing
+    `authorize_and_read_file` precedent exactly (no `--allowed-root`
+    flag exists for `read` either).
+    """
+    list_dir_parser = subparsers.add_parser(
+        "list-dir", help="List a real local directory's entries, scoped to the allowed root."
+    )
+    list_dir_parser.add_argument("path", type=Path, help="The real directory to list.")
+    _add_common_flags(list_dir_parser)
+
+    move_file_parser = subparsers.add_parser(
+        "move-file", help="Move a real local file or directory, both endpoints scope-checked."
+    )
+    move_file_parser.add_argument("source", type=Path, help="The real file/directory to move.")
+    move_file_parser.add_argument("destination", type=Path, help="Where to move it to.")
+    _add_common_flags(move_file_parser)
+
+    delete_file_parser = subparsers.add_parser(
+        "delete-file", help="Permanently delete a single real local file. Always MANUAL_ONLY."
+    )
+    delete_file_parser.add_argument("path", type=Path, help="The real file to delete.")
+    _add_common_flags(delete_file_parser)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser: one subcommand per authorizable command."""
     parser = argparse.ArgumentParser(
@@ -338,6 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _add_communications_parsers(subparsers)
     _add_reasoning_parsers(subparsers)
+    _add_file_parsers(subparsers)
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -548,6 +584,48 @@ def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str |
     return draft_outcome.decision, (str(draft_outcome.path) if draft_outcome.path else None)
 
 
+def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirEntry, ...] | None]:
+    """Dispatch ``list-dir``/``move-file``/``delete-file``, returning (decision, dir_entries).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_reasoning_subcommand` is. Unlike the communications/
+    reasoning helpers, all three `kernel/files.py` composition
+    functions are plain sync calls (no I/O awaited), so this needs no
+    `asyncio.run` wrapping. Only ``list-dir`` ever returns real
+    entries; the other two return ``None`` there.
+    """
+    if args.command == "list-dir":
+        outcome = authorize_and_list_dir(
+            args.path,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        entries = (
+            tuple(tainted.value for tainted in outcome.entries)
+            if outcome.entries is not None
+            else None
+        )
+        return outcome.decision, entries
+    if args.command == "move-file":
+        decision = authorize_and_move_file(
+            args.source,
+            args.destination,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return decision, None
+
+    decision = authorize_and_delete_file(
+        args.path,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return decision, None
+
+
 @dataclass(frozen=True)
 class _CommandOutcome:
     """Everything main() needs to print, gathered from one dispatched command.
@@ -567,6 +645,33 @@ class _CommandOutcome:
     memory_records: tuple[MemoryRecord, ...] | None = None
     calendar_event_uid: str | None = None
     reasoning_result_label: str | None = None
+    dir_entries: tuple[DirEntry, ...] | None = None
+
+
+def _run_basic_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch ``ping``/``read``, the two commands with no dedicated subcommand family.
+
+    Split out from :func:`_dispatch_command` purely to keep its own
+    return-statement count under ruff's `PLR0911` threshold as more
+    subcommand families are added -- the file's own established
+    "split out to keep the caller's own count down" pattern, applied
+    one level deeper this time.
+    """
+    if args.command == "ping":
+        decision = authorize_ping(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(decision, args.command)
+
+    outcome = authorize_and_read_file(
+        args.path,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(outcome.decision, args.command, content=outcome.content)
 
 
 def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
@@ -578,21 +683,8 @@ def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
     pattern `_run_memory_subcommand`/`_run_communications_subcommand`/
     `_run_reasoning_subcommand` already establish one level down.
     """
-    if args.command == "ping":
-        decision = authorize_ping(
-            physical_confirmation_available=args.physical_confirmation_available,
-            remote_confirmation_available=args.remote_confirmation_available,
-            chain_path=args.chain_path,
-        )
-        return _CommandOutcome(decision, args.command)
-    if args.command == "read":
-        outcome = authorize_and_read_file(
-            args.path,
-            physical_confirmation_available=args.physical_confirmation_available,
-            remote_confirmation_available=args.remote_confirmation_available,
-            chain_path=args.chain_path,
-        )
-        return _CommandOutcome(outcome.decision, args.command, content=outcome.content)
+    if args.command in ("ping", "read"):
+        return _run_basic_subcommand(args)
     if args.command == "memory":
         decision, memory_identifier, memory_records = _run_memory_subcommand(args)
         return _CommandOutcome(
@@ -609,6 +701,9 @@ def _dispatch_command(args: argparse.Namespace) -> _CommandOutcome:
         return _CommandOutcome(
             decision, args.command, reasoning_result_label=reasoning_result_label
         )
+    if args.command in ("list-dir", "move-file", "delete-file"):
+        decision, dir_entries = _run_file_subcommand(args)
+        return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
 
     decision = authorize_and_run_music_command(
         MUSIC_COMMAND_NAMES[args.command],
@@ -671,4 +766,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:
         print(f"result: {outcome.reasoning_result_label}")
+    if outcome.dir_entries is not None:
+        for entry in outcome.dir_entries:
+            print(f"{entry.name}{'/' if entry.is_dir else ''}")
     return 0 if decision.granted else 1

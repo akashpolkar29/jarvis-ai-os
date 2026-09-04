@@ -1,4 +1,4 @@
-"""Unit tests for jarvis.kernel.files.authorize_and_read_file.
+"""Unit tests for jarvis.kernel.files's authorize_and_* composition-root functions.
 
 allowed_root is always overridden to tmp_path here -- the real default
 (Path.home()) is only used by the CLI in real invocations. A stub
@@ -15,8 +15,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.domain.file_system import DirEntry
 from jarvis.domain.provenance import Classification, Trust
-from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
+from jarvis.kernel.files import (
+    PathOutsideAllowedScopeError,
+    authorize_and_delete_file,
+    authorize_and_list_dir,
+    authorize_and_move_file,
+    authorize_and_read_file,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,28 +33,59 @@ _TWO_INVOCATIONS = 2
 
 
 class _StubFileSystem:
-    """A FileSystemPort test double that records every read_text() call."""
+    """A FileSystemPort test double that records every real call it receives."""
 
-    def __init__(self, content: str = "") -> None:
-        """Start with an empty call log, returning `content` from every read."""
+    def __init__(self, content: str = "", entries: tuple[DirEntry, ...] = ()) -> None:
+        """Start with an empty call log, returning `content`/`entries` from reads/lists."""
         self.calls: list[Path] = []
+        self.move_calls: list[tuple[Path, Path]] = []
+        self.delete_calls: list[Path] = []
         self._content = content
+        self._entries = entries
 
     def read_text(self, path: Path) -> str:
         """Record the call and return the fixed content."""
         self.calls.append(path)
         return self._content
 
+    def list_dir(self, path: Path) -> tuple[DirEntry, ...]:
+        """Record the call and return the fixed entries."""
+        self.calls.append(path)
+        return self._entries
+
+    def move(self, source: Path, destination: Path) -> None:
+        """Record the call."""
+        self.move_calls.append((source, destination))
+
+    def delete(self, path: Path) -> None:
+        """Record the call."""
+        self.delete_calls.append(path)
+
 
 class _RaisingFileSystem:
-    """A FileSystemPort test double whose read_text() always raises."""
+    """A FileSystemPort test double every real method of which always raises."""
 
     def __init__(self, exc: Exception) -> None:
-        """Store the exception every read_text() call raises."""
+        """Store the exception every real call raises."""
         self.calls: list[Path] = []
         self._exc = exc
 
     def read_text(self, path: Path) -> str:
+        """Record the call, then raise."""
+        self.calls.append(path)
+        raise self._exc
+
+    def list_dir(self, path: Path) -> tuple[DirEntry, ...]:
+        """Record the call, then raise."""
+        self.calls.append(path)
+        raise self._exc
+
+    def move(self, source: Path, _destination: Path) -> None:
+        """Record the call, then raise."""
+        self.calls.append(source)
+        raise self._exc
+
+    def delete(self, path: Path) -> None:
         """Record the call, then raise."""
         self.calls.append(path)
         raise self._exc
@@ -224,3 +262,159 @@ def test_state_persists_across_separate_calls_against_the_same_path(tmp_path: Pa
     chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert len(chain) == _TWO_INVOCATIONS
     assert chain.verify().valid is True
+
+
+def test_list_dir_returns_tainted_entries_when_granted(tmp_path: Path) -> None:
+    entries = (DirEntry(name="a.txt", is_dir=False), DirEntry(name="subdir", is_dir=True))
+    file_system = _StubFileSystem(entries=entries)
+
+    outcome = authorize_and_list_dir(
+        tmp_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=file_system,
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.entries is not None
+    assert [e.value.name for e in outcome.entries] == ["a.txt", "subdir"]
+    assert outcome.entries[0].provenance.trust == Trust.UNTRUSTED_EXTERNAL
+    assert outcome.entries[0].provenance.classification == Classification.SENSITIVE
+
+
+def test_list_dir_out_of_scope_path_is_rejected_and_never_touches_the_filesystem(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    outside_dir = tmp_path_factory.mktemp("outside")
+    file_system = _StubFileSystem()
+
+    with pytest.raises(PathOutsideAllowedScopeError):
+        authorize_and_list_dir(
+            outside_dir,
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=tmp_path / "audit_chain.json",
+            allowed_root=tmp_path,
+            file_system=file_system,
+        )
+
+    assert file_system.calls == []
+
+
+def test_move_file_relocates_when_granted(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "destination.txt"
+    file_system = _StubFileSystem()
+
+    decision = authorize_and_move_file(
+        source,
+        destination,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=file_system,
+    )
+
+    assert decision.granted is True
+    assert file_system.move_calls == [(source.resolve(), destination.resolve())]
+
+
+def test_move_file_denied_never_touches_the_filesystem(tmp_path: Path) -> None:
+    """fs.move_file floors WRITE_LOCAL/CONFIRM -- no confirmation channel means denied."""
+    file_system = _StubFileSystem()
+
+    decision = authorize_and_move_file(
+        tmp_path / "source.txt",
+        tmp_path / "destination.txt",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=file_system,
+    )
+
+    assert decision.granted is False
+    assert file_system.move_calls == []
+
+
+def test_move_file_rejects_an_out_of_scope_destination(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Both endpoints are scope-checked -- an in-scope source with an out-of-scope destination fails."""  # noqa: E501
+    outside_dir = tmp_path_factory.mktemp("outside")
+    source = tmp_path / "source.txt"
+    file_system = _StubFileSystem()
+
+    with pytest.raises(PathOutsideAllowedScopeError):
+        authorize_and_move_file(
+            source,
+            outside_dir / "destination.txt",
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=tmp_path / "audit_chain.json",
+            allowed_root=tmp_path,
+            file_system=file_system,
+        )
+
+    assert file_system.move_calls == []
+
+
+def test_delete_file_removes_when_granted(tmp_path: Path) -> None:
+    path = tmp_path / "note.txt"
+    file_system = _StubFileSystem()
+
+    decision = authorize_and_delete_file(
+        path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=file_system,
+    )
+
+    assert decision.granted is True
+    assert file_system.delete_calls == [path.resolve()]
+
+
+def test_delete_file_denied_without_physical_confirmation_never_touches_the_filesystem(
+    tmp_path: Path,
+) -> None:
+    """The single most important property this ADR-0060 capability exists to guarantee:
+    fs.delete_file (Tier.MANUAL_ONLY) is denied whenever physical_confirmation_available
+    is False, remote confirmation notwithstanding -- mirroring ADR-0059's own identical
+    property test shape for email-send/attended-calendar-event creation."""
+    file_system = _StubFileSystem()
+
+    decision = authorize_and_delete_file(
+        tmp_path / "note.txt",
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=file_system,
+    )
+
+    assert decision.granted is False
+    assert file_system.delete_calls == []
+
+
+def test_delete_file_out_of_scope_path_is_rejected_and_never_touches_the_filesystem(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    outside_dir = tmp_path_factory.mktemp("outside")
+    file_system = _StubFileSystem()
+
+    with pytest.raises(PathOutsideAllowedScopeError):
+        authorize_and_delete_file(
+            outside_dir / "secret.txt",
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=tmp_path / "audit_chain.json",
+            allowed_root=tmp_path,
+            file_system=file_system,
+        )
+
+    assert file_system.delete_calls == []

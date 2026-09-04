@@ -50,11 +50,12 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
-from jarvis.kernel.files import FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.job_assistance import DraftOutcome
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
@@ -1483,3 +1484,209 @@ def test_draft_subcommand_denied_prints_no_result_line(
 def test_draft_subcommand_requires_task() -> None:
     with pytest.raises(SystemExit):
         main(["draft"])
+
+
+def test_list_dir_subcommand_routes_the_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[Path] = []
+    dir_path = tmp_path / "some_dir"
+
+    def fake_authorize_and_list_dir(
+        path: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DirListOutcome:
+        received.append(path)
+        decision = _make_decision(granted=True, capability_id="fs.list_dir")
+        provenance = Provenance.external(str(path / "note.txt"), Classification.SENSITIVE)
+        entries = (Tainted(DirEntry(name="note.txt", is_dir=False), provenance),)
+        return DirListOutcome(decision=decision, entries=entries)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_dir", fake_authorize_and_list_dir
+    )
+
+    exit_code = main(
+        ["list-dir", str(dir_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [dir_path]
+    assert exit_code == 0
+
+
+def test_list_dir_subcommand_prints_each_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_dir(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DirListOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.list_dir")
+        provenance = Provenance.external("x", Classification.SENSITIVE)
+        entries = (
+            Tainted(DirEntry(name="note.txt", is_dir=False), provenance),
+            Tainted(DirEntry(name="subdir", is_dir=True), provenance),
+        )
+        return DirListOutcome(decision=decision, entries=entries)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_dir", fake_authorize_and_list_dir
+    )
+
+    exit_code = main(
+        ["list-dir", str(tmp_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "list-dir: GRANTED" in captured.out
+    assert "note.txt" in captured.out
+    assert "subdir/" in captured.out
+    assert exit_code == 0
+
+
+def test_list_dir_subcommand_denied_prints_no_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_dir(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DirListOutcome:
+        decision = _make_decision(granted=False, capability_id="fs.list_dir")
+        return DirListOutcome(decision=decision, entries=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_dir", fake_authorize_and_list_dir
+    )
+
+    exit_code = main(
+        ["list-dir", str(tmp_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "list-dir: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_list_dir_subcommand_requires_path() -> None:
+    with pytest.raises(SystemExit):
+        main(["list-dir"])
+
+
+def test_move_file_subcommand_routes_source_and_destination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, Path]] = []
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "destination.txt"
+
+    def fake_authorize_and_move_file(
+        move_source: Path,
+        move_destination: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((move_source, move_destination))
+        return _make_decision(granted=True, capability_id="fs.move_file")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_move_file", fake_authorize_and_move_file
+    )
+
+    exit_code = main(
+        [
+            "move-file",
+            str(source),
+            str(destination),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(source, destination)]
+    assert exit_code == 0
+
+
+def test_move_file_subcommand_requires_source_and_destination() -> None:
+    with pytest.raises(SystemExit):
+        main(["move-file", "only-one-path"])
+
+
+def test_delete_file_subcommand_routes_the_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[Path] = []
+    target = tmp_path / "note.txt"
+
+    def fake_authorize_and_delete_file(
+        path: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(path)
+        return _make_decision(granted=True, capability_id="fs.delete_file")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_delete_file",
+        fake_authorize_and_delete_file,
+    )
+
+    exit_code = main(
+        ["delete-file", str(target), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [target]
+    assert exit_code == 0
+
+
+def test_delete_file_subcommand_denied_without_physical_confirmation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fs.delete_file's Tier.MANUAL_ONLY floor -- remote confirmation alone is never enough."""
+
+    def fake_authorize_and_delete_file(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False, capability_id="fs.delete_file")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_delete_file",
+        fake_authorize_and_delete_file,
+    )
+
+    exit_code = main(
+        [
+            "delete-file",
+            str(tmp_path / "note.txt"),
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "delete-file: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_delete_file_subcommand_requires_path() -> None:
+    with pytest.raises(SystemExit):
+        main(["delete-file"])

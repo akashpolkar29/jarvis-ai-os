@@ -10,6 +10,7 @@ from jarvis.kernel.capabilities import (
     BROWSER_SCREENSHOT_CAPABILITY_ID,
     CALENDAR_LIST_EVENTS_CAPABILITY_ID,
     CODING_RUN_TASK_CAPABILITY_ID,
+    DELETE_FILE_CAPABILITY_ID,
     DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
     DESKTOP_CHATGPT_APP_SEND_TEXT_CAPABILITY_ID,
     DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
@@ -25,9 +26,11 @@ from jarvis.kernel.capabilities import (
     GIT_FORCE_PUSH_CAPABILITY_ID,
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
+    LIST_DIR_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
+    MOVE_FILE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
     MUSIC_PLAY_CAPABILITY_ID,
@@ -38,7 +41,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 31
+_EXPECTED_CAPABILITY_COUNT = 34
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -64,6 +67,9 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         MUSIC_NEXT_CAPABILITY_ID,
         MUSIC_PREVIOUS_CAPABILITY_ID,
         READ_FILE_CAPABILITY_ID,
+        LIST_DIR_CAPABILITY_ID,
+        MOVE_FILE_CAPABILITY_ID,
+        DELETE_FILE_CAPABILITY_ID,
         DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
         DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
         DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID,
@@ -237,6 +243,29 @@ def test_read_file_has_egress_local_effects() -> None:
     registry = build_default_registry()
 
     assert registry.get(READ_FILE_CAPABILITY_ID).effects == Effect.EGRESS_LOCAL
+
+
+def test_list_dir_has_egress_local_effects() -> None:
+    """fs.list_dir mirrors fs.read_file's own EGRESS_LOCAL/ALLOW floor exactly (ADR-0060)."""
+    registry = build_default_registry()
+
+    assert registry.get(LIST_DIR_CAPABILITY_ID).effects == Effect.EGRESS_LOCAL
+
+
+def test_move_file_has_write_local_effects() -> None:
+    """fs.move_file floors WRITE_LOCAL/CONFIRM, the ordinary local-write floor (ADR-0060)."""
+    registry = build_default_registry()
+
+    assert registry.get(MOVE_FILE_CAPABILITY_ID).effects == Effect.WRITE_LOCAL
+
+
+def test_delete_file_has_destructive_irreversible_effects() -> None:
+    """fs.delete_file always floors MANUAL_ONLY, mirroring git.force_push/memory.forget (ADR-0060)."""  # noqa: E501
+    registry = build_default_registry()
+
+    assert (
+        registry.get(DELETE_FILE_CAPABILITY_ID).effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
+    )
 
 
 def test_memory_retrieve_has_read_local_effects() -> None:
