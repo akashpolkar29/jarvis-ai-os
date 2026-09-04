@@ -281,6 +281,40 @@ async def test_a_recognized_read_command_speaks_the_file_content_when_granted(
     assert tts.spoken == ["hello from a test file"]
 
 
+async def test_a_read_command_outside_the_allowed_root_speaks_an_honest_error_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """A real resilience regression (property-matrix/fuzzing/concurrency pass, Track 2, 2026-09-04).
+
+    Before this fix, _handle_utterance had no exception handling
+    around _authorize_and_execute at all -- unlike jarvis.cli.main's
+    identical dispatch, which already catches this exact error.
+    PathOutsideAllowedScopeError from authorize_and_read_file's own
+    scope check would previously propagate uncaught out of
+    run_voice_loop entirely, ending the whole voice loop after a
+    single out-of-scope "read" command rather than just failing that
+    one utterance. Proves the loop now completes and speaks a clean,
+    honest error instead.
+    """
+    outside_target = tmp_path.parent / "definitely-outside.txt"
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort(f"read {outside_target}"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert len(tts.spoken) == 1
+    assert tts.spoken[0].startswith("Sorry, that failed:")
+
+
 class _FakeEmbeddingPort:
     """Maps every text to the same vector, touching no real model download."""
 

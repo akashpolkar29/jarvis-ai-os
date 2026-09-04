@@ -160,6 +160,8 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from jarvis.adapters.calendar import CalendarEventCreationError
+from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.speaker_id import UnverifiedSpeakerIdAdapter
 from jarvis.adapters.stt import FasterWhisperAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
@@ -170,6 +172,7 @@ from jarvis.application.communications.writer import (
     EMAIL_SEND_CAPABILITY_ID,
 )
 from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
+from jarvis.domain.errors import JarvisError
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
@@ -181,11 +184,15 @@ from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
     authorize_and_send_email,
 )
-from jarvis.kernel.files import authorize_and_read_file
+from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
+from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
+from jarvis.ports.memory_write import MemoryRecordNotFoundError
+from jarvis.ports.retrieval import MemoryIntegrityViolationError
+from jarvis.ports.secret import SecretNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -486,20 +493,47 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         prompt, confirmation_timeout_s
     )
 
-    response_text = await _authorize_and_execute(
-        resolved,
-        approved=approved,
-        chain_path=chain_path,
-        allowed_root=allowed_root,
-        file_system=file_system,
-        media_player=media_player,
-        database_path=database_path,
-        embedding_port=embedding_port,
-        coding_target_repo=coding_target_repo,
-        coding_dispatcher_factory=coding_dispatcher_factory,
-        email_port=email_port,
-        calendar_port=calendar_port,
-    )
+    try:
+        response_text = await _authorize_and_execute(
+            resolved,
+            approved=approved,
+            chain_path=chain_path,
+            allowed_root=allowed_root,
+            file_system=file_system,
+            media_player=media_player,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            coding_target_repo=coding_target_repo,
+            coding_dispatcher_factory=coding_dispatcher_factory,
+            email_port=email_port,
+            calendar_port=calendar_port,
+        )
+    except (
+        JarvisError,
+        PathOutsideAllowedScopeError,
+        NoMediaPlayerRunningError,
+        MediaPlayerCommandFailedError,
+        MemoryRecordNotFoundError,
+        UnsupportedMemoryValueError,
+        MemoryIntegrityViolationError,
+        SecretNotFoundError,
+        CalendarEventCreationError,
+        OSError,
+        UnicodeDecodeError,
+        KeyError,
+        ValueError,
+    ) as exc:
+        # A real resilience gap, found by fuzzing (property-matrix/
+        # fuzzing/concurrency pass, Track 2, 2026-09-04): this call
+        # site had no exception handling at all, unlike
+        # jarvis.cli.main's own identical dispatch, which already
+        # catches exactly this exception set. An unhandled exception
+        # here (e.g. a malformed path resolving to a raw ValueError
+        # from pathlib) would crash run_voice_loop's entire async
+        # loop after a single bad command, not just fail that one
+        # utterance -- mirrors cli/main.py's own except tuple so both
+        # entry points fail exactly the same way for the same errors.
+        response_text = f"Sorry, that failed: {exc}"
     await _speak(tts, play_fn, response_text)
 
 
