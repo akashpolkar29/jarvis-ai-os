@@ -57,6 +57,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import threading
 from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -268,7 +269,25 @@ class ChainVerificationResult:
 
 
 class AuditChain:
-    """An append-only, hash-chained sequence of AuditRecords."""
+    """An append-only, hash-chained sequence of AuditRecords.
+
+    :meth:`append` is internally locked (a plain ``threading.Lock``,
+    stdlib-only -- compatible with this ring's own "no I/O, no async,
+    no wall-clock/randomness" constraint) so two concurrent callers
+    sharing one ``AuditChain`` instance can never both read the same
+    pre-append ``sequence``/``previous_hash`` state. Found by a real,
+    deterministic concurrency test (property-matrix/fuzzing/
+    concurrency pass, Track 3, 2026-09-04): without this lock, two
+    threads racing on the same instance could both compute
+    ``sequence=0``, producing two audit records that both claim the
+    same position in the chain -- a real, reproducible hash-chain
+    corruption, not a hypothetical one. This closes the in-process
+    version of that gap; the separate, cross-process case (two
+    independent OS processes each holding their own ``AuditChain``,
+    both writing to the same ``JsonFileAuditStorageAdapter`` file) is
+    a different, larger problem this lock cannot and does not solve --
+    see ``docs/threat-model/v0.md``'s own note on that.
+    """
 
     def __init__(self, records: Iterable[AuditRecord] = ()) -> None:
         """Build a chain from an existing sequence of records (default: empty).
@@ -280,12 +299,17 @@ class AuditChain:
             records: The records to initialize the chain with, in order.
         """
         self._records: list[AuditRecord] = list(records)
+        self._lock = threading.Lock()
 
     def append(self, decision: Decision) -> AuditRecord:
         """Append a new record for ``decision`` and return it.
 
         The only way a record enters the chain -- there is no way to
-        insert, edit, or remove one afterward.
+        insert, edit, or remove one afterward. Thread-safe: the whole
+        read-compute-append sequence runs under this instance's own
+        lock, so two concurrent callers can never race each other into
+        computing the same ``sequence``/``previous_hash`` (see this
+        class's own docstring).
 
         Args:
             decision: The Decision to record.
@@ -293,17 +317,20 @@ class AuditChain:
         Returns:
             The newly-appended AuditRecord.
         """
-        sequence = len(self._records)
-        previous_hash = self._records[-1].record_hash if self._records else GENESIS_PREVIOUS_HASH
-        record_hash = _compute_record_hash(sequence, decision, previous_hash)
-        record = AuditRecord(
-            sequence=sequence,
-            decision=decision,
-            previous_hash=previous_hash,
-            record_hash=record_hash,
-        )
-        self._records.append(record)
-        return record
+        with self._lock:
+            sequence = len(self._records)
+            previous_hash = (
+                self._records[-1].record_hash if self._records else GENESIS_PREVIOUS_HASH
+            )
+            record_hash = _compute_record_hash(sequence, decision, previous_hash)
+            record = AuditRecord(
+                sequence=sequence,
+                decision=decision,
+                previous_hash=previous_hash,
+                record_hash=record_hash,
+            )
+            self._records.append(record)
+            return record
 
     def verify(self) -> ChainVerificationResult:
         """Walk the whole chain, checking sequence, linkage, and self-consistency.

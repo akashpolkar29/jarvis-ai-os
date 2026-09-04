@@ -10,6 +10,7 @@ network/hardware-dependent adapters.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, ClassVar
 
@@ -406,3 +407,35 @@ def test_provenance_is_carried_forward_unchanged() -> None:
     results = adapter.retrieve("tabs query", limit=1)
 
     assert results[0].value.provenance == original.provenance
+
+
+def test_using_the_same_adapter_from_a_second_thread_fails_closed_not_silently_corrupted() -> None:
+    """Real concurrency investigation, property-matrix/fuzzing/concurrency Track 3, 2026-09-04.
+
+    ``sqlite3.connect()`` defaults to ``check_same_thread=True``, so a
+    ``SqliteMemoryAdapter`` instance -- like every adapter in this
+    project, constructed once per process, never shared across threads
+    by any real caller -- fails loudly and safely if it ever is: a
+    real, typed ``sqlite3.ProgrammingError``, not silent data
+    corruption or a hang. Confirmed directly rather than assumed from
+    documentation. No fix needed: this is Python's own stdlib safety
+    net operating exactly as intended, and this project's own real
+    usage pattern (one adapter instance, one process, no concurrent
+    caller anywhere in the current call graph) never exercises the
+    cross-thread path this default exists to guard against.
+    """
+    adapter = _adapter()
+    errors: list[BaseException] = []
+
+    def _write_from_another_thread() -> None:
+        try:
+            adapter.write(_value("tabs"))
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=_write_from_another_thread)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], sqlite3.ProgrammingError)

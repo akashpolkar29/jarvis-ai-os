@@ -240,3 +240,70 @@ def test_save_overwrites_a_previous_save(tmp_path: Path) -> None:
     loaded = adapter.load()
 
     assert len(loaded) == 0
+
+
+def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_writers_record(
+    tmp_path: Path,
+) -> None:
+    """A real, deliberately-caused cross-process lost-write race -- confirmed, not fixed.
+
+    Real concurrency investigation (property-matrix/fuzzing/concurrency
+    pass, Track 3, 2026-09-04). Two independent AuditChain +
+    JsonFileAuditStorageAdapter pairs -- standing in for two separate
+    real OS processes, e.g. the CLI invoked twice concurrently against
+    the same --chain-path, or the CLI and a running voice loop both
+    targeting the same file -- both load() the same starting chain,
+    both append() their own new decision, then save() in sequence.
+    Because save() always overwrites the whole file (this module's own
+    docstring already documents "not handled here: atomic writes" as a
+    known scope limit), the second save() completely replaces the
+    first's -- the first writer's own new record is not merged, not
+    detected as a conflict, and not present anywhere in the final
+    file. verify() on the final loaded chain still reports valid=True:
+    the surviving chain is internally coherent, so this loss is
+    invisible to the one integrity check this codebase already has.
+
+    Deliberately NOT fixed here: unlike the in-process AuditChain.append()
+    race this same pass found and fixed with an internal lock, closing
+    this cross-process gap for real would mean changing
+    AuditStoragePort's own save()/load() contract (real file locking,
+    or an append-only file format) -- a genuine architecture decision,
+    not a test-writing fix, and out of this pass's own safe scope
+    (see CLAUDE.md's standing "never silently change the architecture"
+    rule). Recorded here as a real, confirmed, previously-undocumented-
+    as-a-concrete-scenario gap for docs/threat-model/v0.md, not
+    silently patched.
+    """
+    path = tmp_path / "audit.json"
+
+    starting_chain = _build_varied_chain()
+    JsonFileAuditStorageAdapter(path).save(starting_chain)
+
+    first_writer_chain = JsonFileAuditStorageAdapter(path).load()
+    second_writer_chain = JsonFileAuditStorageAdapter(path).load()
+
+    first_new_invocation = CapabilityInvocation(
+        _descriptor(Effect.READ_LOCAL, "ping"),
+        Tainted({}, Provenance.user()),
+    )
+    first_new_record = first_writer_chain.append(evaluate(first_new_invocation, _NO_CONFIRMATION))
+
+    second_new_invocation = CapabilityInvocation(
+        _descriptor(Effect.READ_LOCAL, "git.status"),
+        Tainted({}, Provenance.user()),
+    )
+    second_new_record = second_writer_chain.append(
+        evaluate(second_new_invocation, _NO_CONFIRMATION)
+    )
+
+    JsonFileAuditStorageAdapter(path).save(first_writer_chain)
+    JsonFileAuditStorageAdapter(path).save(second_writer_chain)
+
+    final_chain = JsonFileAuditStorageAdapter(path).load()
+    final_capability_ids = {
+        record.decision.invocation.descriptor.id.value for record in final_chain
+    }
+
+    assert second_new_record.decision.invocation.descriptor.id.value in final_capability_ids
+    assert first_new_record.decision.invocation.descriptor.id.value not in final_capability_ids
+    assert final_chain.verify().valid is True
