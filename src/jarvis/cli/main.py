@@ -127,6 +127,24 @@ added this wiring) and ``docker.run_container``/``docker.build_image``
 (DESTRUCTIVE-tier Docker actions, explicitly named "do not touch" by
 that same pass's own hard gate) -- see
 ``_add_desktop_parsers``'s own docstring for the full reasoning.
+
+**Real bug found and fixed (overnight hardening pass, 2026-09-04)**:
+``main()``'s own ``except`` tuple never gained the six real,
+adapter-level exception types the desktop-wiring pass's own new
+subcommands can genuinely raise --
+``BrowserLaunchFailedError``/``EditorLaunchFailedError``
+(``ports/brave.py``/``ports/vscode.py``),
+``WindowNotFoundError``/``WindowActionFailedError``
+(``ports/desktop_window.py``, the two chat-app commands), and
+``DockerCommandFailedError``/``GitCommandFailedError``
+(``ports/docker.py``/``ports/git.py``). Confirmed as a real, not
+theoretical, crash before fixing it: a granted ``send-chatgpt-text``
+call whose real ``WindowNotFoundError`` was allowed to propagate
+produced an unhandled Python traceback out of ``main()`` itself,
+rather than this module's own established "print `Error: ...`, exit 1"
+failure shape every other real-world error already gets. All six are
+now caught -- see ``tests/unit/test_cli_main.py``'s own
+"hardening pass" tests for the real, empirical proof.
 """
 
 from __future__ import annotations
@@ -182,10 +200,15 @@ from jarvis.kernel.memory import (
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.voice_loop import run_voice_loop
+from jarvis.ports.brave import BrowserLaunchFailedError
+from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
+from jarvis.ports.docker import DockerCommandFailedError
+from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
 from jarvis.ports.secret import SecretNotFoundError
+from jarvis.ports.vscode import EditorLaunchFailedError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1060,6 +1083,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryIntegrityViolationError,
         SecretNotFoundError,
         CalendarEventCreationError,
+        BrowserLaunchFailedError,
+        EditorLaunchFailedError,
+        WindowNotFoundError,
+        WindowActionFailedError,
+        DockerCommandFailedError,
+        GitCommandFailedError,
         OSError,
         UnicodeDecodeError,
         KeyError,

@@ -60,9 +60,14 @@ from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllo
 from jarvis.kernel.job_assistance import DraftOutcome
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
+from jarvis.ports.brave import BrowserLaunchFailedError
+from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
+from jarvis.ports.docker import DockerCommandFailedError
+from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.secret import SecretNotFoundError
+from jarvis.ports.vscode import EditorLaunchFailedError
 
 if TYPE_CHECKING:
     from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
@@ -2120,3 +2125,306 @@ def test_open_brave_url_subcommand_requires_url() -> None:
 def test_git_push_subcommand_requires_repo_dir_remote_and_branch() -> None:
     with pytest.raises(SystemExit):
         main(["git-push", "some-repo"])
+
+
+# --- Overnight hardening pass (2026-09-04): missing/malformed required
+# arguments for all eleven newly-wired desktop.*/docker.*/git.* subcommands,
+# and the real unhandled-exception bug found and fixed in main()'s own
+# except tuple. Each "requires" test proves argparse itself fails closed
+# with a clear SystemExit (its own usage/error message on stderr, exit
+# code 2) -- never a stack trace, never a silent no-op -- before any real
+# kernel/desktop.py call is ever reached.
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["open-brave-url"],
+        ["open-vscode-file"],
+        ["send-claude-text"],
+        ["send-chatgpt-text"],
+        ["stop-docker-container"],
+        ["git-status"],
+        ["git-create-branch"],
+        ["git-create-branch", "some-repo"],
+        ["git-commit"],
+        ["git-commit", "some-repo"],
+        ["git-push"],
+        ["git-push", "some-repo"],
+        ["git-push", "some-repo", "origin"],
+        ["git-force-push"],
+        ["git-force-push", "some-repo"],
+        ["git-force-push", "some-repo", "origin"],
+    ],
+    ids=lambda argv: " ".join(argv) or "empty",
+)
+def test_desktop_subcommands_fail_closed_on_missing_required_arguments(
+    argv: list[str],
+) -> None:
+    """Every newly-wired command with a missing required positional argument
+    fails closed via a clean SystemExit -- argparse's own real, existing
+    mechanism -- never a stack trace, never a silent no-op."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(argv)
+
+    assert exc_info.value.code != 0
+
+
+def test_list_docker_containers_subcommand_requires_no_arguments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """list-docker-containers takes zero positional arguments -- confirming
+    it is not silently missing one, unlike every other newly-wired command."""
+
+    def fake_authorize_and_list_docker_containers(
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DockerListContainersOutcome:
+        return DockerListContainersOutcome(
+            decision=_make_decision(granted=True, capability_id="docker.list_containers"),
+            containers=(),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_docker_containers",
+        fake_authorize_and_list_docker_containers,
+    )
+
+    exit_code = main(["list-docker-containers", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert exit_code == 0
+
+
+def test_send_chatgpt_text_with_no_confirmed_window_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The real bug this hardening pass found and fixed: a granted
+    "send-chatgpt-text" whose real AT-SPI2 lookup can't find or launch the
+    app (no confirmed launch_command exists for ChatGPT, see
+    _CLAUDE_APP_LAUNCH_COMMAND's own docstring) used to crash main() with
+    an unhandled WindowNotFoundError instead of printing a clean error and
+    exiting 1. Proven fixed here by making the real kernel function raise
+    the real, typed exception AtspiDesktopWindowAdapter.find_or_launch()
+    actually raises in this scenario, confirming main() now catches it."""
+
+    def fake_authorize_and_send_text_to_chat_app(  # noqa: PLR0913 -- mirrors the real signature
+        app: ChatApp,  # noqa: ARG001
+        text: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        desktop_window: object,  # noqa: ARG001
+        launch_command: tuple[str, ...] | None,  # noqa: ARG001
+    ) -> Decision:
+        msg = "No window found for app_id 'chatgpt'."
+        raise WindowNotFoundError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_send_text_to_chat_app",
+        fake_authorize_and_send_text_to_chat_app,
+    )
+
+    exit_code = main(
+        [
+            "send-chatgpt-text",
+            "hello",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "No window found" in captured.err
+
+
+def test_send_claude_text_window_action_failure_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same real bug class, for WindowActionFailedError (a real focus/
+    type_text failure after the window was actually found) -- proven fixed
+    for both real exception types this port can raise, not just one."""
+
+    def fake_authorize_and_send_text_to_chat_app(  # noqa: PLR0913 -- mirrors the real signature
+        app: ChatApp,  # noqa: ARG001
+        text: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        desktop_window: object,  # noqa: ARG001
+        launch_command: tuple[str, ...] | None,  # noqa: ARG001
+    ) -> Decision:
+        msg = "Focusing window for 'claude' failed."
+        raise WindowActionFailedError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_send_text_to_chat_app",
+        fake_authorize_and_send_text_to_chat_app,
+    )
+
+    exit_code = main(
+        [
+            "send-claude-text",
+            "hello",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Focusing window" in captured.err
+
+
+def test_open_brave_url_browser_launch_failure_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """BrowserLaunchFailedError (ports/brave.py) -- the real exception a
+    failed real `brave-browser` subprocess launch raises -- is now caught."""
+
+    def fake_authorize_and_open_brave_url(
+        url: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "Failed to launch Brave."
+        raise BrowserLaunchFailedError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_brave_url",
+        fake_authorize_and_open_brave_url,
+    )
+
+    exit_code = main(
+        [
+            "open-brave-url",
+            "https://example.com",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Failed to launch Brave" in captured.err
+
+
+def test_open_vscode_file_editor_launch_failure_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """EditorLaunchFailedError (ports/vscode.py) is now caught."""
+
+    def fake_authorize_and_open_vscode_file(
+        path: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "Failed to launch VS Code."
+        raise EditorLaunchFailedError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_vscode_file",
+        fake_authorize_and_open_vscode_file,
+    )
+
+    exit_code = main(
+        [
+            "open-vscode-file",
+            "notes.txt",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Failed to launch VS Code" in captured.err
+
+
+def test_stop_docker_container_command_failure_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """DockerCommandFailedError (ports/docker.py) is now caught."""
+
+    def fake_authorize_and_stop_docker_container(
+        container: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "docker stop exited non-zero."
+        raise DockerCommandFailedError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_stop_docker_container",
+        fake_authorize_and_stop_docker_container,
+    )
+
+    exit_code = main(
+        [
+            "stop-docker-container",
+            "web",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "docker stop exited non-zero" in captured.err
+
+
+def test_git_commit_command_failure_fails_closed_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """GitCommandFailedError (ports/git.py) is now caught."""
+
+    def fake_authorize_and_commit_git(
+        repo_dir: Path,  # noqa: ARG001
+        message: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        msg = "git commit exited non-zero."
+        raise GitCommandFailedError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_commit_git", fake_authorize_and_commit_git
+    )
+
+    exit_code = main(
+        [
+            "git-commit",
+            str(tmp_path),
+            "a real commit message",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "git commit exited non-zero" in captured.err
