@@ -339,6 +339,52 @@ def test_whitespace_only_text_is_unrecognized() -> None:
     assert isinstance(result, UnrecognizedIntent)
 
 
+def test_send_email_with_empty_recipient_text_is_unrecognized() -> None:
+    """A real, previously-uncovered branch-coverage gap (overnight Track 3, 2026-09-04):
+    the keywords are found (" subject "/" body "), but nothing real sits between "to "
+    and " subject " -- an empty recipient list is never a valid request."""
+    result = resolve_intent(Transcript(text="send email to  subject Hello body Hi there"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_send_email_with_empty_subject_text_is_unrecognized() -> None:
+    """Same real gap, the subject span instead: keywords found, nothing real between
+    " subject " and " body "."""
+    result = resolve_intent(Transcript(text="send email to alice@example.com subject  body Hi"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_create_event_with_empty_summary_text_is_unrecognized() -> None:
+    """A real, previously-uncovered branch-coverage gap: the " from "/" to " keywords are
+    found, but nothing real sits before " from " -- an empty summary is never valid."""
+    result = resolve_intent(
+        Transcript(text="create event  from 2026-09-05T10:00:00 to 2026-09-05T10:30:00")
+    )
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_create_event_with_empty_start_text_is_unrecognized() -> None:
+    """Same real gap, the start-time span instead: keywords found, nothing real between
+    " from " and " to "."""
+    result = resolve_intent(Transcript(text="create event Team sync from  to 2026-09-05T10:30:00"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_single_unrecognized_word_with_no_trailing_text_is_unrecognized() -> None:
+    """A real, previously-uncovered branch-coverage gap: every prior "unrecognized"
+    test uses either trailing words (caught by the outer `if rest:` check) or multiple
+    words -- a single, standalone word that is neither "ping" nor a real music command
+    name reaches `_resolve_zero_argument_command`'s own final fallback, never exercised
+    until now."""
+    result = resolve_intent(Transcript(text="banana"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
 def test_resolved_intent_arguments_are_tainted_as_user_provenance() -> None:
     """A spoken command's arguments carry USER_DIRECT trust, per the M1 doc's own rule."""
     result = resolve_intent(Transcript(text="ping"))
