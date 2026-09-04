@@ -335,3 +335,14 @@ not assumed:
   would be a first.
 - Whatever the vision/ScreenCast component turns out to need (Part 1,
   item 1) -- entirely contingent on that scope question's own answer.
+
+**Stale as of 2026-09-04 (Track 5 docs-integrity sweep)**: this
+document's own opening line ("a scoping conversation that has not
+happened yet") describes its state before 2026-08-25 -- unlike
+M5's own scoping notes (where the real conversation this document
+would have prompted never happened, a different, documented path was
+taken instead), M4's own scoping conversation genuinely did happen:
+all five real questions below were answered directly by the user, and
+`m4-memory-retrieval.md`'s own header confirms it ("Every real
+decision below traces back to one of five scoping questions the user
+answered directly"). M4 is code-complete and tagged `v0.4.0`.

@@ -1,9 +1,10 @@
 # M6 scoping notes — research and questions, not a design
 
 **Status: four of six real scope questions answered directly by the
-user in conversation (2026-09-01); two remain genuinely open, deferred
-to whichever future pass begins each surviving sub-milestone's own real
-design.** This is not `m6-integrations.md`'s real content, not an ADR,
+user in conversation (2026-09-01); two remained genuinely open at the
+time, deferred to whichever future pass began each surviving
+sub-milestone's own real design — both have since been resolved, see
+this document's own closing note, added 2026-09-04.** This is not `m6-integrations.md`'s real content, not an ADR,
 not a design. Per this project's rolling-wave planning principle
 (`docs/ROADMAP.md`) and CLAUDE.md's own hard rule ("never silently
 change the architecture... propose a fix as a new ADR, and wait for
@@ -334,3 +335,15 @@ split and the Docker/ROS2 drops (see that document); this document
 itself is not further rewritten — the six original questions and the
 real research behind them stay in place above, as the real record of
 how these four answers were reached.
+
+**Stale as of 2026-09-04 (Track 5 docs-integrity sweep), added rather
+than rewriting the record above**: both items 5 and 6, described above
+as "remain[ing] genuinely open," are now resolved. Item 5: "no
+auto-apply" is a structural boundary, not a policy-tier gate, decided
+directly by the user 2026-09-02 and recorded in ADR-0058 (Accepted).
+Item 6: "research" needed no new port for either sub-milestone,
+folding entirely into M5's existing `BrowserAutomationPort` unmodified
+— see `m6a-communications.md`'s own item 6 resolution and
+`m6b-job-assistance.md`'s identical conclusion, checked separately
+rather than assumed to match. Both M6a and M6b are code-complete,
+tagged `v0.6.0` together, 2026-09-04.

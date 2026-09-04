@@ -177,11 +177,17 @@ it.
   conversation, after direct review of the ADR's own full text.
 - **M6b**: [`docs/architecture/m6b-job-assistance.md`](architecture/m6b-job-assistance.md) —
   code-complete (WP-82 through WP-85); real scoping is done
-  ([`docs/architecture/m6-scoping-notes.md`](architecture/m6-scoping-notes.md)),
-  but M6b's own central open question (item 5: whether "no auto-apply"
-  is a structural boundary or a policy-tier gate) was deliberately left
-  untouched by M6a's own real design pass — real design work for M6b
-  has not started.
+  ([`docs/architecture/m6-scoping-notes.md`](architecture/m6-scoping-notes.md)).
+  **Stale claim corrected 2026-09-04 (Track 5 docs-integrity sweep)**:
+  this entry previously ended "real design work for M6b has not
+  started," self-contradicting its own opening "code-complete" —
+  M6b's central open question (item 5: whether "no auto-apply" is a
+  structural boundary or a policy-tier gate), deliberately left
+  untouched by M6a's own real design pass, was resolved 2026-09-02
+  directly by the user in conversation ("no auto-apply" is a
+  structural boundary), the real design doc was written, and ADR-0058
+  is Accepted — see the M6b row above and
+  `docs/threat-model/v0.md`'s "Milestone 6b additions".
 - **M7 (not yet a real ROADMAP row)**: [`docs/architecture/m7-scoping-notes.md`](architecture/m7-scoping-notes.md) —
   research only, written 2026-09-04, investigating two carried-forward
   gaps: whether M2's `Dispatcher`/`EscalationLadder` mapping to the

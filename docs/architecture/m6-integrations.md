@@ -26,7 +26,13 @@ email (IMAP read, SMTP send), calendar (CalDAV), and research
 **Accepted (2026-09-03, directly by the user, in conversation, after
 direct review of the ADR's own full text)** — the design's own
 classification reasoning (`Effect.EGRESS_SENSITIVE`/`Effect.EGRESS_SECRET`,
-reused rather than a new effect) is now settled.
+reused rather than a new effect) is now settled. **Stale as of
+2026-09-04, corrected 2026-09-03 already, restated here for real
+consistency**: `Effect.EGRESS_SENSITIVE` was ADR-0057's own original
+choice for non-`SECRET` content, since amended by ADR-0059 to
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY` — see
+this section's own "real gap found and closed" paragraph below for
+the full account, not superseded by this earlier paragraph.
 
 **Both halves now implemented and tested, real, invocable code
 (WP-76 through WP-80 for reads, WP-79 onward for writes, all
@@ -70,9 +76,16 @@ for non-`SECRET` content, reusing `git.force_push`'s/`memory.forget`'s
 own existing effect combination — never remote-satisfiable, proven by
 real property tests (`tests/property/test_communications_writer.py`)
 asserting `decision.granted == context.physical_confirmation_available`
-under every real `PolicyContext`. **Voice grammar for either write
-capability remains out of scope** — closing this gap does not, by
-itself, make voice grammar safe to add.
+under every real `PolicyContext`. **Stale as of 2026-09-04**: this
+paragraph originally read "voice grammar for either write capability
+remains out of scope" — since closed, 2026-09-04 (overnight Track 3),
+directly per the user's own already-made decision. `kernel/intent.py`
+gained real "send email"/"create event" two-word command keywords;
+`kernel/voice_loop.py` gained `email_port`/`calendar_port`, optional
+with no safe default. Real tests prove voice does not bypass
+ADR-0059's `Tier.MANUAL_ONLY` floor in any way — a denied physical
+confirmation never reaches the real port. See
+`docs/threat-model/v0.md`'s own "Overnight Track 3" note.
 
 ### Entry gate
 
@@ -131,9 +144,10 @@ actually built and verified, including a real, conservative
 `SECRET`-input implementation default flagged for the user's own
 confirmation (not silently decided) and the structural meta-test's own
 real, named limits. WP-86 (this closeout) is the last work package in
-the design doc's own sketch. **Not tagged** — tagging remains a
-separate, later action, mirroring every prior milestone's own
-precedent.
+the design doc's own sketch. **Tagged `v0.6.0` 2026-09-04**, together
+with M6a, out of strict milestone-sequential order (M3 remains
+untagged) — see `CLAUDE.md`'s Current Status and the tag message
+itself for the full account of what shipped alongside M6a/M6b.
 
 ### Objective
 

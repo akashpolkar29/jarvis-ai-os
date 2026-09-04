@@ -16,6 +16,18 @@ it, Proposed, not Accepted -- per this project's own ADR process, only
 the user marks an ADR Accepted, and no work package below may start
 until that happens.
 
+**Stale as of 2026-09-04 (Track 5 docs-integrity sweep), corrected
+here rather than left standing**: the two paragraph-opening claims
+above ("not yet approved," "Not yet implemented, not yet Accepted")
+describe this document's own state at the moment it was drafted,
+2026-08-25 -- since superseded. ADR-0048 through ADR-0053 were each
+Accepted directly by the user before implementation began; ADR-0054
+(found mid-implementation) was accepted unilaterally at the time and
+later ratified directly by the user, 2026-09-04. M4 itself is
+code-complete (WP-57 through WP-65) and tagged `v0.4.0` -- see
+`CLAUDE.md`'s Current Status and `docs/threat-model/v0.md`'s
+"Milestone 4 additions" for what was actually built.
+
 ## The five scoping decisions this document builds on
 
 Answered directly by the user, 2026-08-25 (`docs/architecture/m4-scoping-notes.md`

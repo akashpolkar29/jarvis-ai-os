@@ -39,6 +39,18 @@ document resolves five of that document's questions (via the working
 assumptions below) and leaves the rest genuinely open, named explicitly
 at each site rather than silently answered by omission.
 
+**Stale as of 2026-09-04 (Track 5 docs-integrity sweep), corrected
+here rather than left standing**: this document's own opening line
+("not yet approved") describes its state at the moment it was
+drafted, 2026-08-31 -- since superseded. M5 is code-complete (WP-67
+through WP-75) and tagged `v0.5.0`. The real provenance caveat above
+remains accurate and unchanged, though, stated plainly, not softened
+by M5 shipping: ADR-0055/ADR-0056 are Accepted, but by this session's
+own judgment acting on the user's own relayed instruction, not the
+user's own independent reading of the final ADR text -- see
+`CLAUDE.md`'s Current Status and `docs/threat-model/v0.md`'s
+"Milestone 5 additions" for the full, unrounded statement.
+
 ## The five working assumptions this document builds on
 
 **Relayed as fixed answers for this drafting pass, not confirmed by the
