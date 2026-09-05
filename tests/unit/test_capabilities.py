@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from jarvis.domain.capability import Effect, Tier
 from jarvis.kernel.capabilities import (
+    AUDIT_HISTORY_CAPABILITY_ID,
     BROWSER_CLOSE_PAGE_CAPABILITY_ID,
     BROWSER_INSPECT_DOM_CAPABILITY_ID,
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
@@ -32,6 +33,7 @@ from jarvis.kernel.capabilities import (
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
+    MEMORY_WIPE_CAPABILITY_ID,
     MOVE_FILE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
@@ -43,7 +45,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 36
+_EXPECTED_CAPABILITY_COUNT = 38
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -64,6 +66,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
 
     assert ids == {
         PING_CAPABILITY_ID,
+        AUDIT_HISTORY_CAPABILITY_ID,
         MUSIC_PLAY_CAPABILITY_ID,
         MUSIC_PAUSE_CAPABILITY_ID,
         MUSIC_NEXT_CAPABILITY_ID,
@@ -91,6 +94,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         MEMORY_FORGET_CAPABILITY_ID,
         MEMORY_BACKUP_CAPABILITY_ID,
         MEMORY_RESTORE_CAPABILITY_ID,
+        MEMORY_WIPE_CAPABILITY_ID,
         BROWSER_OPEN_PAGE_CAPABILITY_ID,
         BROWSER_SCREENSHOT_CAPABILITY_ID,
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
@@ -184,6 +188,15 @@ def test_docker_build_image_has_destructive_and_execute_effects() -> None:
     descriptor = registry.get(DOCKER_BUILD_IMAGE_CAPABILITY_ID)
     assert descriptor.effects == (Effect.DESTRUCTIVE | Effect.EXECUTE)
     assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_audit_history_has_read_local_effects() -> None:
+    """audit.history is registered with Effect.READ_LOCAL -- always Tier.ALLOW, same as git.status."""  # noqa: E501
+    registry = build_default_registry()
+
+    descriptor = registry.get(AUDIT_HISTORY_CAPABILITY_ID)
+    assert descriptor.effects == Effect.READ_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
 
 
 def test_git_status_has_read_local_effects() -> None:
@@ -319,6 +332,15 @@ def test_memory_restore_has_destructive_and_irreversible_effects() -> None:
     registry = build_default_registry()
 
     descriptor = registry.get(MEMORY_RESTORE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_memory_wipe_has_destructive_and_irreversible_effects() -> None:
+    """memory.wipe is DESTRUCTIVE | IRREVERSIBLE -- Tier.MANUAL_ONLY, same as memory.restore."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_WIPE_CAPABILITY_ID)
     assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
     assert descriptor.required_tier == Tier.MANUAL_ONLY
 

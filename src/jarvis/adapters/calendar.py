@@ -133,6 +133,42 @@ def _parse_event(calendar_object: _CalendarObjectLike) -> CalendarEvent:
     )
 
 
+def _parse_aware_iso8601(value: str, field_name: str) -> datetime:
+    """Parse `value` as ISO-8601, rejecting a naive (timezone-less) result.
+
+    Real bug found and fixed (10-phase combined pass, Phase 10,
+    timezone-correctness task): `datetime.fromisoformat()` silently
+    accepts a string with no UTC offset (e.g. "2026-01-01T15:00:00"),
+    producing a naive `datetime` -- confirmed directly, not assumed.
+    Handed to `caldav`/`icalendar` as-is, this becomes a "floating
+    time" VEVENT with no `TZID`/`Z` designator at all, whose displayed
+    time genuinely differs depending on whichever calendar client's
+    own local timezone setting later renders it -- the opposite of
+    what a real scheduling feature exists to guarantee (an
+    unambiguous point in time). Neither `kernel/communications.py` nor
+    `domain/calendar.py` validated this before this fix; every
+    existing test happened to always supply an explicit offset,
+    so this was never actually exercised.
+
+    Args:
+        value: The real, caller-supplied ISO-8601 string.
+        field_name: Which field this is, for a clear error message.
+
+    Raises:
+        ValueError: If `value` is not valid ISO-8601, or parses to a
+            naive `datetime` (no timezone offset).
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        msg = (
+            f"{field_name} must include an explicit timezone offset "
+            f"(e.g. '+00:00' or 'Z'), got {value!r} -- a naive datetime "
+            "would create an ambiguous 'floating time' calendar event."
+        )
+        raise ValueError(msg)
+    return parsed
+
+
 class CalendarNotFoundError(Exception):
     """Raised when a real CalDAV principal has no real calendars to read from.
 
@@ -206,7 +242,7 @@ class CalDavCalendarAdapter:
     def _list_events_sync(self, start: str, end: str) -> tuple[CalendarEvent, ...]:
         calendar = self._calendar_factory()
         real_events = calendar.date_search(
-            datetime.fromisoformat(start), datetime.fromisoformat(end)
+            _parse_aware_iso8601(start, "start"), _parse_aware_iso8601(end, "end")
         )
         return tuple(_parse_event(event) for event in real_events)
 
@@ -218,8 +254,8 @@ class CalDavCalendarAdapter:
         calendar = self._calendar_factory()
         attendees = [_with_mailto(attendee) for attendee in draft.attendees] or None
         created = calendar.add_event(
-            dtstart=datetime.fromisoformat(draft.start),
-            dtend=datetime.fromisoformat(draft.end),
+            dtstart=_parse_aware_iso8601(draft.start, "start"),
+            dtend=_parse_aware_iso8601(draft.end, "end"),
             summary=draft.summary,
             attendee=attendees,
         )

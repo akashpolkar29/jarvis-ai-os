@@ -42,6 +42,7 @@ from jarvis.domain.capability import CapabilityDescriptor, CapabilityId, Effect
 from jarvis.domain.registry import CapabilityRegistry
 
 PING_CAPABILITY_ID = CapabilityId("ping")
+AUDIT_HISTORY_CAPABILITY_ID = CapabilityId("audit.history")
 MUSIC_PLAY_CAPABILITY_ID = CapabilityId("music.play")
 MUSIC_PAUSE_CAPABILITY_ID = CapabilityId("music.pause")
 MUSIC_NEXT_CAPABILITY_ID = CapabilityId("music.next")
@@ -69,6 +70,7 @@ MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
 MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
 MEMORY_BACKUP_CAPABILITY_ID = CapabilityId("memory.backup")
 MEMORY_RESTORE_CAPABILITY_ID = CapabilityId("memory.restore")
+MEMORY_WIPE_CAPABILITY_ID = CapabilityId("memory.wipe")
 BROWSER_OPEN_PAGE_CAPABILITY_ID = CapabilityId("browser.open_page")
 BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
 BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
@@ -99,6 +101,16 @@ def build_default_registry() -> CapabilityRegistry:
             effects=Effect.READ_LOCAL,
             description=(
                 "A no-op capability that proves the authorization stack is wired end-to-end."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=AUDIT_HISTORY_CAPABILITY_ID,
+            effects=Effect.READ_LOCAL,
+            description=(
+                "View the real, persisted audit chain's own history, "
+                "same READ_LOCAL/ALLOW shape as git.status."
             ),
         )
     )
@@ -352,6 +364,17 @@ def build_default_registry() -> CapabilityRegistry:
                 "backup file's (ADR-0061). No undo -- the same "
                 "'no built-in recovery' finality as memory.forget, at the "
                 "scale of the whole store -- always MANUAL_ONLY."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_WIPE_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.IRREVERSIBLE,
+            description=(
+                "Permanently delete every real record in the memory store. "
+                "No undo -- the same combination as memory.restore, at the "
+                "same whole-store scale -- always MANUAL_ONLY."
             ),
         )
     )

@@ -166,6 +166,7 @@ from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapte
 from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.domain.errors import JarvisError
+from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
@@ -199,6 +200,7 @@ from jarvis.kernel.memory import (
     authorize_and_recall,
     authorize_and_remember,
     authorize_and_restore_memory,
+    authorize_and_wipe_memory,
 )
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
@@ -216,6 +218,7 @@ from jarvis.ports.vscode import EditorLaunchFailedError
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from jarvis.domain.audit import AuditRecord
     from jarvis.domain.file_system import DirEntry
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
@@ -484,6 +487,22 @@ def _build_parser() -> argparse.ArgumentParser:
     ping_parser = subparsers.add_parser("ping", help='Authorize the no-op "ping" capability.')
     _add_common_flags(ping_parser)
 
+    audit_history_parser = subparsers.add_parser(
+        "audit-history", help="View the real, persisted audit chain's own history."
+    )
+    audit_history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Return at most this many of the most recent records.",
+    )
+    audit_history_parser.add_argument(
+        "--capability-id",
+        default=None,
+        help="Only show records for this exact capability id (e.g. 'git.status').",
+    )
+    _add_common_flags(audit_history_parser)
+
     play_parser = subparsers.add_parser("play", help="Resume playback.")
     _add_common_flags(play_parser)
 
@@ -546,6 +565,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "source", type=Path, help="A real, previously-created backup file."
     )
     _add_common_flags(memory_restore_parser)
+
+    memory_wipe_parser = memory_subparsers.add_parser(
+        "wipe",
+        help="Permanently delete every record in the memory store. Always MANUAL_ONLY.",
+    )
+    _add_common_flags(memory_wipe_parser)
 
     _add_communications_parsers(subparsers)
     _add_reasoning_parsers(subparsers)
@@ -621,10 +646,10 @@ def _run_listen(chain_path: Path, *, verbose: bool) -> int:
     return 0
 
 
-def _run_memory_subcommand(
+def _run_memory_subcommand(  # noqa: PLR0911 -- one return per memory subcommand
     args: argparse.Namespace,
-) -> tuple[Decision, str | None, tuple[MemoryRecord, ...] | None]:
-    """Dispatch one ``memory`` subcommand, returning (decision, identifier, records).
+) -> tuple[Decision, str | None, tuple[MemoryRecord, ...] | None, int | None]:
+    """Dispatch one ``memory`` subcommand, returning (decision, identifier, records, deleted_count).
 
     Split out from :func:`main` purely to keep its own branch count
     down -- one more subcommand family here would otherwise push
@@ -640,7 +665,7 @@ def _run_memory_subcommand(
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
         )
-        return write_outcome.decision, write_outcome.identifier, None
+        return write_outcome.decision, write_outcome.identifier, None, None
     if args.memory_command == "retrieve":
         recall_outcome = authorize_and_recall(
             args.query,
@@ -649,7 +674,14 @@ def _run_memory_subcommand(
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
         )
-        return recall_outcome.decision, None, recall_outcome.records
+        return recall_outcome.decision, None, recall_outcome.records, None
+    if args.memory_command == "wipe":
+        wipe_outcome = authorize_and_wipe_memory(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return wipe_outcome.decision, None, None, wipe_outcome.deleted_count
     if args.memory_command == "forget":
         decision = authorize_and_forget(
             args.identifier,
@@ -657,7 +689,7 @@ def _run_memory_subcommand(
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
         )
-        return decision, None, None
+        return decision, None, None, None
     if args.memory_command == "backup":
         decision = authorize_and_backup_memory(
             args.destination,
@@ -665,7 +697,7 @@ def _run_memory_subcommand(
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
         )
-        return decision, None, None
+        return decision, None, None, None
     if args.memory_command == "restore":
         decision = authorize_and_restore_memory(
             args.source,
@@ -673,7 +705,7 @@ def _run_memory_subcommand(
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
         )
-        return decision, None, None
+        return decision, None, None, None
 
     decision = authorize_and_pin(
         args.identifier,
@@ -681,7 +713,7 @@ def _run_memory_subcommand(
         remote_confirmation_available=args.remote_confirmation_available,
         chain_path=args.chain_path,
     )
-    return decision, None, None
+    return decision, None, None, None
 
 
 def _run_communications_subcommand(args: argparse.Namespace) -> tuple[Decision, str | None]:
@@ -984,15 +1016,19 @@ class _CommandOutcome:
     content: Tainted[str] | None = None
     memory_identifier: str | None = None
     memory_records: tuple[MemoryRecord, ...] | None = None
+    memory_deleted_count: int | None = None
     calendar_event_uid: str | None = None
     reasoning_result_label: str | None = None
     dir_entries: tuple[DirEntry, ...] | None = None
     docker_containers: tuple[str, ...] | None = None
     git_status_text: str | None = None
+    audit_records: tuple[AuditRecord, ...] | None = None
 
 
-def _run_basic_subcommand(args: argparse.Namespace) -> _CommandOutcome:
-    """Dispatch ``ping``/``read``, the two commands with no dedicated subcommand family.
+def _run_basic_subcommand(
+    args: argparse.Namespace,
+) -> _CommandOutcome:
+    """Dispatch ``ping``/``read``/``audit-history`` -- commands with no dedicated subcommand family.
 
     Split out from :func:`_dispatch_command` purely to keep its own
     return-statement count under ruff's `PLR0911` threshold as more
@@ -1007,6 +1043,18 @@ def _run_basic_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             chain_path=args.chain_path,
         )
         return _CommandOutcome(decision, args.command)
+
+    if args.command == "audit-history":
+        history_outcome = authorize_and_view_audit_history(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+            limit=args.limit,
+            capability_id=args.capability_id,
+        )
+        return _CommandOutcome(
+            history_outcome.decision, args.command, audit_records=history_outcome.records
+        )
 
     outcome = authorize_and_read_file(
         args.path,
@@ -1028,15 +1076,18 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
     pattern `_run_memory_subcommand`/`_run_communications_subcommand`/
     `_run_reasoning_subcommand` already establish one level down.
     """
-    if args.command in ("ping", "read"):
+    if args.command in ("ping", "read", "audit-history"):
         return _run_basic_subcommand(args)
     if args.command == "memory":
-        decision, memory_identifier, memory_records = _run_memory_subcommand(args)
+        decision, memory_identifier, memory_records, memory_deleted_count = _run_memory_subcommand(
+            args
+        )
         return _CommandOutcome(
             decision,
             f"memory {args.memory_command}",
             memory_identifier=memory_identifier,
             memory_records=memory_records,
+            memory_deleted_count=memory_deleted_count,
         )
     if args.command in ("send-email", "create-calendar-event"):
         decision, calendar_event_uid = _run_communications_subcommand(args)
@@ -1061,7 +1112,7 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
     return _CommandOutcome(decision, args.command)
 
 
-def _print_outcome(outcome: _CommandOutcome) -> None:
+def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one branch per optional payload field
     """Print every real payload a dispatched command produced, beyond the decision line.
 
     Split out from :func:`main` purely to keep its own branch count
@@ -1077,6 +1128,8 @@ def _print_outcome(outcome: _CommandOutcome) -> None:
     if outcome.memory_records is not None:
         for record in outcome.memory_records:
             print(f"{record.identifier}: {record.value.value}")
+    if outcome.memory_deleted_count is not None:
+        print(f"deleted: {outcome.memory_deleted_count}")
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:
@@ -1089,6 +1142,14 @@ def _print_outcome(outcome: _CommandOutcome) -> None:
             print(container)
     if outcome.git_status_text is not None:
         print(outcome.git_status_text)
+    if outcome.audit_records is not None:
+        for audit_record in outcome.audit_records:
+            record_decision = audit_record.decision
+            status = "GRANTED" if record_decision.granted else "DENIED"
+            print(
+                f"{audit_record.sequence}: {record_decision.invocation.descriptor.id.value} "
+                f"{status} (tier={record_decision.tier.name}, reasons={record_decision.reasons})"
+            )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -3,13 +3,25 @@
 A minimal fake proves the Protocol itself is well-formed and
 satisfiable independent of any specific adapter (M3's own "port exists
 and is tested structurally before any real technology is chosen"
-ordering, followed again here for M5's browser-automation track). The
-real CDP-backed adapter (WP-68) is checked separately, in
-``tests/unit/adapters/test_browser_automation.py``.
+ordering, followed again here for M5's browser-automation track).
+
+**Real gap found and closed (10-phase combined pass, Phase 10, adapter-
+contract-validation task)**: this file's own docstring used to claim
+the real CDP-backed adapter was "checked separately, in
+tests/unit/adapters/test_browser_automation.py" -- confirmed false by
+direct inspection: that file never once references
+``BrowserAutomationPort`` or performs an ``isinstance`` check.
+``CdpBrowserAutomationAdapter`` had never actually been structurally
+proven to satisfy this Protocol anywhere in the test suite, only
+behaviorally exercised -- a silent method rename/signature drift could
+have gone uncaught by any Protocol-conformance check. Fixed here,
+matching ``tests/contract/test_reasoning_port.py``'s own established
+"every real adapter checked in the same contract file" precedent.
 """
 
 from __future__ import annotations
 
+from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
 from jarvis.domain.browser import PageHandle
 from jarvis.ports.browser_automation import BrowserAutomationPort
 
@@ -48,3 +60,15 @@ def test_an_object_missing_the_required_methods_does_not_satisfy_browser_automat
         """Deliberately lacks open_page()/capture_screenshot()/query_dom()/close()."""
 
     assert isinstance(NotABrowserAutomationSource(), BrowserAutomationPort) is False
+
+
+def test_cdp_browser_automation_adapter_satisfies_browser_automation_port() -> None:
+    """The real, production CDP-backed adapter (WP-68) is structurally a BrowserAutomationPort.
+
+    Construction alone does no I/O (see the adapter's own docstring),
+    so this is a pure, real Protocol-conformance check -- no real
+    browser process or CDP connection involved.
+    """
+    adapter = CdpBrowserAutomationAdapter()
+
+    assert isinstance(adapter, BrowserAutomationPort)

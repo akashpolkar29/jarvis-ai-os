@@ -22,6 +22,7 @@ from jarvis.kernel.memory import (
     authorize_and_recall,
     authorize_and_remember,
     authorize_and_restore_memory,
+    authorize_and_wipe_memory,
 )
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
@@ -587,3 +588,98 @@ def test_granted_restore_of_a_nonexistent_backup_raises(tmp_path: Path) -> None:
             clock=_FakeClock(),
             id_port=_SequentialIdPort(),
         )
+
+
+def test_granted_wipe_deletes_every_record_and_reports_the_real_count(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    id_port = _SequentialIdPort()
+    authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+    authorize_and_remember(
+        "prefers rust",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    wipe_outcome = authorize_and_wipe_memory(
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    assert wipe_outcome.decision.granted is True
+    assert wipe_outcome.deleted_count == 2  # noqa: PLR2004 -- the real count of records written above
+
+    recall = authorize_and_recall(
+        "prefers",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+    assert recall.records == ()
+
+
+def test_wipe_is_denied_without_physical_confirmation(tmp_path: Path) -> None:
+    """memory.wipe is MANUAL_ONLY -- remote confirmation alone can never grant it."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    id_port = _SequentialIdPort()
+    authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    wipe_outcome = authorize_and_wipe_memory(
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    assert wipe_outcome.decision.granted is False
+    assert wipe_outcome.deleted_count is None
+
+    recall = authorize_and_recall(
+        "prefers",
+        limit=5,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+    assert len(recall.records) == 1

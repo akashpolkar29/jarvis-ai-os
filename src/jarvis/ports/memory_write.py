@@ -144,3 +144,21 @@ class MemoryWritePort(Protocol):
             FileNotFoundError: If ``source_path`` does not exist.
         """
         ...
+
+    def wipe(self) -> int:
+        """Permanently delete every real record currently in the store.
+
+        The real, single-command "wipe everything" mechanism (Phase
+        10, 10-phase combined pass) -- ``backup()`` already covers the
+        real "export my data first" half of this story (a real,
+        complete, portable copy); this method is the other half,
+        rather than requiring a caller to restore from an empty file
+        to achieve the same real effect. No undo -- the same "no
+        built-in recovery" finality :meth:`restore` already has, at
+        the scale of the whole store.
+
+        Returns:
+            The number of records actually deleted. ``0`` if the store
+            was already empty -- not an error.
+        """
+        ...

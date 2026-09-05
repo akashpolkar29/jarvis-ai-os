@@ -70,6 +70,7 @@ from jarvis.kernel.capabilities import (
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
+    MEMORY_WIPE_CAPABILITY_ID,
     build_default_registry,
 )
 
@@ -607,3 +608,87 @@ def authorize_and_restore_memory(  # noqa: PLR0913 -- one per composition-functi
         storage.save(chain)
 
     return decision
+
+
+@dataclass(frozen=True)
+class MemoryWipeOutcome:
+    """The result of one authorize_and_wipe_memory() call.
+
+    Attributes:
+        decision: The Decision for this wipe -- durably appended to
+            the chain regardless of outcome.
+        deleted_count: The number of real records actually deleted, if
+            the decision was granted. ``None`` if denied -- the store
+            was never touched.
+    """
+
+    decision: Decision
+    deleted_count: int | None
+
+
+def authorize_and_wipe_memory(  # noqa: PLR0913 -- one per composition-function pass-through
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> MemoryWipeOutcome:
+    """Wire up the stack, authorize wiping the store, and delete everything only if granted.
+
+    ``memory.wipe`` (``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``,
+    ``Tier.MANUAL_ONLY`` -- see ``kernel/capabilities.py``) is a
+    static, fixed-effect capability, the same authorization shape as
+    :func:`authorize_and_restore_memory`, at the same whole-store
+    scale -- the real, single-command "wipe everything" mechanism
+    (Phase 10, 10-phase combined pass). ``memory.backup`` already
+    covers the real "export my data first" half of this story.
+
+    Args:
+        physical_confirmation_available: Whether a human is physically
+            present -- the only way a ``MANUAL_ONLY`` capability can
+            ever be granted.
+        remote_confirmation_available: Threaded through for
+            consistency; never sufficient alone for this capability.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Defaults to
+            ``_DEFAULT_MEMORY_DB_PATH``. Overridable for tests.
+        embedding_port: Defaults to a real ``FastEmbedAdapter``.
+            Overridable for tests -- unused by a wipe, threaded
+            through only so ``_memory_adapter`` stays one shared
+            helper.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by a wipe.
+
+    Returns:
+        A ``MemoryWipeOutcome`` -- see its own docstring.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_WIPE_CAPABILITY_ID,
+        Tainted({}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    deleted_count: int | None = None
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            deleted_count = adapter.wipe()
+    finally:
+        storage.save(chain)
+
+    return MemoryWipeOutcome(decision=decision, deleted_count=deleted_count)

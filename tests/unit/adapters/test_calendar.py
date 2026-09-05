@@ -165,6 +165,28 @@ async def test_list_events_returns_empty_tuple_when_nothing_matches() -> None:
     assert events == ()
 
 
+async def test_list_events_rejects_a_naive_start_with_no_timezone_offset() -> None:
+    """Real bug fix (Phase 10, timezone correctness): a naive datetime is genuinely ambiguous.
+
+    ``datetime.fromisoformat("2026-09-01T00:00:00")`` (no offset) used
+    to be silently accepted, producing a "floating time" CalDAV event
+    -- confirmed via a direct, empirical check before fixing.
+    """
+    calendar = _FakeCalendar([])
+    adapter = _adapter(calendar)
+
+    with pytest.raises(ValueError, match="must include an explicit timezone offset"):
+        await adapter.list_events("2026-09-01T00:00:00", "2026-09-30T00:00:00+00:00")
+
+
+async def test_list_events_rejects_a_naive_end_with_no_timezone_offset() -> None:
+    calendar = _FakeCalendar([])
+    adapter = _adapter(calendar)
+
+    with pytest.raises(ValueError, match="must include an explicit timezone offset"):
+        await adapter.list_events("2026-09-01T00:00:00+00:00", "2026-09-30T00:00:00")
+
+
 async def test_create_event_returns_the_real_new_uid() -> None:
     calendar = _FakeCalendar([], created_uid="brand-new-uid")
     adapter = _adapter(calendar)
@@ -261,4 +283,26 @@ async def test_create_event_raises_when_the_real_server_returns_no_uid() -> None
     )
 
     with pytest.raises(CalendarEventCreationError):
+        await adapter.create_event(draft)
+
+
+async def test_create_event_rejects_a_naive_start_with_no_timezone_offset() -> None:
+    calendar = _FakeCalendar([])
+    adapter = _adapter(calendar)
+    draft = CalendarEventDraft(
+        summary="s", start="2026-09-03T10:00:00", end="2026-09-03T11:00:00+00:00", attendees=()
+    )
+
+    with pytest.raises(ValueError, match="must include an explicit timezone offset"):
+        await adapter.create_event(draft)
+
+
+async def test_create_event_rejects_a_naive_end_with_no_timezone_offset() -> None:
+    calendar = _FakeCalendar([])
+    adapter = _adapter(calendar)
+    draft = CalendarEventDraft(
+        summary="s", start="2026-09-03T10:00:00+00:00", end="2026-09-03T11:00:00", attendees=()
+    )
+
+    with pytest.raises(ValueError, match="must include an explicit timezone offset"):
         await adapter.create_event(draft)

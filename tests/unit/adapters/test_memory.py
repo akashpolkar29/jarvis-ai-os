@@ -387,6 +387,39 @@ def test_a_restored_record_is_retrievable_with_its_real_content_intact(tmp_path:
     assert results[0].value.value == "tabs"
 
 
+def test_wipe_deletes_every_real_record_and_returns_the_real_count(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    adapter.write(_value("tabs"))
+    adapter.write(_value("rust"))
+
+    deleted = adapter.wipe()
+
+    assert deleted == 2  # noqa: PLR2004 -- the real count of records written above
+    assert _raw_row_count(database_path) == 0
+
+
+def test_wipe_on_an_already_empty_store_returns_zero(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+
+    deleted = adapter.wipe()
+
+    assert deleted == 0
+
+
+def test_a_write_after_wipe_succeeds_normally(tmp_path: Path) -> None:
+    """The store stays fully usable after a wipe -- not left in a broken state."""
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+    adapter.write(_value("tabs"))
+    adapter.wipe()
+
+    adapter.write(_value("rust"))
+
+    assert _raw_row_count(database_path) == 1
+
+
 def test_expired_unpinned_record_is_not_returned() -> None:
     clock = _FakeClock(_NOW)
     adapter = _adapter(clock)

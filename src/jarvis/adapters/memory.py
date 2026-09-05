@@ -278,6 +278,17 @@ class SqliteMemoryAdapter:
         finally:
             source_connection.close()
 
+    def wipe(self) -> int:
+        """Permanently delete every real row currently in the store (Phase 10).
+
+        Returns:
+            The number of rows actually deleted. ``0`` if the store
+            was already empty.
+        """
+        cursor = self._connection.execute("DELETE FROM memory_records")
+        self._connection.commit()
+        return cursor.rowcount
+
     def retrieve(self, query: str, *, limit: int) -> tuple[MemoryRecord, ...]:
         """Return up to ``limit`` real records ranked by cosine similarity to ``query``.
 

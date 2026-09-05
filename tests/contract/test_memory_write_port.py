@@ -44,6 +44,9 @@ class _FakeMemoryWriteAdapter:
     def restore(self, source_path: str) -> None:
         pass
 
+    def wipe(self) -> int:
+        return 0
+
 
 class _FakeEmbeddingPort:
     def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
@@ -78,6 +81,6 @@ def test_an_object_missing_the_required_methods_does_not_satisfy_memory_write_po
     """The isinstance check is meaningful: it actually rejects non-conforming objects."""
 
     class NotAMemoryWriteSource:
-        """Deliberately lacks write()/pin()/sweep_expired()/forget()/backup()/restore()."""
+        """Deliberately lacks write()/pin()/sweep_expired()/forget()/backup()/restore()/wipe()."""
 
     assert isinstance(NotAMemoryWriteSource(), MemoryWritePort) is False

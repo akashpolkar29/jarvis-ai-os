@@ -975,6 +975,133 @@ def test_memory_restore_subcommand_denied_by_remote_confirmation_alone(
     assert exit_code == 1
 
 
+def test_memory_wipe_subcommand_reports_the_real_deleted_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_wipe_memory(
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        decision = _make_decision(granted=True, capability_id="memory.wipe")
+        return type("Outcome", (), {"decision": decision, "deleted_count": 3})()
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_wipe_memory",
+        fake_authorize_and_wipe_memory,
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "wipe",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "deleted: 3" in captured.out
+
+
+def test_memory_wipe_subcommand_denied_by_remote_confirmation_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """memory.wipe is MANUAL_ONLY -- remote confirmation alone must not grant it."""
+
+    def fake_authorize_and_wipe_memory(
+        *,
+        physical_confirmation_available: bool,
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        decision = _make_decision(
+            granted=physical_confirmation_available, capability_id="memory.wipe"
+        )
+        deleted_count = 0 if physical_confirmation_available else None
+        return type("Outcome", (), {"decision": decision, "deleted_count": deleted_count})()
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_wipe_memory",
+        fake_authorize_and_wipe_memory,
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "wipe",
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_audit_history_subcommand_shows_a_real_prior_ping(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real, unmocked, end-to-end proof: a real prior ping shows up in real audit history."""
+    chain_path = tmp_path / "audit_chain.json"
+    main(["ping", "--chain-path", str(chain_path)])
+    capsys.readouterr()
+
+    exit_code = main(["audit-history", "--chain-path", str(chain_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "0: ping GRANTED" in captured.out
+
+
+def test_audit_history_subcommand_respects_limit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    main(["ping", "--chain-path", str(chain_path)])
+    main(["ping", "--chain-path", str(chain_path)])
+    capsys.readouterr()
+
+    exit_code = main(["audit-history", "--chain-path", str(chain_path), "--limit", "1"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    # Real, honest behavior: the audit-history call itself is already
+    # appended to the chain by the time filtering runs, so the single
+    # most recent record is this view's own call, not either ping.
+    assert "2: audit.history GRANTED" in captured.out
+    assert "1: ping GRANTED" not in captured.out
+    assert "0: ping GRANTED" not in captured.out
+
+
+def test_audit_history_subcommand_respects_capability_id_filter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `read` (not `memory retrieve`) deliberately: the CLI has no
+    # --database-path override, so a real `memory retrieve` call would
+    # default to a relative `memory.sqlite3` resolved against the real
+    # process CWD -- a real, known, pre-existing hazard in this
+    # project's own CLI wiring, avoided here rather than reproduced.
+    real_file = tmp_path / "some_file.txt"
+    real_file.write_text("content", encoding="utf-8")
+    chain_path = tmp_path / "audit_chain.json"
+    main(["ping", "--chain-path", str(chain_path)])
+    main(["read", str(real_file), "--chain-path", str(chain_path)])
+    capsys.readouterr()
+
+    exit_code = main(["audit-history", "--chain-path", str(chain_path), "--capability-id", "ping"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "ping GRANTED" in captured.out
+    assert "fs.read_file" not in captured.out
+
+
 def test_send_email_subcommand_routes_to_and_subject_and_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
