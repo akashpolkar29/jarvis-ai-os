@@ -146,6 +146,21 @@ uv sync --all-groups
 uv run pre-commit install
 ```
 
+**Real system requirements, not just Python packages** (see
+`docs/architecture/dependency-portability-audit.md` for the full
+audit): `PyGObject` needs a C compiler and `libgirepository-2.0-dev`/
+`libcairo2-dev` to build, plus `gir1.2-gtk-4.0` at runtime (for the
+real GTK4 confirmation dialog and Console UI); `bubblewrap` provides
+the real sandbox the coding agent runs inside; `libportaudio2` is
+needed for real microphone capture. See `.github/workflows/ci.yml`'s
+own apt-get step for the exact, verified package list.
+
+**Real speech-to-text (`jarvis listen`'s STT stage) requires an NVIDIA
+GPU with CUDA** — `adapters/stt.py` hardcodes `device="cuda"`, with no
+CPU fallback implemented. Every other real capability (desktop
+control, memory, browser automation, coding, email/calendar, job
+assistance) has no GPU dependency.
+
 ## Quality gates
 
 Every work package must pass all of the following before it is

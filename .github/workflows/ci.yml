@@ -45,7 +45,21 @@ jobs:
       # BwrapSandboxAdapter's own tests execute for real (matching this
       # repo's "git is a reliable CI dependency" pattern for
       # LocalWorkspaceAdapter).
-      - name: Install system dependencies (PyGObject build + GTK4 runtime + bwrap)
+      #
+      # libportaudio2 (real dependency-portability finding, 5-mixed-real-
+      # tasks pass, 2026-09-05): `sounddevice` (imported at module level
+      # by kernel/voice_loop.py, adapters/wake_word.py, and
+      # adapters/candidate_presentation.py, all reachable during test
+      # collection) is a pure-Python ctypes binding with no bundled
+      # binary -- it `dlopen`s the real system `libportaudio.so.2`,
+      # confirmed directly by checking the installed wheel contains no
+      # `.so` of its own. CI was passing only because `ubuntu-latest`
+      # happens to ship this library by default already -- a real,
+      # previously undeclared dependency on the runner image's own
+      # contents, not a genuine absence of the requirement. Declared
+      # explicitly here now, matching this step's own stated discipline
+      # for PyGObject/bwrap.
+      - name: Install system dependencies (PyGObject build + GTK4 runtime + bwrap + libportaudio)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -54,7 +68,8 @@ jobs:
             libgirepository-2.0-dev \
             libcairo2-dev \
             gir1.2-gtk-4.0 \
-            bubblewrap
+            bubblewrap \
+            libportaudio2
 
       # Real, confirmed CI failure (every WP-45+ run, both matrix legs) fixed
       # here, not merely anticipated: bwrap successfully creates its
