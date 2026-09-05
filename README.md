@@ -109,6 +109,11 @@ for the individual decisions behind it.
 - **[`CLAUDE.md`](CLAUDE.md)** — this project's own working agreement
   and the single most current, detailed account of what's built, what
   was verified live, and what real gaps remain open at each milestone.
+- **[`CHANGELOG.md`](CHANGELOG.md)** — a real, scannable, per-release
+  summary in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+  format. `CLAUDE.md`/`docs/threat-model/v0.md` remain the
+  unrounded, exhaustive sources of truth; this file is the quick
+  version.
 
 ## Privacy model
 
