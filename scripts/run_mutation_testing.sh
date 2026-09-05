@@ -17,12 +17,18 @@
 # racing external read/write can leave a real mutation applied to the
 # working tree even after the run reports done (see docs/threat-model/v0.md
 # for the real, directly-caught instance of this).
+#
+# MUTATION_MODULES overrides the default target list (space-separated real
+# module paths) -- e.g. the adapter-resilience/mutation-extension pass
+# (2026-09-05) reused this exact script, unmodified logic, against the
+# kernel/*.py orchestration layer instead of the policy/classification
+# core, via `MUTATION_MODULES="src/jarvis/kernel/memory.py ..." scripts/run_mutation_testing.sh`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TEST_CMD="uv run pytest -o addopts='' --no-cov -x -q tests/property tests/unit/test_policy.py tests/unit/test_capability.py tests/unit/application tests/unit/test_communications_kernel.py tests/unit/test_files.py tests/unit/test_coding_kernel.py tests/unit/test_job_assistance_kernel.py tests/unit/test_memory.py"
+TEST_CMD="uv run pytest -o addopts='' --no-cov -x -q tests/property tests/unit/test_policy.py tests/unit/test_capability.py tests/unit/application tests/unit/test_communications_kernel.py tests/unit/test_files.py tests/unit/test_coding_kernel.py tests/unit/test_job_assistance_kernel.py tests/unit/test_memory.py tests/unit/test_memory_kernel.py tests/unit/test_capabilities.py tests/unit/test_desktop_kernel.py tests/unit/test_desktop_kernel_git.py tests/unit/test_desktop_kernel_docker.py"
 
-MODULES=(
+DEFAULT_MODULES=(
   "src/jarvis/domain/policy.py"
   "src/jarvis/domain/capability.py"
   "src/jarvis/application/communications/classification.py"
@@ -30,6 +36,13 @@ MODULES=(
   "src/jarvis/application/coding/classification.py"
   "src/jarvis/application/job_assistance/classification.py"
 )
+
+if [ -n "${MUTATION_MODULES:-}" ]; then
+  # shellcheck disable=SC2206 -- deliberate word-splitting on a space-separated override
+  MODULES=($MUTATION_MODULES)
+else
+  MODULES=("${DEFAULT_MODULES[@]}")
+fi
 
 OUT_DIR="${MUTATION_OUT_DIR:-/tmp/cr-mutation-run}"
 mkdir -p "$OUT_DIR"

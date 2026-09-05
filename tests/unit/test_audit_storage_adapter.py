@@ -202,6 +202,37 @@ def test_a_corrupted_record_hash_raises_on_load(tmp_path: Path) -> None:
         adapter.load()
 
 
+def test_editing_a_real_past_decision_field_directly_on_disk_is_caught_on_load(
+    tmp_path: Path,
+) -> None:
+    """The real, named tampering scenario this project's own threat model asks to prove.
+
+    Real audit-log-integrity investigation (adapter-resilience/
+    mutation-extension/audit-log-integrity pass, Track 3, 2026-09-05):
+    the existing sibling test above only tampers with the
+    ``record_hash`` field itself, never a real *decision* field with
+    ``record_hash`` left untouched -- the more realistic, more
+    security-relevant forgery attempt ("edit a past denied action to
+    look granted, without knowing how to also recompute a matching
+    hash"). Confirms the same real mechanism
+    (``AuditRecord.__post_init__`` recomputing ``compute_hash()`` from
+    the record's own real content and comparing) catches this too --
+    a real, previously-unclosed test gap, not a new mechanism.
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    chain = _build_varied_chain()
+    assert chain[1].decision.granted is False  # the real MANUAL_ONLY-denied record
+    adapter.save(chain)
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw[1]["decision"]["granted"] = True  # forge a denial into a grant, record_hash untouched
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(AuditRecordTampered):
+        adapter.load()
+
+
 def test_a_deleted_middle_record_is_not_caught_by_load_but_is_caught_by_verify(
     tmp_path: Path,
 ) -> None:

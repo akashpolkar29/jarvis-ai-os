@@ -197,3 +197,16 @@ it.
   `coding.run_task` already gets enough repository context without it
   (real finding: no, it currently gets none at all beyond the caller's
   own task text). Options laid out, no decision made — nothing built.
+- **Real, open gap (not yet a real ROADMAP row): audit-log
+  wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
+  research and one real test fix only, written 2026-09-05. The real
+  hash chain (`domain/audit.py::AuditChain`) already catches
+  per-record and cross-record tampering of a *loaded* chain, now more
+  fully tested; it has no protection against the chain file being
+  *wholly replaced* with a freshly-computed, self-consistent, but
+  fabricated history — `JsonFileAuditStorageAdapter.save()` sets no
+  restrictive file permissions or OS-level append-only flag. Four real
+  options laid out (file permissions, an OS-level immutable flag, a
+  separate write-once external anchor, or documenting the current
+  guarantee as sufficient), no recommendation made — the user's own
+  decision, not built.
