@@ -108,14 +108,25 @@ jobs:
             greenmail/standalone:latest
           ready=""
           for _ in $(seq 1 30); do
-            if (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1; then
+            # A real IMAP4 protocol handshake, not just a TCP accept -- a real,
+            # empirically-found gap (adapter-resilience pass, 2026-09-05):
+            # GreenMail's own JVM can accept a TCP connection on this port
+            # before its IMAP service has actually finished initializing,
+            # causing a real imaplib.IMAP4.abort ("socket error: EOF") on the
+            # very first handshake read if a test proceeds on a bare TCP-ready
+            # signal alone. Mirrors tests/integration/test_adapter_failure_resilience.py's
+            # own _real_greenmail_imap_handshake_succeeds() fix exactly.
+            if python3 -c "
+          import imaplib
+          imaplib.IMAP4('127.0.0.1', 3143).shutdown()
+          " >/dev/null 2>&1; then
               ready=1
               break
             fi
             sleep 1
           done
           if [ -z "$ready" ]; then
-            echo "::error::GreenMail never became reachable on 127.0.0.1:3143 within 30s"
+            echo "::error::GreenMail never completed a real IMAP handshake on 127.0.0.1:3143 within 30s"
             docker logs jarvis-test-greenmail || true
             exit 1
           fi
