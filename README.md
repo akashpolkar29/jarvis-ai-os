@@ -2,16 +2,29 @@
 
 Privacy-first, plugin-based agent kernel for Linux.
 
-**Status:** pre-alpha, Milestone 0 complete (work packages 1–16, tagged
-`v0.1.0`). What works today: a capability-based policy engine enforcing
-a four-tier authorization ladder, a hash-chained and persisted audit
-log, a capability registry, and a working `jarvis` CLI exposing two
-real capability families — MPRIS media control (`play`/`pause`/`next`/
-`previous`) and scope-checked local file reading (`read`) — alongside
-`ping`, the no-op that proved the stack end-to-end first. There is no
-dynamic plugin loading, no IPC transport, and no real physical-presence
-detection yet — see `docs/plugin-guide/`, `docs/protocol/`, and
-`docs/threat-model/v0.md` for exactly what's real and what isn't.
+**Status:** pre-alpha. Milestones 0 through 6 are code-complete;
+milestones 4, 5, and 6 are tagged (`v0.4.0`, `v0.5.0`, `v0.6.0`,
+tagged out of strict milestone-sequential order — milestone 3's own
+tag remains a deliberately separate, later action). Milestone 3
+(desktop control) is code-complete but not yet tagged. See
+`docs/ROADMAP.md` and `CLAUDE.md`'s own "Current Status" section for
+the exact, current state of each milestone, including what's real,
+what's live-verified, and what real gaps remain open.
+
+What works today: a capability-based policy engine enforcing a
+four-tier authorization ladder (`ALLOW`/`CONFIRM`/`MANUAL_ONLY`/`DENY`),
+a hash-chained and persisted audit log, a capability registry with 38
+real, statically-registered capabilities (plus several dynamic-effect
+ones whose tier depends on argument content), and a working `jarvis`
+CLI covering voice interaction, multi-provider reasoning, desktop
+control (Brave, VS Code, the Claude/ChatGPT desktop apps, Docker, Git),
+memory/retrieval with backup/restore/wipe, browser automation, a
+sandboxed coding agent, email/calendar (IMAP/SMTP/CalDAV), and
+job-application research/drafting (research and drafting only — no
+auto-apply, a structural boundary, not a policy-tier gate). See
+`docs/protocol/README.md` for the real, current CLI surface,
+`docs/plugin-guide/`, and `docs/threat-model/v0.md` for exactly what's
+real, what's verified, and what isn't.
 
 ## Try it
 
@@ -20,6 +33,7 @@ uv sync --all-groups
 uv run jarvis ping --chain-path /tmp/audit_chain.json
 uv run jarvis read ~/some-file.txt --chain-path /tmp/audit_chain.json
 uv run jarvis pause --physical-confirmation-available --chain-path /tmp/audit_chain.json
+uv run jarvis audit-history --chain-path /tmp/audit_chain.json
 uv run jarvis --help
 ```
 
@@ -29,7 +43,9 @@ capability, then appends a record to the audit chain at
 interface, and `docs/threat-model/v0.md` before assuming more
 protection than currently exists — in particular, confirmation flags
 are currently self-reported with no real presence detection behind
-them.
+them (a real `Gtk4PhysicalConfirmationAdapter` backs `jarvis listen`
+specifically; every other subcommand's flags are still a direct,
+unverified CLI argument).
 
 ## Architecture
 
@@ -48,20 +64,28 @@ domain -> ports -> application -> adapters -> kernel -> ipc / cli
   vendor.
 - **`application`** holds use cases, including the policy engine: the
   single choke point that evaluates a capability's declared effects
-  against the active tier (`ALLOW` / `CONFIRM` / `MANUAL_ONLY` /
-  `DENY`). There is no command blocklist anywhere else in the system.
+  against the active tier. There is no command blocklist anywhere else
+  in the system.
 - **`adapters`** implement ports against real, named technologies.
 - **`kernel`** is the composition root that wires adapters, ports, and
-  use cases together.
+  use cases together into real, invocable capabilities.
 - **`ipc`** / **`cli`** are the outermost rings: transport and
-  command-line entry point.
+  command-line entry point. `jarvis.ipc` has no real content yet —
+  every CLI invocation boots the kernel directly, in-process; see
+  `docs/protocol/README.md`.
 
 Everything the kernel knows about is a capability, not an agent — new
 features are meant to be plugins built against `jarvis.plugin_api`,
-which depends on `domain` only. Today, `jarvis.plugin_api` has no real
-content yet and every capability is registered directly in
-`kernel/capabilities.py` — see `docs/plugin-guide/README.md` for how
-to add one under the current, pre-dynamic-loading setup.
+which depends on `domain` only and now has real content: the narrow
+subset of domain vocabulary (`CapabilityDescriptor`, `Effect`, `Tier`,
+`Tainted`, `Provenance`, etc.) a plugin author needs to *describe* a
+new capability. A real, minimal, working example lives at
+`docs/plugin-guide/example_plugin.py`. **What plugin support does not
+yet include**: dynamic, out-of-tree plugin loading. Wiring a described
+capability into the real, running registry
+(`kernel/capabilities.py::build_default_registry()`) still means
+editing a file inside this source tree — see `docs/plugin-guide/README.md`
+for exactly how, worked from the capabilities that already exist.
 
 See `docs/architecture/` for the full, approved design and `docs/adr/`
 for the individual decisions behind it.
@@ -69,13 +93,22 @@ for the individual decisions behind it.
 ## Documentation
 
 - **[`docs/protocol/README.md`](docs/protocol/README.md)** — the
-  actual CLI interface: subcommands, flags, exit codes, what gets
+  actual, current CLI interface: every real subcommand, the capability
+  it authorizes, its extra arguments, flags, exit codes, and what gets
   audited.
 - **[`docs/plugin-guide/README.md`](docs/plugin-guide/README.md)** —
-  how to add a new capability today, worked from the two that exist.
+  how to add a new capability today, worked from real, existing ones.
 - **[`docs/threat-model/v0.md`](docs/threat-model/v0.md)** — what is
   and isn't actually defended against right now. Read this before
-  trusting the system with anything that matters.
+  trusting the system with anything that matters. It is a long,
+  running, dated log of every real finding across every milestone, not
+  a short summary — search it for a specific capability or concern
+  rather than reading start to finish.
+- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — the real, current roadmap
+  and milestone status.
+- **[`CLAUDE.md`](CLAUDE.md)** — this project's own working agreement
+  and the single most current, detailed account of what's built, what
+  was verified live, and what real gaps remain open at each milestone.
 
 ## Privacy model
 
@@ -88,7 +121,20 @@ cloud provider only behind an explicit `CONFIRM`. Where classification
 is uncertain, the system fails closed. Secrets live only in the system
 keyring. Audio is never persisted to disk. Voice/speaker verification is
 a convenience filter, never an authorization boundary — physical access
-to the machine is the real auth boundary.
+to the machine is the real auth boundary, mechanically enforced (see
+`tests/meta/test_speaker_id_isolation.py`), not merely a stated
+principle.
+
+**Two real, known license-compatibility findings, not yet resolved**:
+`piper-tts` (the real text-to-speech engine, imported directly
+in-process) is GPL-3.0-or-later; `icalendar-searcher` (a real,
+exercised transitive dependency of the CalDAV calendar adapter) is
+AGPL-3.0-or-later. Both raise real questions for this MIT-licensed
+project that have not yet been decided — see
+`docs/architecture/secrets-license-sbom-audit-phase9.md` for the full
+finding. A real, current CycloneDX SBOM is available at
+`docs/architecture/sbom.cyclonedx.json` (`scripts/generate_sbom.sh`
+regenerates it on demand).
 
 ## Development setup
 
@@ -112,12 +158,16 @@ considered done:
 | Types | `uv run mypy --strict src tests` |
 | Architecture boundaries | `uv run lint-imports` |
 | Tests | `uv run pytest` |
-| Domain coverage | `uv run coverage report --include="src/jarvis/domain/*"` |
-| Policy engine coverage | `uv run coverage report --include="src/jarvis/application/policy/*"` |
+| Domain coverage | `uv run coverage report --include="src/jarvis/domain/*" --fail-under=100` |
+| Policy engine coverage | `uv run coverage report --include="src/jarvis/application/policy/*" --fail-under=100` |
+| Reasoning layer coverage | `uv run coverage report --include="src/jarvis/application/reasoning/*" --fail-under=100` |
+| API reference builds | `uv run sphinx-build -b html docs/api docs/api/_build` |
 
 Coverage is gated per-package rather than globally so that an untested
-policy engine can't hide behind well-tested glue code elsewhere. See
-`.github/workflows/ci.yml` for the exact, current thresholds.
+policy engine or reasoning layer can't hide behind well-tested glue
+code elsewhere. See `.github/workflows/ci.yml` for the exact, current
+gate set (it also starts real, local, credential-free IMAP/SMTP/CalDAV
+test servers for the integration suite).
 
 ## Contributing
 
@@ -126,4 +176,5 @@ conventions, and the process for proposing an architecture change.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). See "Privacy model" above for two real,
+unresolved dependency-license findings.

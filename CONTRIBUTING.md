@@ -2,11 +2,10 @@
 
 ## Workflow
 
-Work proceeds one work package at a time. `docs/architecture/roadmap.md`
-does not exist yet (see `docs/architecture/README.md`) — sequencing
-and scope currently come directly from whoever is directing the work,
-not from a roadmap file. If `roadmap.md` is ever supplied, this section
-should reference it for real. Each work package moves through
+Work proceeds one work package at a time. `docs/ROADMAP.md` is the
+real, current roadmap and milestone status; sequencing and fine-grained
+scope within a milestone still come directly from whoever is directing
+the work, not purely from the roadmap file. Each work package moves through
 Analysis -> Plan -> Implement -> Verify -> Review, as described in
 `CLAUDE.md`. Don't start a work package before the previous one has been
 reviewed, and don't fold a future work package's scope into the current
