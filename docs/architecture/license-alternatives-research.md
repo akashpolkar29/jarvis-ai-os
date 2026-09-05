@@ -215,11 +215,49 @@ engineering undertaking, not evaluated further here).
 | `piper-tts` | GPL-3.0-or-later | Direct, in-process import | `kokoro-onnx` (MIT code + Apache-2.0 weights, ONNX-only, real & verified) | Re-implement `adapters/tts.py` against a different API; unverified audio-quality parity |
 | `icalendar-searcher` | AGPL-3.0-or-later | Via `caldav`'s own internals, genuinely exercised on every recurring-event query | No full `caldav` replacement found; `server_expand=True` may avoid triggering it at all, with zero dependency change (real server-support unverified) | Either verify server-side expand support, or fork/patch `caldav`'s own internals -- both real, non-trivial paths |
 
+## Real decision recorded: `piper-tts` stays (7 real decisions prompt, Decision 3, 2026-09-05)
+
+The user made a real, direct decision to keep `piper-tts`, on this
+reasoning, stated here as the user's own judgment call -- **not a
+legal conclusion this project asserts with certainty**: GPL's own
+copyleft obligations (the "combined work"/"conveying" analysis in
+Section 1 above) are triggered by *distributing* the combined software
+to others, and this project, as currently used, is run personally and
+privately by its own author/user -- not packaged or distributed as a
+binary or installer to third parties. GPL's own Section 2 ("you may
+make, run and propagate covered works that you do not convey, without
+conditions") already covers exactly this use pattern, as Section 1
+above already noted.
+
+**This reasoning is scoped to the current, real distribution model,
+not a permanent closure of the question.** It would need genuine
+re-examination if that model ever changes -- for example, if this
+project is ever packaged as a built binary/installer, published to a
+package registry, or otherwise distributed to someone other than its
+own current user/author. No such change is planned as of this
+decision; if one is ever planned, this document's own Section 1
+reasoning (and `kokoro-onnx` as a real, already-verified alternative)
+remains available to revisit at that time, not re-researched from
+scratch.
+
+No dependency was switched. No code changed as a result of this
+decision.
+
+## `icalendar-searcher` (AGPL): see Decision 4's own real, separate outcome
+
+This dependency's own real resolution (or continued open status) is
+recorded separately -- see `docs/architecture/secrets-license-sbom-audit-phase9.md`'s
+own updated finding and `docs/OPEN_DECISIONS.md`, both updated as part
+of the "7 real decisions" prompt's own Decision 4, not this document's
+Decision 3.
+
 ## Conclusion
 
-Real, verified options exist for `piper-tts` (a clean, permissively-
-licensed alternative, `kokoro-onnx`) and a real, no-new-dependency
-mitigation path is available for `icalendar-searcher` (server-side
-expansion, unverified against a real server). Neither was applied.
-Both remain open, real decisions for the user, informed now by
-concrete, verified research rather than an unresolved flag alone.
+`piper-tts`'s real license question is now resolved by a real, direct
+user decision (above): kept, on a real, stated distribution-model
+reasoning, not a switch to `kokoro-onnx`. `icalendar-searcher`'s own
+real outcome is tracked separately under Decision 4. This document's
+own original research (both dependencies' real usage patterns, the
+quoted license text, and both verified alternative libraries) remains
+accurate and is preserved unedited above as the real evidence base
+either decision was made from.

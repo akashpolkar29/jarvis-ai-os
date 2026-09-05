@@ -39,24 +39,37 @@ never itself the subject of this or any ADR document -- this
 acceptance covers exactly what ADR-0061's own text describes
 (backup/restore), not `memory.wipe` by extension.
 
-## 3. Two real, unresolved dependency-license findings
+## 3a. `piper-tts` (GPL-3.0-or-later) -- RESOLVED 2026-09-05
 
-**What's needed**: a decision on whether `piper-tts` (GPL-3.0-or-later,
-imported directly in-process by `adapters/tts.py`) and
-`icalendar-searcher` (AGPL-3.0-or-later, genuinely exercised by every
-`caldav.date_search()` call involving a recurring event) are
-acceptable dependencies for this MIT-licensed project to keep, or
-whether one or both should be replaced or mitigated.
+**Resolved**: a real, direct user decision (7 real decisions prompt,
+Decision 3) -- `piper-tts` stays. Reasoning (the user's own judgment
+call, not a legal conclusion this project asserts with certainty):
+GPL's copyleft obligations trigger on *distribution*, and this project
+is currently used personally/privately, not distributed as a packaged
+binary to third parties. **Flagged for real re-examination if the
+project's distribution model ever changes** (e.g. a built
+binary/installer published to others) -- see
+`docs/architecture/license-alternatives-research.md`'s own "Real
+decision recorded" section for the full reasoning, and
+`docs/architecture/secrets-license-sbom-audit-phase9.md`'s own
+matching update.
+
+## 3b. `icalendar-searcher` (AGPL-3.0-or-later)
+
+**What's needed**: whether the real `server_expand=True` mitigation
+(tested under Decision 4 of the same prompt) actually avoids invoking
+`icalendar-searcher`'s own code, and if so, whether to apply it
+permanently; if not, the same personal-use reasoning as `piper-tts`
+above, pending the user's own further input.
 
 **Already investigated**: `docs/architecture/secrets-license-sbom-audit-phase9.md`
-(10-phase combined pass, Phase 9) first found both.
+(10-phase combined pass, Phase 9) first found this.
 `docs/architecture/license-alternatives-research.md` (3 combined
-tasks, Task 3) confirmed the exact real usage pattern for each, quoted
-the real, relevant GPL/AGPL license text directly, and found: a real,
-verified MIT/Apache-2.0 alternative for `piper-tts` (`kokoro-onnx`,
-ONNX-only, no `torch`); a real, no-new-dependency mitigation for
-`icalendar-searcher` (`caldav`'s own `server_expand=True`, unverified
-against a real server). Neither dependency has been switched.
+tasks, Task 3) confirmed the real usage pattern, quoted the real,
+relevant AGPL license text directly, and found the real,
+no-new-dependency `server_expand=True` mitigation candidate,
+unverified against a real server at the time. See this same prompt's
+own Decision 4 for the real, empirical test result.
 
 ## 4. Two real, structural CLI naming inconsistencies
 

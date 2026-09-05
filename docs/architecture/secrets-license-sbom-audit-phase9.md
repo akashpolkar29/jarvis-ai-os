@@ -111,6 +111,29 @@ Neither finding was acted on (no code removed, no relicensing
 attempted) -- named here, with full evidence, for the user's own
 review.
 
+**Update (7 real decisions prompt, Decision 3, 2026-09-05)**: finding
+1 (`piper-tts`) is now resolved by a real, direct user decision --
+kept, not switched. The user's own reasoning, and the real caveat on
+when it would need re-examination, is recorded in
+`docs/architecture/license-alternatives-research.md`'s own new
+"Real decision recorded" section, not duplicated here. Finding 2
+(`icalendar-searcher`) has its own real, separate resolution --
+tracked under Decision 4, see `docs/OPEN_DECISIONS.md` and
+`docs/architecture/license-alternatives-research.md` for that
+outcome, whichever way the real evidence lands.
+
+**A real, honest note on this prompt's own file-naming assumption**:
+Decision 3, as given, referred to updating
+"`docs/architecture/license-inventory.md`" alongside
+`license-alternatives-research.md`. No file by that name exists in
+this repository -- this document (`secrets-license-sbom-audit-phase9.md`,
+Phase 9 of the 10-phase combined pass) is the real document that
+originally inventoried both license findings, and is the one updated
+here instead. No new, differently-named file was created to match the
+prompt's own assumption literally, since doing so would have split
+this real finding's history across two documents rather than keeping
+it in the one that has carried it since Phase 9.
+
 ## 3. SBOM
 
 A real CycloneDX 1.6 SBOM generated from the actual, currently-
