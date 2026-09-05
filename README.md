@@ -114,6 +114,10 @@ for the individual decisions behind it.
   format. `CLAUDE.md`/`docs/threat-model/v0.md` remain the
   unrounded, exhaustive sources of truth; this file is the quick
   version.
+- **[`docs/OPEN_DECISIONS.md`](docs/OPEN_DECISIONS.md)** — one real
+  index of every item awaiting the user's own decision (tagging, an
+  unreviewed ADR, license findings, etc.), each linked to its own full
+  investigation. Decides nothing itself.
 
 ## Privacy model
 
