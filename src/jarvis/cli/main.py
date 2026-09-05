@@ -151,9 +151,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes.util
 import logging
+import os
+import shutil
 import sqlite3
 import sys
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -476,7 +480,7 @@ def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     _add_common_flags(git_force_push_parser)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_parser block per subcommand
     """Build the argument parser: one subcommand per authorizable command."""
     parser = argparse.ArgumentParser(
         prog="jarvis",
@@ -577,6 +581,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_file_parsers(subparsers)
     _add_desktop_parsers(subparsers)
 
+    subparsers.add_parser(
+        "doctor",
+        help="Check this machine's real environment readiness -- no capability, no audit record.",
+    )
+
     listen_parser = subparsers.add_parser(
         "listen",
         help="Run the voice pipeline continuously in the foreground, until interrupted.",
@@ -619,6 +628,89 @@ def _configure_logging(*, verbose: bool) -> None:
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     logging.getLogger("jarvis").setLevel(logging.DEBUG if verbose else logging.WARNING)
+
+
+def _check_python_version() -> tuple[str, bool, str]:
+    ok = sys.version_info >= (3, 12)
+    version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    return "Python version", ok, f"{version} (>=3.12 required)"
+
+
+def _check_binary(name: str, *, why: str) -> tuple[str, bool, str]:
+    path = shutil.which(name)
+    return f"'{name}' binary", path is not None, path if path is not None else f"not found ({why})"
+
+
+def _check_gtk4() -> tuple[str, bool, str]:
+    try:
+        import gi  # noqa: PLC0415 -- deliberately lazy, this is the real check itself
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401, PLC0415 -- import itself is the real check
+    except (ImportError, ValueError) as exc:
+        return "GTK4 typelib", False, f"not importable ({exc})"
+    return "GTK4 typelib", True, "importable (confirmation dialogs / Console UI)"
+
+
+def _check_portaudio() -> tuple[str, bool, str]:
+    found = ctypes.util.find_library("portaudio")
+    detail = found if found is not None else "not found (needed for real microphone capture)"
+    return "libportaudio", found is not None, detail
+
+
+def _check_ollama_reachable() -> tuple[str, bool, str]:
+    try:
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1)
+    except OSError as exc:
+        return "Ollama (localhost:11434)", False, f"not reachable ({exc})"
+    return (
+        "Ollama (localhost:11434)",
+        True,
+        "reachable (used by coding.run_task/job_assistance.draft's local-only default)",
+    )
+
+
+def _check_audit_chain_directory_writable() -> tuple[str, bool, str]:
+    default_dir = _DEFAULT_CHAIN_PATH.resolve().parent
+    ok = os.access(default_dir, os.W_OK)
+    return (
+        f"Default audit-chain directory ({default_dir})",
+        ok,
+        "writable" if ok else "not writable",
+    )
+
+
+def _run_doctor() -> int:
+    """Check this machine's real environment readiness. Always returns 0.
+
+    **Real, deliberate design choice, not an oversight**: `doctor` is
+    not a capability. It performs no action and reads no sensitive
+    data -- only already-public, non-secret local environment facts
+    (binary presence on `PATH`, Python version, GPU/GTK4/audio library
+    availability, whether a local Ollama server is reachable) -- so it
+    has no real `Effect` in this project's own taxonomy, and produces
+    no audit record, the same way a bare `jarvis --help` needs no
+    authorization either. Every check here is read-only and safe to
+    run repeatedly.
+    """
+    print("jarvis doctor -- real environment readiness checks\n")
+    checks = [
+        _check_python_version(),
+        _check_binary("git", why="needed for git.* desktop-control capabilities"),
+        _check_binary("docker", why="needed for docker.* desktop-control capabilities"),
+        _check_binary("bwrap", why="needed for the sandboxed coding agent"),
+        _check_gtk4(),
+        _check_portaudio(),
+        _check_binary(
+            "nvidia-smi", why="needed for real STT -- adapters/stt.py hardcodes device=cuda"
+        ),
+        _check_ollama_reachable(),
+        _check_audit_chain_directory_writable(),
+    ]
+    for name, ok, detail in checks:
+        status = "OK" if ok else "MISSING"
+        print(f"[{status:>7}] {name}: {detail}")
+    return 0
 
 
 def _run_listen(chain_path: Path, *, verbose: bool) -> int:
@@ -1167,6 +1259,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "listen":
         return _run_listen(args.chain_path, verbose=args.verbose)
+    if args.command == "doctor":
+        return _run_doctor()
 
     try:
         outcome = _dispatch_command(args)

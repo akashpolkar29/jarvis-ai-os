@@ -65,6 +65,7 @@ not to duplicate the policy engine's own reasoning.
 | `git-push <repo-dir> <remote> <branch>` | `git.push` | `repo-dir`, `remote`, `branch` |
 | `git-force-push <repo-dir> <remote> <branch>` | `git.force_push` | `repo-dir`, `remote`, `branch` |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
+| `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
 
 **Two real, deliberate naming inconsistencies, not yet resolved** (see
 `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md` for

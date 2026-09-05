@@ -43,7 +43,7 @@ from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
-from jarvis.cli.main import main
+from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -2725,6 +2725,8 @@ _TOP_LEVEL_COMMANDS = (
     "git-push",
     "git-force-push",
     "ping",
+    "audit-history",
+    "doctor",
     "play",
     "pause",
     "next",
@@ -2732,7 +2734,7 @@ _TOP_LEVEL_COMMANDS = (
     "read",
     "listen",
 )
-_MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore")
+_MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore", "wipe")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -2761,3 +2763,66 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "WP-" not in captured.out, (
             f"memory {subcommand} --help leaks a work-package reference"
         )
+
+
+def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A real, unmocked run against this real machine's own environment."""
+    exit_code = main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Python version" in captured.out
+    assert "Ollama" in captured.out
+    assert "libportaudio" in captured.out
+
+
+def test_doctor_subcommand_does_not_accept_chain_path_or_confirmation_flags() -> None:
+    """Real, structural proof: doctor is not a capability -- it shares none of the common flags."""
+    with pytest.raises(SystemExit):
+        main(["doctor", "--chain-path", "/tmp/audit_chain.json"])
+
+
+def test_doctor_subcommand_never_creates_an_audit_chain_file(tmp_path: Path) -> None:
+    """A real, empirical proof doctor never touches the audit chain -- no file appears."""
+    monkeypatch_cwd = tmp_path
+    original_cwd = Path.cwd()
+    os.chdir(monkeypatch_cwd)
+    try:
+        main(["doctor"])
+        assert not (monkeypatch_cwd / "audit_chain.json").exists()
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_check_binary_reports_missing_for_a_real_nonexistent_binary() -> None:
+    name, ok, detail = _check_binary("definitely-not-a-real-binary-xyz123", why="test")
+
+    assert ok is False
+    assert "not found" in detail
+    assert "definitely-not-a-real-binary-xyz123" in name
+
+
+def test_check_binary_reports_found_for_a_real_binary_guaranteed_present() -> None:
+    """`python3` (or an equivalent) must exist -- this test process is itself running under it."""
+    name, ok, detail = _check_binary("python3", why="test")
+
+    assert ok is True
+    assert detail  # a real path was returned
+    assert "python3" in name
+
+
+def test_check_ollama_reachable_reports_unreachable_for_a_real_closed_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(url: str, timeout: float) -> None:  # noqa: ARG001
+        raise OSError("Connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    name, ok, detail = _check_ollama_reachable()
+
+    assert ok is False
+    assert "not reachable" in detail
+    assert "Ollama" in name
