@@ -22,10 +22,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Real CI speed audit (5 combined hygiene/reliability tasks, Task 4,
+      # 2026-09-05): "Install dependencies" (uv sync) measured a flat
+      # ~15-19s across every historical run checked, unchanged for days
+      # despite an unchanged uv.lock -- real, direct evidence the
+      # default `enable-cache: auto` behavior was not actually
+      # producing a warm cache for this repo/runner combination.
+      # Explicit `enable-cache: true` (real, documented input,
+      # confirmed against astral-sh/setup-uv's own README, not
+      # assumed) plus a per-matrix-leg `cache-suffix` (the two Python
+      # versions resolve different wheels and must not share one cache
+      # key) is a real, safe change: it cannot skip or weaken any real
+      # check, only speed up an already-deterministic dependency
+      # resolution step.
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-suffix: py${{ matrix.python-version }}
 
       # pygobject (PyGObject) ships no prebuilt wheels on PyPI -- source
       # distribution only, requiring a C compiler and these headers to
@@ -115,53 +130,68 @@ jobs:
       # start) would not reliably be readable at Radicale's own
       # startup. Running them as ordinary steps after checkout avoids
       # that real ordering problem entirely.
-      - name: Start local GreenMail IMAP/SMTP test server
+      # Real CI speed audit (5 combined hygiene/reliability tasks, Task 4,
+      # 2026-09-05): the two local test servers are fully independent
+      # (different images, different ports, no shared state) -- the
+      # only reason they were ever two sequential steps was
+      # readability, not a real ordering requirement. Starting both
+      # `docker run -d` calls in the background (`&`) lets their image
+      # pulls and container creation overlap instead of running fully
+      # serially, then a single combined readiness loop polls both
+      # real conditions (GreenMail's real IMAP4 handshake, Radicale's
+      # real HTTP reachability) each iteration until both are ready or
+      # the same real 30s deadline elapses -- no check was weakened:
+      # both real, specific readiness probes are unchanged, still
+      # exercised, still fail closed with a real docker-logs dump
+      # naming exactly which server never became ready.
+      - name: Start local GreenMail IMAP/SMTP + Radicale CalDAV test servers (parallel)
         run: |
           docker run -d --name jarvis-test-greenmail \
             -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.users=testuser:testpass@localhost -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled" \
             -p 3025:3025 -p 3143:3143 -p 3110:3110 \
-            greenmail/standalone:latest
-          ready=""
+            greenmail/standalone:latest &
+          docker run -d --name jarvis-test-radicale \
+            -p 5232:5232 \
+            -v "$(pwd)/tests/fixtures/radicale-config:/config:ro" \
+            tomsquest/docker-radicale:latest &
+          wait
+
+          greenmail_ready=""
+          radicale_ready=""
           for _ in $(seq 1 30); do
-            # A real IMAP4 protocol handshake, not just a TCP accept -- a real,
-            # empirically-found gap (adapter-resilience pass, 2026-09-05):
-            # GreenMail's own JVM can accept a TCP connection on this port
-            # before its IMAP service has actually finished initializing,
-            # causing a real imaplib.IMAP4.abort ("socket error: EOF") on the
-            # very first handshake read if a test proceeds on a bare TCP-ready
-            # signal alone. Mirrors tests/integration/test_adapter_failure_resilience.py's
-            # own _real_greenmail_imap_handshake_succeeds() fix exactly.
-            if python3 -c "
+            if [ -z "$greenmail_ready" ]; then
+              # A real IMAP4 protocol handshake, not just a TCP accept -- a real,
+              # empirically-found gap (adapter-resilience pass, 2026-09-05):
+              # GreenMail's own JVM can accept a TCP connection on this port
+              # before its IMAP service has actually finished initializing,
+              # causing a real imaplib.IMAP4.abort ("socket error: EOF") on the
+              # very first handshake read if a test proceeds on a bare TCP-ready
+              # signal alone. Mirrors tests/integration/test_adapter_failure_resilience.py's
+              # own _real_greenmail_imap_handshake_succeeds() fix exactly.
+              if python3 -c "
           import imaplib
           imaplib.IMAP4('127.0.0.1', 3143).shutdown()
           " >/dev/null 2>&1; then
-              ready=1
+                greenmail_ready=1
+              fi
+            fi
+            if [ -z "$radicale_ready" ]; then
+              status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5232/ || true)
+              if [ -n "$status" ] && [ "$status" != "000" ]; then
+                radicale_ready=1
+              fi
+            fi
+            if [ -n "$greenmail_ready" ] && [ -n "$radicale_ready" ]; then
               break
             fi
             sleep 1
           done
-          if [ -z "$ready" ]; then
+          if [ -z "$greenmail_ready" ]; then
             echo "::error::GreenMail never completed a real IMAP handshake on 127.0.0.1:3143 within 30s"
             docker logs jarvis-test-greenmail || true
             exit 1
           fi
-
-      - name: Start local Radicale CalDAV test server
-        run: |
-          docker run -d --name jarvis-test-radicale \
-            -p 5232:5232 \
-            -v "$(pwd)/tests/fixtures/radicale-config:/config:ro" \
-            tomsquest/docker-radicale:latest
-          ready=""
-          for _ in $(seq 1 30); do
-            status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5232/ || true)
-            if [ -n "$status" ] && [ "$status" != "000" ]; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [ -z "$ready" ]; then
+          if [ -z "$radicale_ready" ]; then
             echo "::error::Radicale never became reachable on 127.0.0.1:5232 within 30s"
             docker logs jarvis-test-radicale || true
             exit 1
