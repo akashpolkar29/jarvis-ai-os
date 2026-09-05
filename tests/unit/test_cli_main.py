@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -646,6 +647,45 @@ def test_memory_write_subcommand_reports_unsupported_value_cleanly(
     ) -> MemoryWriteOutcome:
         msg = "SqliteMemoryAdapter only persists str-valued memories."
         raise UnsupportedMemoryValueError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_remember", fake_authorize_and_remember
+    )
+
+    exit_code = main(
+        ["memory", "write", "prefers tabs", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+
+
+def test_memory_write_subcommand_reports_a_corrupted_database_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real, corrupted memory.sqlite3 file (sqlite3.DatabaseError) fails closed, not a crash.
+
+    Real resilience finding (10-phase combined pass, Phase 2,
+    2026-09-05): `sqlite3.DatabaseError`/`sqlite3.Error` is a bare
+    `Exception` subclass, not `OSError` -- confirmed by directly
+    running `jarvis memory write` against a real, deliberately
+    corrupted `memory.sqlite3` file before this fix, which produced a
+    raw, unhandled Python traceback instead of this module's own
+    established "Error: ..." shape. Fixed by adding `sqlite3.Error` to
+    `main()`'s own except tuple (and `kernel/voice_loop.py`'s
+    identical one, for the same real "remember"/"recall" voice
+    commands).
+    """
+
+    def fake_authorize_and_remember(
+        text: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        raise sqlite3.DatabaseError("file is not a database")
 
     monkeypatch.setattr(
         sys.modules["jarvis.cli.main"], "authorize_and_remember", fake_authorize_and_remember

@@ -155,6 +155,7 @@ verification, which was reverted rather than left in production code.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -522,6 +523,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         UnicodeDecodeError,
         KeyError,
         ValueError,
+        sqlite3.Error,
     ) as exc:
         # A real resilience gap, found by fuzzing (property-matrix/
         # fuzzing/concurrency pass, Track 2, 2026-09-04): this call

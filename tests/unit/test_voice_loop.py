@@ -371,6 +371,41 @@ async def test_a_recognized_remember_command_denied_confirmation_speaks_not_appr
     assert database_path.exists() is False
 
 
+async def test_a_remember_command_against_a_real_corrupted_database_speaks_an_honest_error(
+    tmp_path: Path,
+) -> None:
+    """A real, deliberately-corrupted memory.sqlite3 fails closed, not a crash.
+
+    Real resilience finding (10-phase combined pass, Phase 2,
+    2026-09-05): `sqlite3.DatabaseError`/`sqlite3.Error` is a bare
+    `Exception` subclass, not `OSError` -- the exact same class of gap
+    `imaplib.IMAP4.abort` was found to be in the prior
+    adapter-resilience pass. Mirrors
+    `test_a_read_command_outside_the_allowed_root_speaks_an_honest_error_not_a_crash`'s
+    own real-corruption-not-a-mock discipline: a genuinely corrupted
+    real file, not a monkeypatched exception.
+    """
+    tts = _FakeTtsPort()
+    database_path = tmp_path / "memory.sqlite3"
+    database_path.write_text("not a real sqlite file, just garbage bytes")
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("remember I prefer tabs"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+
+    assert len(tts.spoken) == 1
+    assert tts.spoken[0].startswith("Sorry, that failed:")
+
+
 async def test_the_confirmation_prompt_names_the_text_to_remember(tmp_path: Path) -> None:
     """The prompt for a resolved "remember" command names the actual text, not a generic label."""
     confirmation = _FakePhysicalConfirmationPort(approve=True)

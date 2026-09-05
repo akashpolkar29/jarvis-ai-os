@@ -152,6 +152,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1093,6 +1094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         UnicodeDecodeError,
         KeyError,
         ValueError,
+        sqlite3.Error,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
