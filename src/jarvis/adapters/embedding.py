@@ -7,7 +7,7 @@ depends on ``onnxruntime`` (``faster-whisper``, wake-word inference),
 so this adds no new ML-runtime dependency family and no new
 CUDA/driver-version compatibility surface -- it runs correctly on CPU
 alone, avoiding a real, unattended-overnight risk this milestone was
-built under (a multi-GB ``torch``+CUDA install and model download with
+built under (a multi-GB ``torch`` + CUDA install and model download with
 no one available to debug a driver mismatch).
 
 The real model (~130MB) downloads from Hugging Face on first use,

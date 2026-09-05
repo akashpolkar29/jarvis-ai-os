@@ -175,3 +175,14 @@ jobs:
 
       - name: coverage report (application.reasoning)
         run: uv run coverage report --include="src/jarvis/application/reasoning/*" --fail-under=100
+
+      # Real, generated API reference (Phase 3, 10-phase pass, 2026-09-05) --
+      # a cheap, local `sphinx-build`, confirming it succeeds (exit 0), not
+      # that it is warning-free: docs/api/conf.py's own comments explain the
+      # ~12 remaining warnings, all one understood, benign, structural cause
+      # (autodoc documenting a re-exported name at both its defining
+      # submodule and its package's own public __all__ surface) -- not a
+      # missing/stale docstring. No external hosting; docs/api/_build/ is a
+      # local build artifact only, gitignored, rebuilt fresh here each run.
+      - name: sphinx-build (API reference)
+        run: uv run sphinx-build -b html docs/api docs/api/_build

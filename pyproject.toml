@@ -61,6 +61,8 @@ dev = [
     "import-linter",
     "pre-commit",
     "cosmic-ray>=8.7.0",
+    "sphinx>=9.1.0",
+    "sphinx-autodoc-typehints>=3.13.5",
 ]
 
 [tool.ruff]
