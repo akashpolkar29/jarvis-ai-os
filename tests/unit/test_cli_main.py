@@ -26,6 +26,7 @@ directly is the reliable fix.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import logging
 import os
@@ -2826,3 +2827,17 @@ def test_check_ollama_reachable_reports_unreachable_for_a_real_closed_port(
     assert ok is False
     assert "not reachable" in detail
     assert "Ollama" in name
+
+
+def test_version_flag_prints_the_real_installed_package_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A real, unmocked check against this real environment's own installed jarvis package."""
+    real_version = importlib.metadata.version("jarvis")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert real_version in captured.out

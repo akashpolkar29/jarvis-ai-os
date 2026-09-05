@@ -152,6 +152,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import ctypes.util
+import importlib.metadata
 import logging
 import os
 import shutil
@@ -485,6 +486,11 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     parser = argparse.ArgumentParser(
         prog="jarvis",
         description="Authorize (and, if granted, run) one capability call.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {importlib.metadata.version('jarvis')}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

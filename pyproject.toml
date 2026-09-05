@@ -1,6 +1,6 @@
 [project]
 name = "jarvis"
-version = "0.1.0.dev0"
+version = "0.6.0"
 description = "Privacy-first, plugin-based agent kernel for Linux."
 requires-python = ">=3.12"
 license = { text = "MIT" }

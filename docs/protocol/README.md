@@ -20,6 +20,10 @@ jarvis <subcommand> [options]
 
 installed via the `jarvis` console script (`pyproject.toml`'s
 `[project.scripts]`), or `python -m jarvis.cli` directly from source.
+`jarvis --version` prints the real, installed package version
+(`importlib.metadata.version("jarvis")`) and exits -- not a
+subcommand, not a capability, no audit record, the same real design
+choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
