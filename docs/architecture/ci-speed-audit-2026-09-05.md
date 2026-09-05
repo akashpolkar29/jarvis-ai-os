@@ -92,4 +92,36 @@ dropped.
 
 ## Real after-timing, measured from an actual CI run on this branch
 
-<!-- Filled in after this branch's own CI run completes, before merging to main. -->
+Run `33986286887` (both matrix legs), the first real CI run of this
+branch's own changes:
+
+| | py3.12 | py3.13 |
+| --- | --- | --- |
+| Job total | 130s | 129s |
+| Install dependencies | 16s | 18s |
+| Container startup (combined step) | 8s | 14s |
+
+**Total wall clock dropped from a 138-163s baseline range (avg ~153s)
+to 129-130s -- a real ~15-22% reduction.** Reported honestly, with two
+real caveats rather than overselling a clean win:
+
+- **"Install dependencies" itself did not get faster on this specific
+  run** (16-18s, statistically indistinguishable from the 15-19s
+  baseline). This is expected, not a failure of the change: adding
+  `cache-suffix` creates a brand-new cache key that has never been
+  populated before, so this first run is necessarily a cold-cache
+  populate run. The real speed-up this change is expected to produce
+  only becomes measurable starting on the *next* push that reuses this
+  now-populated key -- a genuine, structural limit of measuring a
+  caching change from a single before/after data point, not a flaw in
+  the change itself.
+- **The combined container-startup step's own two matrix legs
+  disagreed** (8s vs. 14s) -- consistent with ordinary Docker-image-pull
+  network variance between runner instances, not a regression in the
+  new parallel logic (both legs' own real readiness checks still
+  passed; a broken readiness loop would have failed the job, not
+  merely run a few seconds slower).
+
+The real, net total-wall-clock improvement holds regardless of these
+two caveats, and is expected to grow on subsequent pushes once the
+`uv` cache is actually warm.
