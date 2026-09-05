@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -241,6 +242,41 @@ class SqliteMemoryAdapter:
         if cursor.rowcount == 0:
             msg = f"No memory record found with identifier {identifier!r}."
             raise MemoryRecordNotFoundError(msg)
+
+    def backup(self, destination_path: str) -> None:
+        """Write a real, live-safe copy of this store to ``destination_path`` (ADR-0061).
+
+        Uses ``sqlite3.Connection.backup()`` -- SQLite's own real
+        online-backup mechanism -- rather than a raw file copy, so a
+        concurrent write to the live connection cannot produce a torn
+        snapshot.
+        """
+        destination_connection = sqlite3.connect(destination_path)
+        try:
+            self._connection.backup(destination_connection)
+        finally:
+            destination_connection.close()
+
+    def restore(self, source_path: str) -> None:
+        """Replace this store's entire real content with ``source_path``'s (ADR-0061).
+
+        Copies ``source_path``'s content into this adapter's own,
+        already-open connection via ``sqlite3.Connection.backup()``,
+        in the reverse direction from :meth:`backup` -- an in-place
+        replacement, not a reopen, so this adapter instance stays
+        valid for any caller already holding a reference to it.
+
+        Raises:
+            FileNotFoundError: If ``source_path`` does not exist.
+        """
+        if not Path(source_path).exists():
+            msg = f"No backup file found at {source_path!r}."
+            raise FileNotFoundError(msg)
+        source_connection = sqlite3.connect(source_path)
+        try:
+            source_connection.backup(self._connection)
+        finally:
+            source_connection.close()
 
     def retrieve(self, query: str, *, limit: int) -> tuple[MemoryRecord, ...]:
         """Return up to ``limit`` real records ranked by cosine similarity to ``query``.

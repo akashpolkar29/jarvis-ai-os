@@ -16,10 +16,12 @@ import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.kernel.memory import (
+    authorize_and_backup_memory,
     authorize_and_forget,
     authorize_and_pin,
     authorize_and_recall,
     authorize_and_remember,
+    authorize_and_restore_memory,
 )
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
@@ -416,6 +418,167 @@ def test_granted_forget_of_an_unknown_identifier_raises(tmp_path: Path) -> None:
     with pytest.raises(MemoryRecordNotFoundError):
         authorize_and_forget(
             "mem:does-not-exist",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+        )
+
+
+def test_granted_backup_produces_a_real_file(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    destination_path = tmp_path / "backup.sqlite3"
+    authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    backup_decision = authorize_and_backup_memory(
+        destination_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert backup_decision.granted is True
+    assert destination_path.exists()
+
+
+def test_backup_is_denied_without_any_confirmation(tmp_path: Path) -> None:
+    """memory.backup is CONFIRM -- remote confirmation alone is sufficient, but neither is not."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    destination_path = tmp_path / "backup.sqlite3"
+
+    backup_decision = authorize_and_backup_memory(
+        destination_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert backup_decision.granted is False
+    assert not destination_path.exists()
+
+
+def test_granted_restore_replaces_the_live_stores_content(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    backup_path = tmp_path / "backup.sqlite3"
+    id_port = _SequentialIdPort()
+    authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+    authorize_and_backup_memory(
+        backup_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+    authorize_and_remember(
+        "prefers rust",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    restore_decision = authorize_and_restore_memory(
+        backup_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert restore_decision.granted is True
+    connection = sqlite3.connect(database_path)
+    try:
+        (count,) = connection.execute("SELECT COUNT(*) FROM memory_records").fetchone()
+        assert count == 1
+    finally:
+        connection.close()
+
+
+def test_restore_is_denied_without_physical_confirmation(tmp_path: Path) -> None:
+    """memory.restore is MANUAL_ONLY -- remote confirmation alone can never grant it."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    backup_path = tmp_path / "backup.sqlite3"
+    authorize_and_remember(
+        "prefers tabs",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    authorize_and_backup_memory(
+        backup_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    restore_decision = authorize_and_restore_memory(
+        backup_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert restore_decision.granted is False
+
+
+def test_granted_restore_of_a_nonexistent_backup_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        authorize_and_restore_memory(
+            tmp_path / "does-not-exist.sqlite3",
             physical_confirmation_available=True,
             remote_confirmation_available=False,
             chain_path=tmp_path / "audit_chain.json",

@@ -334,6 +334,59 @@ def test_forget_leaves_other_records_intact(tmp_path: Path) -> None:
     assert _raw_row_count(database_path) == 1
 
 
+def test_backup_produces_a_real_file_with_the_same_row_count(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    destination_path = tmp_path / "backup.sqlite3"
+    adapter = _file_adapter(database_path)
+    adapter.write(_value("tabs"))
+    adapter.write(_value("rust"))
+
+    adapter.backup(str(destination_path))
+
+    assert destination_path.exists()
+    assert _raw_row_count(destination_path) == 2  # noqa: PLR2004 -- the real row count written above
+
+
+def test_restore_replaces_the_live_stores_entire_content(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    backup_path = tmp_path / "backup.sqlite3"
+    adapter = _file_adapter(database_path)
+    adapter.write(_value("tabs"))
+    adapter.backup(str(backup_path))
+    # The live store now diverges from the backup -- restore must undo this.
+    adapter.write(_value("rust"))
+    assert _raw_row_count(database_path) == 2  # noqa: PLR2004 -- the real row count written above
+
+    adapter.restore(str(backup_path))
+
+    assert _raw_row_count(database_path) == 1
+
+
+def test_restore_raises_for_a_nonexistent_backup_file(tmp_path: Path) -> None:
+    database_path = tmp_path / "memory.sqlite3"
+    adapter = _file_adapter(database_path)
+
+    with pytest.raises(FileNotFoundError):
+        adapter.restore(str(tmp_path / "does-not-exist.sqlite3"))
+
+
+def test_a_restored_record_is_retrievable_with_its_real_content_intact(tmp_path: Path) -> None:
+    """A real round trip: write, back up, forget, restore, and get the original value back."""
+    database_path = tmp_path / "memory.sqlite3"
+    backup_path = tmp_path / "backup.sqlite3"
+    adapter = _file_adapter(database_path)
+    identifier = adapter.write(_value("tabs"))
+    adapter.backup(str(backup_path))
+    adapter.forget(identifier)
+    assert _raw_row_count(database_path) == 0
+
+    adapter.restore(str(backup_path))
+
+    results = adapter.retrieve("tabs query", limit=1)
+    assert len(results) == 1
+    assert results[0].value.value == "tabs"
+
+
 def test_expired_unpinned_record_is_not_returned() -> None:
     clock = _FakeClock(_NOW)
     adapter = _adapter(clock)

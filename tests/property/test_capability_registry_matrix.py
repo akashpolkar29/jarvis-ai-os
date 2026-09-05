@@ -19,7 +19,7 @@ each already has its own dedicated property-test file
 (test_memory_writer.py, test_communications_writer.py, test_coding_writer.py,
 test_drafting_writer.py) proving the same granted/physical-confirmation
 properties for its own real classification function. This file covers
-exactly the 34 capabilities build_default_registry() registers statically.
+exactly the 36 capabilities build_default_registry() registers statically.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ CONTEXT = st.builds(
 _REGISTRY = build_default_registry()
 _ALL_CAPABILITY_IDS = tuple(descriptor.id for descriptor in _REGISTRY)
 
-# Real, current tier assignment for every one of the 34 statically-registered
+# Real, current tier assignment for every one of the 36 statically-registered
 # capabilities, as of this pass -- read directly from build_default_registry(),
 # not hand-guessed. Any future change to a capability's Effect combination
 # that shifts its required_tier will show up here as a real, visible diff in
@@ -75,8 +75,10 @@ _EXPECTED_TIER_BY_CAPABILITY: dict[str, Tier] = {
     "git.force_push": Tier.MANUAL_ONLY,
     "git.push": Tier.CONFIRM,
     "git.status": Tier.ALLOW,
+    "memory.backup": Tier.CONFIRM,
     "memory.forget": Tier.MANUAL_ONLY,
     "memory.pin": Tier.CONFIRM,
+    "memory.restore": Tier.MANUAL_ONLY,
     "memory.retrieve": Tier.ALLOW,
     "music.next": Tier.CONFIRM,
     "music.pause": Tier.CONFIRM,
@@ -112,7 +114,7 @@ def test_every_registered_capability_grants_exactly_per_its_real_required_tier(
     is available. MANUAL_ONLY: granted iff physical confirmation
     specifically -- remote alone never satisfies it (ADR-0013). This is the
     exhaustive matrix this pass's own instructions require: every one of
-    the 34 real, statically-registered capabilities, proven through the
+    the 36 real, statically-registered capabilities, proven through the
     real end-to-end authorize_by_id() path, not a synthetic descriptor.
     """
     descriptor = _REGISTRY.get(capability_id)

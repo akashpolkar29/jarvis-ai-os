@@ -67,6 +67,8 @@ GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
 MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
 MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
+MEMORY_BACKUP_CAPABILITY_ID = CapabilityId("memory.backup")
+MEMORY_RESTORE_CAPABILITY_ID = CapabilityId("memory.restore")
 BROWSER_OPEN_PAGE_CAPABILITY_ID = CapabilityId("browser.open_page")
 BROWSER_SCREENSHOT_CAPABILITY_ID = CapabilityId("browser.screenshot")
 BROWSER_INSPECT_DOM_CAPABILITY_ID = CapabilityId("browser.inspect_dom")
@@ -327,6 +329,29 @@ def build_default_registry() -> CapabilityRegistry:
                 "Permanently delete a memorized record by identifier. No undo -- "
                 "once gone, the same 'no built-in recovery' finality as "
                 "git.force_push -- always MANUAL_ONLY."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_BACKUP_CAPABILITY_ID,
+            effects=Effect.WRITE_LOCAL,
+            description=(
+                "Copy the real, complete memory store to a caller-chosen path "
+                "(ADR-0061). Nothing leaves the machine -- the same "
+                "WRITE_LOCAL/CONFIRM shape as fs.move_file."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_RESTORE_CAPABILITY_ID,
+            effects=Effect.DESTRUCTIVE | Effect.IRREVERSIBLE,
+            description=(
+                "Replace the real, live memory store's entire content with a "
+                "backup file's (ADR-0061). No undo -- the same "
+                "'no built-in recovery' finality as memory.forget, at the "
+                "scale of the whole store -- always MANUAL_ONLY."
             ),
         )
     )

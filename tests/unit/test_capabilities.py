@@ -27,8 +27,10 @@ from jarvis.kernel.capabilities import (
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
     LIST_DIR_CAPABILITY_ID,
+    MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
+    MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     MOVE_FILE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
@@ -41,7 +43,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 34
+_EXPECTED_CAPABILITY_COUNT = 36
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -87,6 +89,8 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         MEMORY_RETRIEVE_CAPABILITY_ID,
         MEMORY_PIN_CAPABILITY_ID,
         MEMORY_FORGET_CAPABILITY_ID,
+        MEMORY_BACKUP_CAPABILITY_ID,
+        MEMORY_RESTORE_CAPABILITY_ID,
         BROWSER_OPEN_PAGE_CAPABILITY_ID,
         BROWSER_SCREENSHOT_CAPABILITY_ID,
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
@@ -297,6 +301,24 @@ def test_memory_forget_has_destructive_and_irreversible_effects() -> None:
     registry = build_default_registry()
 
     descriptor = registry.get(MEMORY_FORGET_CAPABILITY_ID)
+    assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
+    assert descriptor.required_tier == Tier.MANUAL_ONLY
+
+
+def test_memory_backup_has_write_local_effects() -> None:
+    """memory.backup is WRITE_LOCAL -- Tier.CONFIRM, same shape as fs.move_file (ADR-0061)."""
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_BACKUP_CAPABILITY_ID)
+    assert descriptor.effects == Effect.WRITE_LOCAL
+    assert descriptor.required_tier == Tier.CONFIRM
+
+
+def test_memory_restore_has_destructive_and_irreversible_effects() -> None:
+    """memory.restore is DESTRUCTIVE | IRREVERSIBLE -- Tier.MANUAL_ONLY, same as memory.forget (ADR-0061)."""  # noqa: E501
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_RESTORE_CAPABILITY_ID)
     assert descriptor.effects == Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
     assert descriptor.required_tier == Tier.MANUAL_ONLY
 

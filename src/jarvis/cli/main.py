@@ -193,10 +193,12 @@ from jarvis.kernel.files import (
 )
 from jarvis.kernel.job_assistance import authorize_and_draft_document
 from jarvis.kernel.memory import (
+    authorize_and_backup_memory,
     authorize_and_forget,
     authorize_and_pin,
     authorize_and_recall,
     authorize_and_remember,
+    authorize_and_restore_memory,
 )
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
@@ -528,6 +530,23 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_pin_parser.add_argument("identifier", help="The record's identifier.")
     _add_common_flags(memory_pin_parser)
 
+    memory_backup_parser = memory_subparsers.add_parser(
+        "backup", help="Copy the real, complete memory store to a chosen path (ADR-0061)."
+    )
+    memory_backup_parser.add_argument(
+        "destination", type=Path, help="Where the real, live-safe copy is written."
+    )
+    _add_common_flags(memory_backup_parser)
+
+    memory_restore_parser = memory_subparsers.add_parser(
+        "restore",
+        help="Replace the live memory store's entire content with a backup's. Always MANUAL_ONLY.",
+    )
+    memory_restore_parser.add_argument(
+        "source", type=Path, help="A real, previously-created backup file."
+    )
+    _add_common_flags(memory_restore_parser)
+
     _add_communications_parsers(subparsers)
     _add_reasoning_parsers(subparsers)
     _add_file_parsers(subparsers)
@@ -634,6 +653,22 @@ def _run_memory_subcommand(
     if args.memory_command == "forget":
         decision = authorize_and_forget(
             args.identifier,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return decision, None, None
+    if args.memory_command == "backup":
+        decision = authorize_and_backup_memory(
+            args.destination,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return decision, None, None
+    if args.memory_command == "restore":
+        decision = authorize_and_restore_memory(
+            args.source,
             physical_confirmation_available=args.physical_confirmation_available,
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,

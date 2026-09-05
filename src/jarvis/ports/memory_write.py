@@ -112,3 +112,35 @@ class MemoryWritePort(Protocol):
                 match a real, currently-stored record.
         """
         ...
+
+    def backup(self, destination_path: str) -> None:
+        """Write a real, complete, live-safe copy of the store to ``destination_path``.
+
+        Uses SQLite's own online-backup mechanism (ADR-0061), not a
+        raw file copy -- safe to call while the store is open and in
+        use, producing a consistent snapshot rather than risking a
+        torn, mid-write copy.
+
+        Args:
+            destination_path: Where the copy is written. Overwritten
+                if it already exists, matching :meth:`restore`'s own
+                "replace, not merge" shape in the other direction.
+        """
+        ...
+
+    def restore(self, source_path: str) -> None:
+        """Replace this store's entire real content with ``source_path``'s.
+
+        Not a merge: whatever the live store holds that ``source_path``
+        does not is gone once this returns -- the same "no built-in
+        undo" finality :meth:`forget` already has, at the scale of the
+        whole store (ADR-0061).
+
+        Args:
+            source_path: A real, previously-created backup file (see
+                :meth:`backup`).
+
+        Raises:
+            FileNotFoundError: If ``source_path`` does not exist.
+        """
+        ...

@@ -65,8 +65,10 @@ from jarvis.application.memory.writer import MemoryWriteAuthorizer
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
+    MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
+    MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     build_default_registry,
 )
@@ -457,6 +459,150 @@ def authorize_and_forget(  # noqa: PLR0913 -- one per composition-function pass-
         if decision.granted:
             adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
             adapter.forget(identifier)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_backup_memory(  # noqa: PLR0913 -- one per composition-function pass-through
+    destination_path: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize backing up the store, and copy it only if granted.
+
+    ``memory.backup`` (``Effect.WRITE_LOCAL``, ``Tier.CONFIRM`` -- see
+    ``kernel/capabilities.py``, ADR-0061) is a static, fixed-effect
+    capability, the same authorization shape as :func:`authorize_and_pin`
+    (a destination path carries no classifiable content of its own, so
+    the dynamic ``MemoryWriteAuthorizer`` path does not apply).
+
+    Args:
+        destination_path: Where the real, live-safe copy is written.
+            Overwritten if it already exists.
+        physical_confirmation_available: Whether a human is physically
+            present.
+        remote_confirmation_available: Whether remote confirmation is
+            available -- sufficient alone for this ``Tier.CONFIRM``
+            capability.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Defaults to
+            ``_DEFAULT_MEMORY_DB_PATH``. Overridable for tests.
+        embedding_port: Defaults to a real ``FastEmbedAdapter``.
+            Overridable for tests -- unused by a backup, threaded
+            through only so ``_memory_adapter`` stays one shared
+            helper.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by a backup.
+
+    Returns:
+        The real ``Decision`` for this backup call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_BACKUP_CAPABILITY_ID,
+        Tainted({"destination_path": str(destination_path)}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.backup(str(destination_path))
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def authorize_and_restore_memory(  # noqa: PLR0913 -- one per composition-function pass-through
+    source_path: Path,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize restoring the store, and replace it only if granted.
+
+    ``memory.restore`` (``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE``,
+    ``Tier.MANUAL_ONLY`` -- see ``kernel/capabilities.py``, ADR-0061)
+    is a static, fixed-effect capability, the same authorization shape
+    as :func:`authorize_and_forget`, extended here to the whole store
+    rather than one record.
+
+    Args:
+        source_path: A real, previously-created backup file.
+        physical_confirmation_available: Whether a human is physically
+            present -- the only way a ``MANUAL_ONLY`` capability can
+            ever be granted.
+        remote_confirmation_available: Threaded through for
+            consistency; never sufficient alone for this capability.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Defaults to
+            ``_DEFAULT_MEMORY_DB_PATH``. Overridable for tests.
+        embedding_port: Defaults to a real ``FastEmbedAdapter``.
+            Overridable for tests -- unused by a restore, threaded
+            through only so ``_memory_adapter`` stays one shared
+            helper.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by a restore.
+
+    Returns:
+        The real ``Decision`` for this restore call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
+
+    Raises:
+        FileNotFoundError: If ``source_path`` does not exist and the
+            restore was granted. Never raised for a denied restore --
+            the store is never touched.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_RESTORE_CAPABILITY_ID,
+        Tainted({"source_path": str(source_path)}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.restore(str(source_path))
     finally:
         storage.save(chain)
 

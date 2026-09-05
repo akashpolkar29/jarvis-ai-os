@@ -867,6 +867,114 @@ def test_memory_pin_subcommand_routes_the_given_identifier(
     assert exit_code == 0
 
 
+def test_memory_backup_subcommand_routes_the_given_destination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[Path] = []
+
+    def fake_authorize_and_backup_memory(
+        destination_path: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(destination_path)
+        return _make_decision(granted=True, capability_id="memory.backup")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_backup_memory",
+        fake_authorize_and_backup_memory,
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "backup",
+            str(tmp_path / "backup.sqlite3"),
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [tmp_path / "backup.sqlite3"]
+    assert exit_code == 0
+
+
+def test_memory_restore_subcommand_routes_the_given_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[Path] = []
+
+    def fake_authorize_and_restore_memory(
+        source_path: Path,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(source_path)
+        return _make_decision(granted=True, capability_id="memory.restore")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_restore_memory",
+        fake_authorize_and_restore_memory,
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "restore",
+            str(tmp_path / "backup.sqlite3"),
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [tmp_path / "backup.sqlite3"]
+    assert exit_code == 0
+
+
+def test_memory_restore_subcommand_denied_by_remote_confirmation_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """memory.restore is MANUAL_ONLY -- remote confirmation alone must not grant it."""
+
+    def fake_authorize_and_restore_memory(
+        source_path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(
+            granted=physical_confirmation_available, capability_id="memory.restore"
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_restore_memory",
+        fake_authorize_and_restore_memory,
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "restore",
+            str(tmp_path / "backup.sqlite3"),
+            "--remote-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 1
+
+
 def test_send_email_subcommand_routes_to_and_subject_and_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
