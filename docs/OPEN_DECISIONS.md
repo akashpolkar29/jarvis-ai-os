@@ -25,17 +25,19 @@ plainly that M3's tag "remains a deliberately separate, later action"
 no pass has touched. See `CHANGELOG.md`'s own tagged-release entries
 for what M4/M5/M6 shipped around it.
 
-## 2. ADR-0061 (memory backup/restore/wipe classification)
+## 2. ~~ADR-0061 (memory backup/restore classification)~~ -- RESOLVED 2026-09-05
 
-**What's needed**: a direct answer -- accept as-written, want changes
-first, or reject.
-
-**Already investigated**: `docs/adr/0061-memory-store-backup-restore-effect-tier-classification.md`
-(full text, real reasoning for `Effect.WRITE_LOCAL`/`Tier.CONFIRM` on
-`memory.backup` and `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/
-`Tier.MANUAL_ONLY` on `memory.restore`) was surfaced to the user in
-full, verbatim, in conversation (3 combined tasks, Task 2, 2026-09-05)
--- no answer was available in that unattended run. Still **Proposed**.
+**Resolved**: `docs/adr/0061-memory-store-backup-restore-effect-tier-classification.md`
+is now **Accepted (2026-09-05, directly by the user, in conversation,
+after direct review of the ADR's own full, verbatim text)** -- accepted
+as-written, no changes requested. `memory.backup`:
+`Effect.WRITE_LOCAL`/`Tier.CONFIRM`; `memory.restore`:
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY`. See the
+ADR's own updated Status section for a real, honest scope note:
+`memory.wipe` reuses the identical classification in code but was
+never itself the subject of this or any ADR document -- this
+acceptance covers exactly what ADR-0061's own text describes
+(backup/restore), not `memory.wipe` by extension.
 
 ## 3. Two real, unresolved dependency-license findings
 

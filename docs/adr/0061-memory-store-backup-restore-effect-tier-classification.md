@@ -2,11 +2,44 @@
 
 ## Status
 
-**Proposed** -- built and tested (10-phase combined pass, Phase 5,
-2026-09-05), not yet reviewed by the user. Flagged here, exactly as
-ADR-0060 originally was, for the user's own later review of this
-document's full text before acceptance -- not treated as accepted by
-this pass itself.
+**Accepted (2026-09-05, directly by the user, in conversation, after
+direct review of this ADR's own full, verbatim text).**
+
+Surfaced in full during the 3-combined-tasks prompt's own Task 2
+(2026-09-05) -- every section, including the reasoning that rejected
+both a stronger `Effect.EGRESS_SENSITIVE` floor for `memory.backup`
+and any new protected-path/content-inspection check for either
+capability -- with no answer available in that unattended run. The
+user's own later "7 real decisions" prompt (2026-09-05, this same day)
+directly answered: accept as-written, no changes requested. The
+classification stands exactly as written below: `memory.backup`:
+`Effect.WRITE_LOCAL` (floors `Tier.CONFIRM`); `memory.restore`:
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE` (floors `Tier.MANUAL_ONLY`,
+never remote-satisfiable) -- mirroring `memory.forget`'s own
+precedent. This satisfies the same "reviewed the document, not merely
+relayed a decision" bar ADR-0057/ADR-0058/ADR-0059/ADR-0060 each
+already met.
+
+**A real, honest scope note, not silently smoothed over**: the
+decision that accepted this ADR referred to it as covering
+"`memory.restore`/`memory.wipe`" together. `memory.wipe`
+(`kernel/memory.py`, added during the 10-phase combined pass's own
+Phase 10, after this ADR's own text was written) does reuse the
+identical real `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/
+`Tier.MANUAL_ONLY` combination this ADR establishes for
+`memory.restore` -- but `memory.wipe` itself was classified inline, in
+code, and was never itself the subject of this or any other ADR
+document. This acceptance covers exactly what this document's own
+text describes -- `memory.backup`/`memory.restore` -- and is silently
+consistent with, but does not retroactively become, a review of
+`memory.wipe`'s own classification. No document exists for
+`memory.wipe` to be accepted into; none is created by this note.
+
+No code changes accompany this acceptance -- the classification below
+describes real code that was already built, tested, and merged (Phase
+5, 2026-09-05); accepting this ADR records that the user has now
+reviewed and agreed with that already-built design, not that anything
+new was implemented as a result.
 
 ## Date
 
