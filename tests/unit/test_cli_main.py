@@ -2576,3 +2576,61 @@ def test_git_commit_command_failure_fails_closed_not_a_crash(
 
     assert exit_code == 1
     assert "git commit exited non-zero" in captured.err
+
+
+_TOP_LEVEL_COMMANDS = (
+    "send-email",
+    "create-calendar-event",
+    "code",
+    "draft",
+    "list-dir",
+    "move-file",
+    "delete-file",
+    "open-brave-url",
+    "open-vscode-file",
+    "send-claude-text",
+    "send-chatgpt-text",
+    "list-docker-containers",
+    "stop-docker-container",
+    "git-status",
+    "git-create-branch",
+    "git-commit",
+    "git-push",
+    "git-force-push",
+    "ping",
+    "play",
+    "pause",
+    "next",
+    "previous",
+    "read",
+    "listen",
+)
+_MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore")
+
+
+def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Real regression guard (Phase 8, CLI UX audit): --help is for real users, not reviewers.
+
+    Found and fixed three real instances of this (memory backup's own
+    ADR-0061 reference, send-email/create-calendar-event's shared
+    ADR-0017/ADR-0042 reference) -- this test mechanically prevents a
+    future help string from reintroducing the same class of leak,
+    across every real top-level and memory subcommand's own --help.
+    """
+    for command in _TOP_LEVEL_COMMANDS:
+        with pytest.raises(SystemExit):
+            main([command, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"{command} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, f"{command} --help leaks a work-package reference"
+
+    for subcommand in _MEMORY_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["memory", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"memory {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, (
+            f"memory {subcommand} --help leaks a work-package reference"
+        )

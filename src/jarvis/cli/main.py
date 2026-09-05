@@ -268,7 +268,7 @@ def _add_communications_parsers(
         required=True,
         help=(
             "The keyring reference for this mailbox's password -- "
-            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
+            "provisioned out of band, not by this command."
         ),
     )
     _add_common_flags(send_email_parser)
@@ -301,7 +301,7 @@ def _add_communications_parsers(
         required=True,
         help=(
             "The keyring reference for this account's password -- "
-            "provisioned out of band (ADR-0017/ADR-0042), not by this command."
+            "provisioned out of band, not by this command."
         ),
     )
     _add_common_flags(create_event_parser)
@@ -531,7 +531,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_common_flags(memory_pin_parser)
 
     memory_backup_parser = memory_subparsers.add_parser(
-        "backup", help="Copy the real, complete memory store to a chosen path (ADR-0061)."
+        "backup", help="Copy the real, complete memory store to a chosen path."
     )
     memory_backup_parser.add_argument(
         "destination", type=Path, help="Where the real, live-safe copy is written."
