@@ -202,6 +202,7 @@ from jarvis.kernel.files import (
     authorize_and_read_file,
 )
 from jarvis.kernel.job_assistance import authorize_and_draft_document
+from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
 from jarvis.kernel.memory import (
     authorize_and_backup_memory,
     authorize_and_forget,
@@ -446,6 +447,35 @@ def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     _add_common_flags(plan_run_parser)
 
 
+def _add_job_search_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Add the job-search subparser -- a real, invocable job_search.open_results, flat.
+
+    Mirrors ``open-brave-url``'s own flat-subcommand shape, not
+    ``plan``/``memory``'s nested one -- job_search.open_results is a
+    single action, not a family of related subcommands. Opens a real
+    search-results URL in the user's own, real, ordinary Brave browser
+    for the user to search/read themselves -- never reads, scrapes, or
+    extracts any page content (see ``kernel/job_search.py``'s own
+    module docstring for the full, real reasoning).
+    """
+    job_search_parser = subparsers.add_parser(
+        "job-search", help="Open a real LinkedIn/Indeed job-search results page in Brave."
+    )
+    job_search_parser.add_argument("keywords", help="The real search keywords.")
+    job_search_parser.add_argument(
+        "--site",
+        required=True,
+        choices=[site.value for site in JobSearchSite],
+        help="Which job board to search.",
+    )
+    job_search_parser.add_argument(
+        "--location", default=None, help="An optional real location filter."
+    )
+    _add_common_flags(job_search_parser)
+
+
 def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add the list-dir/move-file/delete-file subparsers (ADR-0060).
 
@@ -676,6 +706,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_file_parsers(subparsers)
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
+    _add_job_search_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -1069,6 +1100,25 @@ def _run_planning_subcommand(
     return decision, step_records
 
 
+def _run_job_search_subcommand(args: argparse.Namespace) -> Decision:
+    """Dispatch ``job-search``, returning its real Decision.
+
+    `authorize_and_open_job_search` is synchronous (mirrors
+    `authorize_and_open_brave_url`'s own shape, the real, ordinary
+    Brave mechanism this capability reuses -- see
+    `kernel/job_search.py`'s own module docstring), so no `asyncio.run`
+    wrapping is needed here.
+    """
+    return authorize_and_open_job_search(
+        JobSearchSite(args.site),
+        args.keywords,
+        args.location,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+
+
 def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirEntry, ...] | None]:
     """Dispatch ``list-dir``/``move-file``/``delete-file``, returning (decision, dir_entries).
 
@@ -1373,6 +1423,9 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
             email_summaries=email_summaries,
             email_message=email_message,
         )
+    if args.command == "job-search":
+        decision = _run_job_search_subcommand(args)
+        return _CommandOutcome(decision, args.command)
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)

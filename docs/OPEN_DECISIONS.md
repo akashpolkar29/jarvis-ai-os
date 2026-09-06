@@ -166,6 +166,35 @@ a retry climb) -- only the first (task-text-naming) half is
 implemented. Full LSP integration itself also remains unbuilt, real,
 open future scope if the simpler mechanism proves insufficient.
 
+## 7. ~~Job search (LinkedIn/Indeed)~~ -- RESOLVED 2026-09-06
+
+**Resolved/built**: `docs/architecture/job-search-scoping-notes.md`'s
+own real finding (both LinkedIn's and Indeed's current Terms of
+Service explicitly prohibit automated scraping/bot access,
+corroborated by both sites' own `robots.txt`, and neither offers a
+realistic official API for an individual, non-commercial tool) is
+resolved by the user's own real decision: assisted browsing, not
+automation. `job_search.open_results` (`kernel/job_search.py`,
+`jarvis job-search "<keywords>" --site linkedin|indeed [--location
+<loc>]`) builds a real, correct search-results URL and opens it in the
+user's own, real, ordinary Brave browser (the same real,
+already-live-verified `BravePort`/`BraveCliAdapter` mechanism
+`desktop.brave_open_url` uses) -- a human does the actual searching
+and reading; JARVIS never reads, scrapes, or extracts any listing
+content. Mechanically enforced, not just documented:
+`tests/meta/test_job_search_no_content_reading.py` proves
+`kernel/job_search.py` never imports `BrowserAutomationPort` and never
+calls a content-reading method. See the scoping notes' own
+"Resolution" section for the full account, including a real, live
+finding made during implementation (Indeed's own bot detection
+actively blocked a one-time headless-CDP verification load, while
+LinkedIn's succeeded) that further confirms why this capability
+deliberately uses the real, ordinary Brave mechanism rather than the
+headless one. Automated listing extraction remains **explicitly out
+of scope**, not merely deferred -- a future capability that did read
+page content would still need to resolve the ToS finding this
+document already established.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

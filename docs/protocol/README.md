@@ -28,9 +28,12 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 ## Subcommands
 
 **Updated 2026-09-06 — this table previously listed 33 real subcommands;
-it now covers all 36, adding `plan run`/`email list`/`email read`, three
-already-real, already-tested capabilities that had never had a CLI
-entry point until this pass.** Each
+it now covers all 37, adding `plan run`/`email list`/`email read`
+(three already-real, already-tested capabilities that had never had a
+CLI entry point until an earlier pass) and `job-search` (a new,
+minimal capability, real assisted browsing — see
+`docs/architecture/job-search-scoping-notes.md`'s own "Resolution"
+section for why this never reads/scrapes listing content).** Each
 capability's own real effect/tier classification is documented at its
 own registration site in `kernel/capabilities.py`, not repeated here —
 this table exists to answer "what does this subcommand actually call,"
@@ -73,6 +76,7 @@ not to duplicate the policy engine's own reasoning.
 | `plan run <goal>` | `planning.run_plan` (ADR-0062 — outer gate only; every proposed step is separately, individually authorized, never in bulk) | `goal` |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
+| `job-search <keywords>` | `job_search.open_results` | `keywords`, `--site linkedin\|indeed` (required), `--location` (optional) |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
 

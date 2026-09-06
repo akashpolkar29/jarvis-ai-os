@@ -80,6 +80,7 @@ EMAIL_LIST_MESSAGES_CAPABILITY_ID = CapabilityId("communications.list_email")
 EMAIL_READ_MESSAGE_CAPABILITY_ID = CapabilityId("communications.read_email")
 CALENDAR_LIST_EVENTS_CAPABILITY_ID = CapabilityId("communications.list_calendar_events")
 PLANNING_RUN_PLAN_CAPABILITY_ID = CapabilityId("planning.run_plan")
+JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID = CapabilityId("job_search.open_results")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -503,6 +504,25 @@ def build_default_registry() -> CapabilityRegistry:
                 "own authorize_by_id() call inside application/planning/executor.py "
                 "-- a granted outer gate never pre-authorizes any step's own "
                 "outcome; no batch pre-approval anywhere in this chain."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Build a real LinkedIn/Indeed job-search URL and open it in the "
+                "user's own, real, ordinary Brave browser for the user to search "
+                "and read themselves -- same Effect.EXECUTE/Tier.CONFIRM "
+                "classification as desktop.brave_open_url, whose real, ordinary "
+                "(non-headless) BravePort mechanism this reuses directly. Real, "
+                "deliberate decision (docs/architecture/job-search-scoping-notes.md): "
+                "neither this capability nor anything else in this codebase reads, "
+                "scrapes, or extracts job-listing content -- LinkedIn's and "
+                "Indeed's own Terms of Service prohibit automated scraping/bot "
+                "access, structurally enforced by "
+                "tests/meta/test_job_search_no_content_reading.py."
             ),
         )
     )

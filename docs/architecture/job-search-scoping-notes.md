@@ -1,11 +1,12 @@
-# Job-search scoping notes — LinkedIn/Indeed, investigated, not decided
+# Job-search scoping notes — LinkedIn/Indeed, investigated, then resolved
 
-**Status: research only. No decision made, nothing built.** No code
-was written for this document — no port, no adapter, no application
-module, no capability, no ADR. Mirrors `m7-scoping-notes.md`'s own
-precedent exactly: a real investigation of a genuine, previously-named
-capability gap, options laid out for the user's own decision. Written
-2026-09-06.
+**Status: research written 2026-09-06 (no decision, nothing built at
+that point); resolved the same day — see "Resolution" at the bottom.**
+No code was written for the original research pass — no port, no
+adapter, no application module, no capability, no ADR. Mirrors
+`m7-scoping-notes.md`'s own precedent exactly: a real investigation of
+a genuine, previously-named capability gap, options laid out for the
+user's own decision.
 
 ## The one finding that matters more than anything else below
 
@@ -300,3 +301,47 @@ user first deciding this ToS finding is an acceptable risk to take —
 mirroring exactly how `m6b-job-assistance.md`'s own "no auto-apply"
 finding became a real, enforced structural boundary (ADR-0058) rather
 than a note left to be silently routed around later.
+
+## Resolution, 2026-09-06 — assisted browsing, not automation
+
+The user's own real decision, following directly from this document's
+own finding: JARVIS never scrapes, reads, or extracts a single byte of
+listing content from either site. Instead, `job_search.open_results`
+(`kernel/job_search.py`, `jarvis job-search "<keywords>" --site
+linkedin|indeed [--location <loc>]`) builds a real, correct
+search-results URL and opens it in the user's own, real, ordinary
+Brave browser (`BravePort`/`BraveCliAdapter` — the same real,
+already-live-verified mechanism `desktop.brave_open_url` uses) — a
+human does the actual searching, clicking, and reading. This is
+exactly the third real option this document's own section 5 gestured
+toward without naming: sidestepping the scraping-vs-API tradeoff
+entirely rather than choosing between its two named, ToS-conflicted
+sides.
+
+**Real, structural enforcement, not just a design intention**: this
+capability's own module (`kernel/job_search.py`) never imports
+`BrowserAutomationPort` and never calls any content-reading method —
+mechanically proven by `tests/meta/test_job_search_no_content_reading.py`,
+mirroring `test_job_assistance_no_submission.py`'s own AST-scan
+precedent for ADR-0058's identically-shaped guarantee. Automated
+listing extraction remains **explicitly out of scope**, not merely
+deferred: this document's own "Does foreclose, absent a new decision"
+paragraph above still applies in full — building a real content-reading
+job-search capability later would still need to resolve the ToS
+finding this document already established, not route around it via
+this resolution.
+
+**A real, additional finding made while implementing, not anticipated
+by this document's own original research**: a live, one-time,
+headless-CDP page load (done purely to verify the real URL
+query-parameter format, not as part of the shipped capability) showed
+LinkedIn's search succeeding but Indeed's request being actively
+blocked ("Request Blocked") by Indeed's own bot detection — real,
+concrete, runtime evidence reinforcing the ToS/robots.txt finding
+above, not just a contractual concern. This is a second, independent
+reason `job_search.open_results` deliberately uses the real, ordinary,
+non-headless `BraveCliAdapter` rather than `kernel/browser.py`'s
+headless `authorize_and_open_page` (which this task's own originating
+prompt had named as the reuse target, before this finding surfaced) —
+see `kernel/job_search.py`'s own module docstring for the full account
+of that deviation.

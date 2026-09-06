@@ -63,6 +63,7 @@ from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.job_assistance import DraftOutcome
+from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.ports.brave import BrowserLaunchFailedError
@@ -2689,6 +2690,94 @@ def test_open_brave_url_subcommand_requires_url() -> None:
         main(["open-brave-url"])
 
 
+def test_job_search_subcommand_routes_site_keywords_and_location(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[JobSearchSite, str, str | None]] = []
+
+    def fake_authorize_and_open_job_search(  # noqa: PLR0913 -- mirrors the real signature
+        site: JobSearchSite,
+        keywords: str,
+        location: str | None,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append((site, keywords, location))
+        return _make_decision(granted=True, capability_id="job_search.open_results")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_job_search",
+        fake_authorize_and_open_job_search,
+    )
+
+    exit_code = main(
+        [
+            "job-search",
+            "python developer",
+            "--site",
+            "linkedin",
+            "--location",
+            "remote",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [(JobSearchSite.LINKEDIN, "python developer", "remote")]
+    assert exit_code == 0
+
+
+def test_job_search_subcommand_prints_the_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_open_job_search(  # noqa: PLR0913 -- mirrors the real signature
+        site: JobSearchSite,  # noqa: ARG001
+        keywords: str,  # noqa: ARG001
+        location: str | None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False, capability_id="job_search.open_results")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_open_job_search",
+        fake_authorize_and_open_job_search,
+    )
+
+    exit_code = main(
+        [
+            "job-search",
+            "data scientist",
+            "--site",
+            "indeed",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "job-search: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_job_search_subcommand_requires_keywords_and_site() -> None:
+    with pytest.raises(SystemExit):
+        main(["job-search"])
+    with pytest.raises(SystemExit):
+        main(["job-search", "python developer"])
+
+
+def test_job_search_subcommand_rejects_an_invalid_site() -> None:
+    with pytest.raises(SystemExit):
+        main(["job-search", "python developer", "--site", "monster"])
+
+
 def test_git_push_subcommand_requires_repo_dir_remote_and_branch() -> None:
     with pytest.raises(SystemExit):
         main(["git-push", "some-repo"])
@@ -3006,6 +3095,7 @@ _TOP_LEVEL_COMMANDS = (
     "move-file",
     "delete-file",
     "open-brave-url",
+    "job-search",
     "open-vscode-file",
     "send-claude-text",
     "send-chatgpt-text",
