@@ -53,6 +53,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from jarvis.application.coding.classification import resolve_protected_patterns
+from jarvis.application.coding.context import inject_referenced_file_context
 from jarvis.application.coding.patch_paths import touched_paths
 from jarvis.application.coding.sandbox_workspace import make_disposable_workspace
 from jarvis.domain.evidence import Verdict
@@ -154,6 +155,17 @@ class CodingTaskRequest:
             are protected -- if `None`, resolved for real from
             `target_repo`'s own detected test convention
             (`resolve_protected_patterns`, ADR-0056's own amendment).
+        include_referenced_file_context: Real, opt-in (default `False`,
+            preserving every existing caller's exact prior behavior)
+            file-context injection (M7 code-context design,
+            `application/coding/context.py`'s own
+            `inject_referenced_file_context`) -- when `True`, real,
+            existing files the task text names literally have their
+            own real, bounded content folded into the task before the
+            first climb, tagged `Trust.UNTRUSTED_EXTERNAL`. Applied
+            once, before the first climb only -- not re-applied on a
+            retry climb (a real, deliberate scope narrowing; see that
+            module's own docstring).
     """
 
     task: Tainted[str]
@@ -161,6 +173,7 @@ class CodingTaskRequest:
     context: PolicyContext
     max_climbs: int = DEFAULT_MAX_CLIMBS
     protected_patterns: tuple[str, ...] | None = None
+    include_referenced_file_context: bool = False
 
 
 @dataclass(frozen=True)
@@ -274,6 +287,8 @@ async def run_coding_task(
 
     climbs: list[DispatchResult] = []
     current_task = request.task
+    if request.include_referenced_file_context:
+        current_task = inject_referenced_file_context(current_task, target_repo)
     for _ in range(request.max_climbs):
         disposable = make_disposable_workspace(
             dependencies.sandbox, target_repo, dependencies.workspace_factory

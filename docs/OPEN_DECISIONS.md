@@ -139,18 +139,22 @@ wired into the dispatch registry; a further, real restriction to
 docstring for why. Retry/replan and plan-preview (real, open
 sub-questions in the design doc) remain genuinely unbuilt.
 
-## 6b. LSP-based code intelligence -- design proposed, not yet built
+## 6b. ~~LSP-based code intelligence (minimal, non-LSP half)~~ -- IMPLEMENTED 2026-09-05
 
-**What's needed**: the user's own review of a real, concrete design
-proposal -- whether to build it.
-
-**Already investigated and designed**: `m7-scoping-notes.md`'s own
-real finding (`coding.run_task` sends a provider no file content at
-all) has a real design, `docs/architecture/m7-code-context-design.md`
--- minimal, non-LSP file-context injection recommended over full LSP
-integration, plus a real, new taint-classification default (injected
-file content is `Trust.UNTRUSTED_EXTERNAL` by default, not
-automatically the user's own trust level). Not yet implemented.
+**Resolved/built**: real, direct instruction to implement
+`m7-code-context-design.md`. `application/coding/context.py`'s
+`inject_referenced_file_context` folds real, bounded content of files
+a task literally names into the task text, tagged
+`Trust.UNTRUSTED_EXTERNAL`. Wired as a real, explicit **opt-in**
+(`include_referenced_file_context: bool = False` on `CodingTaskRequest`/
+`authorize_and_run_coding_task`) -- every existing caller's exact
+prior behavior is unchanged unless it opts in, a deliberate
+compatibility decision, not silently defaulted on. **Real, deliberately
+deferred scope, not built**: the design's own second file-selection
+heuristic (files a prior failed attempt's own evidence references, on
+a retry climb) -- only the first (task-text-naming) half is
+implemented. Full LSP integration itself also remains unbuilt, real,
+open future scope if the simpler mechanism proves insufficient.
 
 ## Maintaining this index
 

@@ -125,3 +125,34 @@ without adding a new `Effect` member or changing any existing
 capability's tier, so it is recorded here as a real, reasoned design
 default for the user's own review, not elevated to a separate ADR the
 way the task-planning design's own no-batch-pre-approval property was.
+
+## Real implementation (2026-09-05)
+
+Built the same day, real, direct instruction. `application/coding/context.py`'s
+`inject_referenced_file_context` implements the file-selection
+heuristic's own first half (files the task text names literally) --
+the retry-time, evidence-referenced half remains real, deferred scope,
+not built (see that module's own docstring). A real, explicit,
+combined-across-all-files budget (8000 characters) bounds inclusion; a
+file that cannot be read as UTF-8, or that escapes `target_repo`'s own
+real boundary via a `../`-style token, is silently skipped, not
+treated as an error.
+
+**A real, deliberate compatibility decision, not silently defaulted
+on**: this is wired as **opt-in**, a new `include_referenced_file_context: bool = False`
+field on `CodingTaskRequest` (and the matching parameter on
+`kernel/coding.py`'s own `authorize_and_run_coding_task`) -- every
+existing caller's exact prior behavior is preserved unchanged unless
+it explicitly opts in. Feeding real, potentially-`UNTRUSTED_EXTERNAL`
+repository content into every coding task's prompt by default would
+be a real, meaningful behavior change to an already-shipped,
+already-tested feature, not something to flip on silently as a side
+effect of adding the mechanism.
+
+Real, end-to-end tests (`tests/integration/test_coding_loop.py`) prove
+both directions against a real `Dispatcher`/sandbox/workspace stack: a
+granted `include_referenced_file_context=True` call has the real
+target file's own current content reach the real provider's own
+`generate()` call; the default (unset) leaves the task text completely
+unchanged, byte for byte, matching every prior test's own already-
+established expectations.

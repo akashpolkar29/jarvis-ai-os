@@ -148,6 +148,7 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
     workspace_factory: WorkspaceFactory | None = None,
     max_climbs: int = DEFAULT_MAX_CLIMBS,
     protected_patterns: tuple[str, ...] | None = None,
+    include_referenced_file_context: bool = False,
 ) -> tuple[Decision, CodingLoopResult | None]:
     """Wire up the stack, authorize invoking the coding agent, and run it only if granted.
 
@@ -182,6 +183,12 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
         protected_patterns: A real, explicit override for which paths
             are protected. `None` resolves them for real from
             `target_repo`'s own detected test convention.
+        include_referenced_file_context: Real, opt-in (default
+            `False`, preserving every existing caller's exact prior
+            behavior) file-context injection -- see
+            `CodingTaskRequest`'s own docstring for what this does and
+            does not do (M7 code-context design,
+            `application/coding/context.py`).
 
     Returns:
         `(decision, result)` -- `decision` is the outer `coding.run_task`
@@ -223,6 +230,7 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
                 context=orchestrator.get_current_context(),
                 max_climbs=max_climbs,
                 protected_patterns=protected_patterns,
+                include_referenced_file_context=include_referenced_file_context,
             )
             result = await run_coding_task(request, dependencies)
     finally:

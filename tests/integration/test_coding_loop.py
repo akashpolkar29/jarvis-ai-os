@@ -333,3 +333,73 @@ async def test_an_injected_do_not_verify_instruction_in_the_task_cannot_manufact
     assert result.outcome is CodingLoopOutcome.RETRY_BUDGET_EXHAUSTED
     assert (real_target / "widget.py").read_text(encoding="utf-8") == _ORIGINAL_WIDGET_CONTENT
     assert (real_target / "test_widget.py").read_text(encoding="utf-8") == _FAILING_TEST_CONTENT
+
+
+class _TaskRecordingProvider:
+    """A minimal, test-local ReasoningPort recording every real task text it receives."""
+
+    def __init__(self) -> None:
+        self.received_tasks: list[str] = []
+
+    async def generate(self, task: str, _prior_attempts: tuple[Attempt, ...]) -> Tainted[Candidate]:
+        self.received_tasks.append(task)
+        candidate = Candidate(author="local", content=_WRONG_PATCH)
+        return Tainted(candidate, Provenance.system())
+
+
+async def test_include_referenced_file_context_folds_real_file_content_into_the_first_climb(
+    tmp_path: Path,
+) -> None:
+    """M7 code-context design: opt-in file-context injection reaches the real provider call.
+
+    Real, end-to-end proof, not a unit test of `inject_referenced_file_context`
+    in isolation: with `include_referenced_file_context=True`, the real
+    task text the provider's own `generate()` receives for the first
+    climb includes `widget.py`'s own real, current content -- proving
+    the wiring through `run_coding_task` all the way to a real
+    `Dispatcher.run()` call, not just that the helper function itself
+    works.
+    """
+    real_target = tmp_path / "real_target_repo"
+    real_target.mkdir()
+    _make_real_target_repo(real_target)
+
+    provider = _TaskRecordingProvider()
+    task = Tainted("fix the bug in widget.py", Provenance.user())
+    request = CodingTaskRequest(
+        task,
+        real_target,
+        _FULL_CONFIRMATION,
+        max_climbs=1,
+        protected_patterns=_PROTECTED_PATTERNS,
+        include_referenced_file_context=True,
+    )
+
+    await run_coding_task(request, _dependencies_for(provider))
+
+    assert len(provider.received_tasks) == 1
+    assert _ORIGINAL_WIDGET_CONTENT.strip() in provider.received_tasks[0]
+    assert "widget.py" in provider.received_tasks[0]
+
+
+async def test_include_referenced_file_context_default_false_preserves_exact_prior_behavior(
+    tmp_path: Path,
+) -> None:
+    """The default (unset) behaves exactly as before this feature existed -- no file content leaks in."""  # noqa: E501
+    real_target = tmp_path / "real_target_repo"
+    real_target.mkdir()
+    _make_real_target_repo(real_target)
+
+    provider = _TaskRecordingProvider()
+    task = Tainted("fix the bug in widget.py", Provenance.user())
+    request = CodingTaskRequest(
+        task,
+        real_target,
+        _FULL_CONFIRMATION,
+        max_climbs=1,
+        protected_patterns=_PROTECTED_PATTERNS,
+    )
+
+    await run_coding_task(request, _dependencies_for(provider))
+
+    assert provider.received_tasks == ["fix the bug in widget.py"]
