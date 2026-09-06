@@ -40,12 +40,13 @@ from jarvis.kernel.capabilities import (
     MUSIC_PLAY_CAPABILITY_ID,
     MUSIC_PREVIOUS_CAPABILITY_ID,
     PING_CAPABILITY_ID,
+    PLANNING_RUN_PLAN_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
     TERMINAL_RUN_CAPABILITY_ID,
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 38
+_EXPECTED_CAPABILITY_COUNT = 39
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -103,6 +104,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         EMAIL_LIST_MESSAGES_CAPABILITY_ID,
         EMAIL_READ_MESSAGE_CAPABILITY_ID,
         CALENDAR_LIST_EVENTS_CAPABILITY_ID,
+        PLANNING_RUN_PLAN_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 

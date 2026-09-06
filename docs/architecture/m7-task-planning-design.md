@@ -155,3 +155,36 @@ for the one real, safety-relevant property from this design (no batch
 pre-approval) written up as its own Proposed ADR, since that property
 is load-bearing enough to warrant an explicit accept/reject decision
 independent of whether the rest of this design is ever built.
+
+## Real implementation (2026-09-05)
+
+This design was built the same day, real, direct instruction: `planning.run_plan`
+(`Effect.EXECUTE`/`Tier.CONFIRM`, `kernel/capabilities.py`),
+`application/planning/planner.py` (real plan generation +
+structural validation, item 3's own JSON-array/registered-capability
+checks), `application/planning/executor.py` (item 4's real minimal-
+first-version restriction, ADR-0062's own core decision made real),
+and `kernel/planning.py` (the real, invocable composition root,
+mirroring `kernel/coding.py`'s own shape).
+
+**A real, significant gap found and closed during implementation, not
+foreseen by this design's own original text**: step 4's own "drives
+the validated plan through `authorize_by_id()`" undersold what
+running a step actually requires -- `authorize_by_id()` alone never
+performs a capability's real side effect; only each capability's own
+hand-written `authorize_and_*` function does. Closed via a new,
+generic capability-dispatch registry
+(`kernel/capability_dispatch.py`), reusing existing, unmodified
+`authorize_and_*` functions rather than inventing a new execution
+path. See that module's own docstring for the full account, and
+ADR-0062's own closing note for a second, real, narrower-than-planned
+restriction this same discovery forced (`Tier.ALLOW`-only steps for
+v1, not `Tier.ALLOW`/`Tier.CONFIRM` as originally written above).
+
+**Deliberately minimal initial capability coverage**: only four real
+capabilities are wired into the dispatch registry today
+(`fs.read_file`, `fs.list_dir`, `git.status`, `memory.retrieve`),
+proving the real mechanism end-to-end without attempting every one of
+this codebase's 39 capabilities in one pass. Real, open sub-questions
+1 and 2 above (retry/replan, plan preview) remain genuinely
+unresolved, real future work -- not built.

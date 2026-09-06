@@ -175,6 +175,31 @@ class AuthorizationOrchestrator:
         invocation = CapabilityInvocation(descriptor, arguments)
         return self.authorize(invocation, context)
 
+    def get_descriptor(self, capability_id: CapabilityId) -> CapabilityDescriptor:
+        """Look up the descriptor registered under ``capability_id``, without authorizing anything.
+
+        Not a decision -- this does not call ``evaluate()`` and is not
+        audit-logged, exactly like :meth:`is_registered`/
+        :meth:`list_capabilities`. Added for
+        ``application/planning/executor.py``'s own real, pre-flight
+        tier check (ADR-0062): a caller that needs to inspect a
+        capability's real, static tier *before* deciding whether to
+        authorize it at all has no other way to reach the registry
+        this class already wraps.
+
+        Args:
+            capability_id: The id to look up.
+
+        Returns:
+            The descriptor registered under ``capability_id``.
+
+        Raises:
+            jarvis.domain.errors.CapabilityNotRegistered: If no
+                descriptor is registered under ``capability_id``.
+                Propagated unchanged from the registry.
+        """
+        return self._registry.get(capability_id)
+
     def is_registered(self, capability_id: CapabilityId) -> bool:
         """Return whether a descriptor is registered under ``capability_id``.
 

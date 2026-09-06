@@ -2,13 +2,26 @@
 
 ## Status
 
-Proposed -- written as part of a real design proposal
-(`docs/architecture/m7-task-planning-design.md`, 7 real decisions
-prompt, Decision 7, 2026-09-05), not yet reviewed by the user, not
-self-accepted. Flagged here for the user's own later review of this
-document's full text, mirroring every other safety-relevant ADR in
-this project's history (ADR-0055/ADR-0056/ADR-0059/ADR-0060/ADR-0061,
-among others).
+**Accepted (2026-09-05).** This ADR's own full text was surfaced to
+the user directly, in conversation, with a plain-language summary of
+what accepting it would/would not commit to. The user's own response
+was a direct instruction to implement this ADR and its own paired
+design docs (`m7-task-planning-design.md`, `m7-code-context-design.md`)
+-- a real, clear acceptance signal, but **by relayed instruction, not
+the user's own independent "accept as-written" statement after reading
+this document's full text themselves** -- stated plainly, mirroring
+the exact honesty ADR-0055/ADR-0056 already established for this same
+distinction, not smoothed into language implying a fuller review than
+actually happened.
+
+Implemented the same day: `application/planning/planner.py` (plan
+generation + structural validation), `application/planning/executor.py`
+(this ADR's own core decision, made real -- see its own module
+docstring), `kernel/capability_dispatch.py` (the real, generic
+dispatch registry this design's own "how does a step's real action
+actually run" gap needed, resolved via a follow-up clarifying
+question, not silently decided), and `kernel/planning.py`
+(`planning.run_plan`, the real, invocable outer-gate capability).
 
 ## Date
 
@@ -113,3 +126,19 @@ design question -- see `m7-task-planning-design.md`'s own "Real, open
 sub-questions" section. This ADR's own scope is narrower and more
 load-bearing: regardless of whether a plan is ever previewed, no step
 within it is ever authorized in bulk.
+
+**A real, honest implementation finding, narrower than this ADR's own
+stated ceiling**: this ADR permits `Tier.ALLOW`/`Tier.CONFIRM` steps
+for a first version. The real implementation restricts further, to
+`Tier.ALLOW` only, for a concrete reason found while wiring the real
+dispatch registry (`kernel/capability_dispatch.py`): every existing
+`authorize_and_*` function hardcodes its own arguments' `Provenance`
+internally, with no seam for a caller to inject the more cautious
+`Trust.UNTRUSTED_EXTERNAL` tag a model-generated plan step's arguments
+should carry (per `m7-task-planning-design.md`'s own "Real, open
+sub-questions" #3). For `Tier.ALLOW` capabilities this has no real
+consequence (`evaluate()` grants `Tier.ALLOW` unconditionally); for
+`Tier.CONFIRM`, it could silently under-classify genuinely
+model-influenced content. See `application/planning/executor.py`'s
+own module docstring for the full account -- this is real, additive
+tightening on top of this ADR's own decision, not a violation of it.

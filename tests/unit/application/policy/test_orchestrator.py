@@ -221,6 +221,37 @@ def test_authorize_by_id_and_authorize_produce_identical_results() -> None:
     assert direct_decision == by_id_decision
 
 
+def test_get_descriptor_returns_the_registered_descriptor() -> None:
+    """get_descriptor() returns exactly the descriptor registered under that id."""
+    registry = CapabilityRegistry()
+    descriptor = _descriptor(Effect.READ_LOCAL)
+    registry.register(descriptor)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+
+    assert orchestrator.get_descriptor(descriptor.id) is descriptor
+
+
+def test_get_descriptor_raises_for_unregistered_capability() -> None:
+    """get_descriptor() raises CapabilityNotRegistered for an id that was never registered."""
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+
+    with pytest.raises(CapabilityNotRegistered):
+        orchestrator.get_descriptor(CapabilityId("fs.read_file"))
+
+
+def test_get_descriptor_does_not_touch_the_chain() -> None:
+    """get_descriptor() is a pure read: it is not a decision and is never audited."""
+    chain = AuditChain()
+    registry = CapabilityRegistry()
+    descriptor = _descriptor(Effect.READ_LOCAL)
+    registry.register(descriptor)
+    orchestrator = AuthorizationOrchestrator(chain, registry)
+
+    orchestrator.get_descriptor(descriptor.id)
+
+    assert len(chain) == 0
+
+
 def test_is_registered_true_for_registered_capability() -> None:
     """is_registered() is True for an id that was registered."""
     registry = CapabilityRegistry()

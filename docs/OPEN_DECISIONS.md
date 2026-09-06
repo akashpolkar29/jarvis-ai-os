@@ -116,32 +116,41 @@ real record of Decision 6's own scope, in
 `docs/architecture/audit-log-integrity-scoping-notes.md`'s own "Real
 decision recorded and implemented" section.
 
-## 6. M7's two scoped questions -- now real design proposals, awaiting review (updated 2026-09-05)
+## 6a. ~~Task planning~~ -- IMPLEMENTED 2026-09-05
 
-**What's needed**: the user's own review of two real, concrete design
-proposals (7 real decisions prompt, Decision 7) -- whether to build
-either, and, for task planning specifically, whether to accept
-ADR-0062 (its own one, load-bearing safety property). Nothing has
-been implemented; no `Dispatcher`/`EscalationLadder` code was touched.
+**Resolved/built**: real, direct instruction to implement
+`m7-task-planning-design.md` and ADR-0062. `planning.run_plan`
+(`Effect.EXECUTE`/`Tier.CONFIRM`) is a real, invocable capability --
+`application/planning/planner.py` (plan generation + structural
+validation), `application/planning/executor.py` (ADR-0062's own core
+"no batch pre-approval" decision, made real), `kernel/capability_dispatch.py`
+(a real, new generic dispatch registry, closing a real gap found
+during implementation -- `authorize_by_id()` alone never performs a
+capability's real action), and `kernel/planning.py` (the composition
+root). No `Dispatcher`/`EscalationLadder` code was touched. ADR-0062
+is now **Accepted**, by relayed instruction, not the user's own
+independent reading after the fact -- stated plainly in its own
+Status section. Deliberately minimal: only four real capabilities
+(`fs.read_file`, `fs.list_dir`, `git.status`, `memory.retrieve`) are
+wired into the dispatch registry; a further, real restriction to
+`Tier.ALLOW`-only steps (narrower than ADR-0062's own stated
+`Tier.ALLOW`/`Tier.CONFIRM` ceiling) was added during implementation
+-- see the ADR's own closing note and `executor.py`'s own module
+docstring for why. Retry/replan and plan-preview (real, open
+sub-questions in the design doc) remain genuinely unbuilt.
 
-**Already investigated and designed**:
+## 6b. LSP-based code intelligence -- design proposed, not yet built
 
-- **"Intelligent task planning"**: `docs/architecture/m7-scoping-notes.md`'s
-  own real finding (`Dispatcher`/`EscalationLadder` never decompose a
-  goal into a multi-step plan) now has a real design,
-  `docs/architecture/m7-task-planning-design.md` -- a new layer above
-  `Dispatcher`, every plan step individually authorized via the
-  existing `AuthorizationOrchestrator`, never a batch pre-approval.
-  That one property is written up separately as
-  `docs/adr/0062-task-planning-per-step-authorization-no-batch-pre-approval.md`,
-  **Proposed**, not self-accepted.
-- **LSP-based code intelligence**: `m7-scoping-notes.md`'s own real
-  finding (`coding.run_task` sends a provider no file content at all)
-  now has a real design, `docs/architecture/m7-code-context-design.md`
-  -- minimal, non-LSP file-context injection recommended over full
-  LSP integration, plus a real, new taint-classification default
-  (injected file content is `Trust.UNTRUSTED_EXTERNAL` by default, not
-  automatically the user's own trust level).
+**What's needed**: the user's own review of a real, concrete design
+proposal -- whether to build it.
+
+**Already investigated and designed**: `m7-scoping-notes.md`'s own
+real finding (`coding.run_task` sends a provider no file content at
+all) has a real design, `docs/architecture/m7-code-context-design.md`
+-- minimal, non-LSP file-context injection recommended over full LSP
+integration, plus a real, new taint-classification default (injected
+file content is `Trust.UNTRUSTED_EXTERNAL` by default, not
+automatically the user's own trust level). Not yet implemented.
 
 ## Maintaining this index
 

@@ -79,6 +79,7 @@ CODING_RUN_TASK_CAPABILITY_ID = CapabilityId("coding.run_task")
 EMAIL_LIST_MESSAGES_CAPABILITY_ID = CapabilityId("communications.list_email")
 EMAIL_READ_MESSAGE_CAPABILITY_ID = CapabilityId("communications.read_email")
 CALENDAR_LIST_EVENTS_CAPABILITY_ID = CapabilityId("communications.list_calendar_events")
+PLANNING_RUN_PLAN_CAPABILITY_ID = CapabilityId("planning.run_plan")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -488,5 +489,22 @@ def build_default_registry() -> CapabilityRegistry:
     # memory.write/job_assistance.draft are never registered here either.
     # See kernel/communications.py's own module docstring, and
     # EmailSendAuthorizer/CalendarEventAuthorizer (application/communications/writer.py).
+
+    registry.register(
+        CapabilityDescriptor(
+            id=PLANNING_RUN_PLAN_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Ask a real reasoning provider to propose an ordered plan for a "
+                "goal, then run it (ADR-0062, M7 task-planning design). The outer "
+                "gate on invoking the planner at all -- Effect.EXECUTE, same tier "
+                "as coding.run_task/docker.stop_container/browser.open_page. Every "
+                "real plan step is separately, individually authorized through its "
+                "own authorize_by_id() call inside application/planning/executor.py "
+                "-- a granted outer gate never pre-authorizes any step's own "
+                "outcome; no batch pre-approval anywhere in this chain."
+            ),
+        )
+    )
 
     return registry

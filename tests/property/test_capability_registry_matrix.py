@@ -43,7 +43,7 @@ CONTEXT = st.builds(
 _REGISTRY = build_default_registry()
 _ALL_CAPABILITY_IDS = tuple(descriptor.id for descriptor in _REGISTRY)
 
-# Real, current tier assignment for every one of the 38 statically-registered
+# Real, current tier assignment for every one of the 39 statically-registered
 # capabilities, as of this pass -- read directly from build_default_registry(),
 # not hand-guessed. Any future change to a capability's Effect combination
 # that shifts its required_tier will show up here as a real, visible diff in
@@ -87,6 +87,7 @@ _EXPECTED_TIER_BY_CAPABILITY: dict[str, Tier] = {
     "music.play": Tier.CONFIRM,
     "music.previous": Tier.CONFIRM,
     "ping": Tier.ALLOW,
+    "planning.run_plan": Tier.CONFIRM,
     "terminal.run": Tier.MANUAL_ONLY,
 }
 
