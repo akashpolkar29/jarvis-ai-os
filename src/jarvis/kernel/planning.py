@@ -28,10 +28,27 @@ here -- inventing one (which vendor-family adapter, which model, which
 keyring secret reference) is undecided policy this codebase does not
 make anywhere. A caller wanting a different real provider passes one
 explicitly.
+
+**Real, honest addendum (2026-09-05, adversarial-verification follow-up)**:
+`kernel/coding.py`/`kernel/job_assistance.py` were checked directly
+before making this change -- neither has any real credential-auto-
+detection mechanism at all; both are purely explicit-override, always
+defaulting to local when no provider is supplied. There is nothing to
+"prefer cloud when configured" against, since this codebase has no
+way to detect that. The real, honest change made here instead: when
+the default (local) path is taken, a real
+``logging.getLogger(__name__).warning(...)`` call surfaces plainly
+that cloud reasoning was not requested and plan generation may be
+unreliable as a result -- citing the real, empirically-measured ~33%
+local-model failure rate found during ADR-0062's own adversarial
+verification pass. The explicit ``provider`` override remains the
+only real way to use cloud reasoning, unchanged in shape from before
+this addendum; a caller that supplies one sees no warning at all.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
@@ -50,6 +67,8 @@ if TYPE_CHECKING:
     from jarvis.application.planning.executor import PlanExecutionResult
     from jarvis.domain.policy import Decision
     from jarvis.ports.reasoning import ReasoningPort
+
+_logger = logging.getLogger(__name__)
 
 
 async def authorize_and_run_plan(
@@ -70,7 +89,10 @@ async def authorize_and_run_plan(
         provider: The real ``ReasoningPort`` asked to propose a plan.
             Defaults to a real, credential-free ``LocalReasoningAdapter``
             -- see module docstring for why only the *local* default
-            exists, not a cloud one.
+            exists, not a cloud one. Taking this default logs a real,
+            honest warning (see module docstring's own addendum) --
+            pass an explicit cloud-backed provider to use real cloud
+            reasoning and avoid it.
         physical_confirmation_available: Whether a human is physically
             present, passed straight through both to the outer gate's
             own ``ManualConfirmationAdapter`` and to every real plan
@@ -132,6 +154,15 @@ async def authorize_and_run_plan(
 
     result: PlanExecutionResult | None = None
     if decision.granted:
+        if provider is None:
+            _logger.warning(
+                "planning.run_plan: no cloud reasoning provider was supplied -- falling back "
+                "to the local model for plan generation. This is a real, known reliability "
+                "gap, not a hypothetical one: an adversarial-verification pass (2026-09-05) "
+                "measured an empirical ~33 percent real failure rate for this local model on "
+                "plan generation, even for a single-capability goal. Pass an explicit, real "
+                "cloud-backed ReasoningPort to avoid this."
+            )
         real_provider = provider or LocalReasoningAdapter()
         steps = await generate_plan(
             Tainted(goal, Provenance.user()), real_provider, orchestrator.is_registered

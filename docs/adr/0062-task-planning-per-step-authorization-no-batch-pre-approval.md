@@ -142,3 +142,22 @@ consequence (`evaluate()` grants `Tier.ALLOW` unconditionally); for
 model-influenced content. See `application/planning/executor.py`'s
 own module docstring for the full account -- this is real, additive
 tightening on top of this ADR's own decision, not a violation of it.
+
+**A real, disclosed change to plan-generation's own default provider
+(2026-09-05), unrelated to this ADR's own core per-step-authorization
+decision, which is untouched**: a real adversarial-verification pass
+(see `docs/threat-model/v0.md`'s own "Adversarial verification of
+ADR-0062's real boundaries, Task 3" section) measured a real ~33%
+failure rate for the local model on plan generation. Investigated
+directly before changing anything: neither `kernel/coding.py` nor
+`kernel/job_assistance.py` has any real credential-auto-detection
+mechanism to "prefer cloud when configured" against -- both are
+purely explicit-override, unconditionally local by default. The real
+change made, chosen by the user directly: the default stays local
+(no new credential-detection invented), but taking it now logs a
+real, observable warning naming the measured failure rate --
+`kernel/planning.py`'s own module docstring carries the full
+addendum. This does not change this ADR's own per-step-authorization
+guarantee in any way -- it changes only which reasoning provider plan
+*generation* uses by default, before any step is ever proposed or
+authorized.

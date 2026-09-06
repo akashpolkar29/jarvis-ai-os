@@ -188,3 +188,34 @@ proving the real mechanism end-to-end without attempting every one of
 this codebase's 39 capabilities in one pass. Real, open sub-questions
 1 and 2 above (retry/replan, plan preview) remain genuinely
 unresolved, real future work -- not built.
+
+## Real, disclosed change to plan-generation defaults (2026-09-05)
+
+Adversarial verification of ADR-0062 (a separate, later pass)
+empirically measured a real ~33% failure rate for the real, local
+`qwen2.5:0.5b` model on plan generation, even for a single-capability
+goal (see `docs/threat-model/v0.md`'s own "Adversarial verification of
+ADR-0062's real boundaries, Task 3" section for the full, quoted
+findings). Following that finding, the user asked for plan generation
+to prefer real cloud reasoning by default.
+
+**A real, honest correction made during investigation, not silently
+assumed**: neither `kernel/coding.py` nor `kernel/job_assistance.py`
+-- the two modules this task was told to mirror -- has any real
+credential-auto-detection mechanism at all. Both are purely
+explicit-override: a caller passes its own real, cloud-configured
+provider/factory, or the default is unconditionally local. There was
+nothing to "prefer cloud when configured" against, since this
+codebase has no way to detect that anywhere.
+
+**The real, honest change actually made, chosen by the user
+directly**: the default stays local (unchanged, mirroring
+`coding.py`/`job_assistance.py`'s own real shape exactly, no new
+credential-detection invented), but taking that default now logs a
+real, observable `logging.WARNING` naming the empirically-measured
+~33% failure rate plainly -- `kernel/planning.py`'s own module
+docstring carries the full addendum. A caller wanting real cloud
+reasoning still supplies its own explicit provider, exactly as
+before; doing so produces no warning at all. This is a real, disclosed
+behavior change to ADR-0062's own "local-only default" framing above,
+not a silent drift -- stated here explicitly.

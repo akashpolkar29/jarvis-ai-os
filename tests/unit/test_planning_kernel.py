@@ -10,6 +10,7 @@ real plan step's own authorization/execution) runs for real.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -361,3 +362,81 @@ async def test_real_local_reasoning_adapter_generates_and_executes_a_real_plan(
 
     final_chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert final_chain.verify().valid is True
+
+
+async def test_an_explicit_provider_is_used_with_no_fallback_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Real, honest-default follow-up: an explicit provider is preferred, no warning logged.
+
+    Mirrors `coding.py`/`job_assistance.py`'s own real,
+    explicit-override-only shape exactly -- there is no real
+    credential-auto-detection anywhere in this codebase to "prefer
+    cloud when configured" against (checked directly before making
+    this change, not assumed). A caller that supplies its own
+    provider -- standing in here for a real, explicitly-configured
+    cloud-backed `ReasoningPort` -- is used as-is, and the real,
+    honest local-fallback warning is never logged.
+    """
+    chain_path = tmp_path / "audit_chain.json"
+    (tmp_path / "a.txt").write_text("hello")
+    plan_response = json.dumps(
+        [{"capability_id": "fs.read_file", "arguments": {"path": str(tmp_path / "a.txt")}}]
+    )
+    explicit_provider = _FakeReasoningProvider(plan_response)
+
+    with (
+        mock.patch("jarvis.kernel.capability_dispatch.authorize_and_read_file") as fake,
+        caplog.at_level(logging.WARNING, logger="jarvis.kernel.planning"),
+    ):
+        fake.return_value = mock.Mock(decision=mock.Mock(granted=True))
+        await authorize_and_run_plan(
+            "read a.txt",
+            explicit_provider,
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+        )
+
+    assert len(explicit_provider.calls) == 1
+    assert "no cloud reasoning provider" not in caplog.text
+
+
+async def test_no_provider_falls_back_to_local_with_a_real_observable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Real, honest-default follow-up: omitting provider falls back to local, warning is real.
+
+    The default behavior (local model) is unchanged from before this
+    pass -- there is nothing to "prefer cloud" against, since no real
+    credential-detection exists (see module docstring's own addendum).
+    What is new and real: a genuine, observable `logging.WARNING`
+    record naming the empirically-measured ~33% local-model failure
+    rate, not a decorative comment or a silent fallback.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    chain_path = tmp_path / "audit_chain.json"
+    (tmp_path / "a.txt").write_text("hello")
+    plan_response = json.dumps(
+        [{"capability_id": "fs.read_file", "arguments": {"path": str(tmp_path / "a.txt")}}]
+    )
+    fake_local_adapter = _FakeReasoningProvider(plan_response)
+
+    with (
+        mock.patch("jarvis.kernel.planning.LocalReasoningAdapter", return_value=fake_local_adapter),
+        caplog.at_level(logging.WARNING, logger="jarvis.kernel.planning"),
+    ):
+        decision, result = await authorize_and_run_plan(
+            "read a.txt",
+            None,
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+        )
+
+    assert decision.granted is True
+    assert result is not None
+    assert len(fake_local_adapter.calls) == 1
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert "no cloud reasoning provider" in caplog.text
+    assert "33 percent" in caplog.text
