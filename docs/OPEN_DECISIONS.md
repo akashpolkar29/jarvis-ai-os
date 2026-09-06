@@ -116,25 +116,32 @@ real record of Decision 6's own scope, in
 `docs/architecture/audit-log-integrity-scoping-notes.md`'s own "Real
 decision recorded and implemented" section.
 
-## 6. M7's two scoped-but-undecided questions
+## 6. M7's two scoped questions -- now real design proposals, awaiting review (updated 2026-09-05)
 
-**What's needed**: whether either is worth building as new,
-real scope, and if so, what.
+**What's needed**: the user's own review of two real, concrete design
+proposals (7 real decisions prompt, Decision 7) -- whether to build
+either, and, for task planning specifically, whether to accept
+ADR-0062 (its own one, load-bearing safety property). Nothing has
+been implemented; no `Dispatcher`/`EscalationLadder` code was touched.
 
-**Already investigated, real evidence gathered, nothing built**:
-`docs/architecture/m7-scoping-notes.md` --
+**Already investigated and designed**:
 
-- **"Intelligent task planning"**: the charter names this capability;
-  the real finding is that `Dispatcher`/`EscalationLadder` climb three
-  fixed rungs for one already-specified task and never decompose a
-  goal into a multi-step, cross-capability plan -- the "maps to M2's
-  reasoning layer" claim repeated elsewhere is not an accurate full
-  capability match.
-- **LSP-based code intelligence**: `coding.run_task` currently sends a
-  provider no real file content at all (`build_prompt()` never touches
-  the filesystem) -- the real, reframed question is whether *any*
-  repository context should reach the prompt, not specifically whether
-  it must be LSP-shaped.
+- **"Intelligent task planning"**: `docs/architecture/m7-scoping-notes.md`'s
+  own real finding (`Dispatcher`/`EscalationLadder` never decompose a
+  goal into a multi-step plan) now has a real design,
+  `docs/architecture/m7-task-planning-design.md` -- a new layer above
+  `Dispatcher`, every plan step individually authorized via the
+  existing `AuthorizationOrchestrator`, never a batch pre-approval.
+  That one property is written up separately as
+  `docs/adr/0062-task-planning-per-step-authorization-no-batch-pre-approval.md`,
+  **Proposed**, not self-accepted.
+- **LSP-based code intelligence**: `m7-scoping-notes.md`'s own real
+  finding (`coding.run_task` sends a provider no file content at all)
+  now has a real design, `docs/architecture/m7-code-context-design.md`
+  -- minimal, non-LSP file-context injection recommended over full
+  LSP integration, plus a real, new taint-classification default
+  (injected file content is `Trust.UNTRUSTED_EXTERNAL` by default, not
+  automatically the user's own trust level).
 
 ## Maintaining this index
 

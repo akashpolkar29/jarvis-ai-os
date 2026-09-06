@@ -197,6 +197,25 @@ it.
   `coding.run_task` already gets enough repository context without it
   (real finding: no, it currently gets none at all beyond the caller's
   own task text). Options laid out, no decision made — nothing built.
+  **Updated 2026-09-05 (7 real decisions prompt, Decision 7)**: both
+  carried-forward gaps now have real, concrete design proposals, not
+  just investigated options —
+  [`docs/architecture/m7-task-planning-design.md`](architecture/m7-task-planning-design.md)
+  (a new layer above `Dispatcher`, never a change to it; every plan
+  step individually authorized via the existing
+  `AuthorizationOrchestrator`, never a batch pre-approval — this one
+  safety-relevant property is written up separately as
+  [ADR-0062](../adr/0062-task-planning-per-step-authorization-no-batch-pre-approval.md),
+  **Proposed**, not self-accepted) and
+  [`docs/architecture/m7-code-context-design.md`](architecture/m7-code-context-design.md)
+  (minimal, non-LSP file-context injection recommended over full LSP
+  integration, plus a real, new taint-classification question this
+  design surfaces: injected file content defaults to
+  `Trust.UNTRUSTED_EXTERNAL`, not automatically trusted as the user's
+  own). No `Dispatcher`/`EscalationLadder` code was touched to produce
+  either design. M7 remains not a real ROADMAP row — these are design
+  proposals awaiting the user's own review, not an implementation
+  commitment.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
