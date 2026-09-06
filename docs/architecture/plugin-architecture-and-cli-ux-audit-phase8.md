@@ -128,12 +128,22 @@ readability benefit, and does not risk confusion the way the ADR-number
 leak did -- named here rather than either silently rewritten at scale
 or ignored.
 
+## Real decision recorded (7 real decisions prompt, Decision 5, 2026-09-05)
+
+The user reviewed both real, structural naming inconsistencies above
+and chose: **leave both as-is.** Neither `memory`'s nested-subcommand
+shape nor `fs.read_file`'s bare `read` command is worth a real,
+user-facing, potentially script-breaking rename this deep into the
+project's own life. No code changed as a result of this decision --
+both items are now closed as "investigated, decided, kept," not left
+open pending further input.
+
 ## Conclusion
 
 The plugin architecture's "description" half is now real and
 mechanically proven, not merely documented as an aspiration; its
 "loading" half remains an honest, named limitation, unchanged. The CLI
 has one real bug (ADR-number leakage into user help text), now fixed,
-and two real, structural naming inconsistencies, both flagged for the
-user's own decision rather than silently resolved by a
-backward-compatibility-breaking rename.
+and two real, structural naming inconsistencies -- both surfaced for
+the user's own decision, and both now resolved: kept as-is, not
+renamed (see "Real decision recorded" above).

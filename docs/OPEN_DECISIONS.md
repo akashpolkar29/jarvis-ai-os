@@ -76,19 +76,15 @@ obvious finding: `caldav`'s own migration docstring example
 the AGPL code path -- only `server_expand=True` alone, with `expand`
 left at its own default, does.
 
-## 4. Two real, structural CLI naming inconsistencies
+## 4. ~~Two real, structural CLI naming inconsistencies~~ -- RESOLVED 2026-09-05
 
-**What's needed**: a decision on whether to rename either (a real,
-user-facing, potentially script-breaking change) or leave both as
-historical accretion.
-
-**Already investigated**: `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`
-(10-phase combined pass, Phase 8) found both and named them plainly:
-`memory` is the only capability family using a nested subcommand group
-(`memory write`/`retrieve`/...) instead of the flat, hyphenated style
-every other family uses; `fs.read_file`'s own CLI command is bare
-`read` (no noun), unlike its later siblings `list-dir`/`move-file`/
-`delete-file`. Neither has been renamed.
+**Resolved**: the user reviewed both (7 real decisions prompt,
+Decision 5) and chose to leave both as-is -- not worth a real,
+user-facing, potentially script-breaking rename this deep into the
+project. `memory` keeps its nested subcommand group
+(`memory write`/`retrieve`/...); `fs.read_file`'s CLI command stays
+bare `read`. See `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`'s
+own "Real decision recorded" section. No code changed.
 
 ## 5. The audit chain's real, open structural gaps
 
