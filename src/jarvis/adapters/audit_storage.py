@@ -58,6 +58,7 @@ concern, out of scope for "does a working save/load seam exist."
 from __future__ import annotations
 
 import json
+import stat
 from typing import TYPE_CHECKING, Any
 
 from jarvis.domain.audit import ARGUMENT_DIGEST_KEY, AuditChain, AuditRecord, digest_argument_value
@@ -222,9 +223,37 @@ class JsonFileAuditStorageAdapter:
         self._path = path
 
     def save(self, chain: AuditChain) -> None:
-        """Overwrite the file at ``path`` with every record currently in ``chain``."""
+        """Overwrite the file at ``path`` with every record currently in ``chain``.
+
+        Sets restrictive, owner-only permissions (``0o600``) on the
+        file after every save (7 real decisions prompt, Decision 6,
+        2026-09-05) -- the user's own chosen mitigation against
+        casual/other-local-user tampering, the simplest of four real
+        options laid out in
+        ``docs/architecture/audit-log-integrity-scoping-notes.md``.
+        Explicit ``os.chmod`` is required, not merely relying on
+        ``Path.write_text``'s own default mode: the file's actual
+        permissions after creation follow the process umask (commonly
+        ``0o644``, world-readable), not a fixed, safe value --
+        confirmed directly, not assumed. Applied unconditionally on
+        every save, not only file creation, so a pre-existing file
+        with looser permissions (e.g. one written before this fix
+        existed) is also tightened the next time it's saved.
+
+        **What this does and does not close, stated plainly**: raises
+        the bar against a casual/other-local-user reading or tampering
+        with the file at rest. Does **not** close the audit chain's
+        other three real, distinct, already-documented gaps -- no
+        timestamp field, non-atomic writes, or a cross-process race
+        between two legitimate JARVIS processes saving simultaneously
+        -- all three remain real, open, accepted limitations,
+        unaffected by this specific decision. See
+        ``docs/architecture/audit-log-integrity-scoping-notes.md``'s
+        own updated note for the full account.
+        """
         records = [_encode_record(record) for record in chain]
         self._path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+        self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     def load(self) -> AuditChain:
         """Return the chain last saved, or an empty AuditChain if ``path`` doesn't exist yet."""

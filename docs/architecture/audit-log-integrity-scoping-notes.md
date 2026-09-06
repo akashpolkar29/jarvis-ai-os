@@ -126,3 +126,44 @@ architecture decision to make, per this project's standing "never
 silently change the architecture" rule, the same posture
 `m7-scoping-notes.md` and every other real scoping note in this
 project already takes.
+
+## Real decision recorded and implemented (7 real decisions prompt, Decision 6, 2026-09-05)
+
+The user chose **option 1, restrictive file permissions** -- the
+simplest of the four laid out above. `JsonFileAuditStorageAdapter.save()`
+now calls `self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)` (`0o600`,
+owner read/write only) unconditionally after every real write, not
+only at first creation -- so a pre-existing file with looser
+permissions (e.g. one written before this fix existed) is re-tightened
+the next time it's saved, confirmed by a real test
+(`test_save_re_tightens_permissions_on_a_pre_existing_looser_file`).
+A second real test
+(`test_save_sets_restrictive_owner_only_file_permissions`) proves the
+real, resulting file mode via a direct `os.stat()` call, not assumed
+from the `chmod` call site alone.
+
+**What this real change does and does not close, stated plainly, not
+rounded up to "fixed"**: it raises the bar against a casual/other-
+local-user reading or tampering with the file at rest -- a real,
+meaningful improvement over the prior, unset-permissions state. It
+does **not** close any of the other three real gaps this document
+and its own sibling finding already named:
+
+- **The file's own owner** (the same user JARVIS itself runs as) can
+  still replace the entire file wholesale, exactly as option 1's own
+  original description above already stated -- this decision does not
+  claim otherwise.
+- **No timestamp field** exists in `AuditRecord` -- unrelated to file
+  permissions, still open.
+- **Non-atomic writes** (`Path.write_text`'s own whole-file rewrite,
+  no temp-file-then-rename) -- unrelated to file permissions, still
+  open; a process killed mid-write can still leave a truncated file.
+- **The cross-process race** between two legitimate JARVIS processes
+  saving the same file simultaneously -- unrelated to file
+  permissions, still open; this document's own sibling finding.
+
+These three remain real, open, accepted limitations of the current
+persistence format -- this decision closes exactly one of four real
+gaps, not all four, and is recorded here precisely so a future reader
+does not mistake "the user made a decision about audit-chain
+integrity" for "every audit-chain integrity gap is now closed."

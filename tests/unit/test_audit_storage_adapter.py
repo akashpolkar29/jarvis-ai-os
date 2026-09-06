@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from typing import TYPE_CHECKING
 
 import pytest
@@ -258,6 +259,40 @@ def test_a_deleted_middle_record_is_not_caught_by_load_but_is_caught_by_verify(
 
     assert len(loaded) == _RECORDS_AFTER_MIDDLE_DELETION
     assert loaded.verify().valid is False
+
+
+def test_save_sets_restrictive_owner_only_file_permissions(tmp_path: Path) -> None:
+    """save() leaves the real file at 0o600 -- owner read/write only, no group/other access.
+
+    Real decision (7 real decisions prompt, Decision 6, 2026-09-05):
+    the simplest of four real mitigation options against casual/other-
+    local-user tampering (`docs/architecture/audit-log-integrity-scoping-notes.md`).
+    Confirmed directly via a real `os.stat()` call, not assumed from
+    the `os.chmod` call site alone -- `Path.write_text`'s own default
+    mode follows the process umask, not a fixed value, so this proves
+    the explicit `os.chmod` in `save()` actually took effect on a real
+    file.
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+
+    adapter.save(_build_varied_chain())
+
+    real_mode = stat.S_IMODE(path.stat().st_mode)
+    assert real_mode == (stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_save_re_tightens_permissions_on_a_pre_existing_looser_file(tmp_path: Path) -> None:
+    """A file saved once, then loosened, is re-tightened by the next real save() -- not just at creation."""  # noqa: E501
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    adapter.save(_build_varied_chain())
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+    adapter.save(AuditChain())
+
+    real_mode = stat.S_IMODE(path.stat().st_mode)
+    assert real_mode == (stat.S_IRUSR | stat.S_IWUSR)
 
 
 def test_save_overwrites_a_previous_save(tmp_path: Path) -> None:

@@ -86,36 +86,35 @@ project. `memory` keeps its nested subcommand group
 bare `read`. See `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`'s
 own "Real decision recorded" section. No code changed.
 
-## 5. The audit chain's real, open structural gaps
+## 5. The audit chain's real, open structural gaps -- one of four closed 2026-09-05
 
-**What's needed**: a real architecture decision on the persistence
-format `JsonFileAuditStorageAdapter` uses -- this project's own hard
-gates have repeatedly named this format itself as off-limits to touch
-without that decision being made first.
+**Resolved in part**: the user chose option 1 (7 real decisions
+prompt, Decision 6) -- restrictive `0o600` file permissions, now
+applied unconditionally on every real `save()`. Raises the bar against
+casual/other-local-user tampering. **Does not close the other three**,
+stated plainly, not rounded up:
 
-**Already investigated, four real, distinct gaps, not one**:
-
-- **Non-atomic writes**: `save()`'s `Path.write_text()` is not atomic
-  -- a process killed mid-write leaves a truncated, invalid JSON file.
-  Investigated directly in `docs/threat-model/v0.md`'s own "Phase 10 --
-  5 smaller tasks" section (10-phase combined pass), connected there to
-  the same root gap named below, not treated as a separate new problem.
+- **Non-atomic writes**: `save()`'s `Path.write_text()` is still not
+  atomic -- a process killed mid-write leaves a truncated, invalid
+  JSON file. Investigated directly in `docs/threat-model/v0.md`'s own
+  "Phase 10 -- 5 smaller tasks" section (10-phase combined pass), still
+  open, unrelated to file permissions.
 - **No timestamp field**: `AuditRecord` records `sequence`/`decision`/
   `previous_hash`/`record_hash` only -- no wall-clock time at all.
-  Named directly in `kernel/audit.py`'s own module docstring (the
-  `audit.history` CLI command's real composition root) as a real,
-  current limitation of the format, not a bug in that command itself.
+  Named directly in `kernel/audit.py`'s own module docstring, still
+  open, unrelated to file permissions.
 - **Cross-process race**: two independent processes racing to save the
-  same `--chain-path` file causes the second `save()` to silently
-  overwrite the first's new record entirely.
-- **Whole-file-replacement / no tamper-evidence at the file level**: no
-  protection exists against the entire chain file being wholly
-  replaced with a fabricated-but-self-consistent history.
+  same `--chain-path` file still causes the second `save()` to
+  silently overwrite the first's new record entirely -- still open,
+  unrelated to file permissions.
 
-  Both of the last two are investigated in full, with four real,
-  named candidate fixes and no recommendation forced, in
-  `docs/architecture/audit-log-integrity-scoping-notes.md`
-  (property-matrix/fuzzing/concurrency pass, Track 3).
+**What's still needed**: a real architecture decision on the remaining
+three gaps in `JsonFileAuditStorageAdapter`'s own persistence format.
+Full investigation, four real candidate fixes for the
+whole-file-replacement/no-tamper-evidence gap specifically, and the
+real record of Decision 6's own scope, in
+`docs/architecture/audit-log-integrity-scoping-notes.md`'s own "Real
+decision recorded and implemented" section.
 
 ## 6. M7's two scoped-but-undecided questions
 
