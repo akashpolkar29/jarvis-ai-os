@@ -11,6 +11,7 @@ composition functions work.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
@@ -23,18 +24,23 @@ from jarvis.application.reasoning.ladder import EscalationLadder
 from jarvis.application.reasoning.router import ModelRouter
 from jarvis.domain.audio import AudioChunk, AudioStream, Segment
 from jarvis.domain.audit import AuditChain
+from jarvis.domain.capability import CapabilityDescriptor, CapabilityInvocation, Effect, Tier
 from jarvis.domain.evidence import Candidate, EscalationRung
+from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.reasoning import ProviderProfile
 from jarvis.domain.registry import CapabilityRegistry
 from jarvis.domain.speaker_id import SpeakerScore
 from jarvis.domain.transcript import Transcript
 from jarvis.domain.wake_word import WakeEvent
+from jarvis.kernel.capabilities import PLANNING_RUN_PLAN_CAPABILITY_ID
 from jarvis.kernel.voice_loop import run_voice_loop
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+    import pytest
 
     from jarvis.application.coding.loop import DispatcherFactory
     from jarvis.domain.calendar import CalendarEvent, CalendarEventDraft
@@ -164,6 +170,16 @@ class _FakeCalendarPort:
     async def create_event(self, draft: CalendarEventDraft) -> str:
         self.create_calls.append(draft)
         return self._created_uid
+
+
+class _FakeBrave:
+    """Records every real open_url call it receives -- no real Brave subprocess is launched."""
+
+    def __init__(self) -> None:
+        self.opened: list[str] = []
+
+    def open_url(self, url: str) -> None:
+        self.opened.append(url)
 
 
 class _FakeMediaPlayerPort:
@@ -923,3 +939,218 @@ async def test_the_confirmation_prompt_names_the_email_recipients_and_subject(
     prompt_text, _timeout = confirmation.prompts[0]
     assert "alice@example.com" in prompt_text
     assert "Hello" in prompt_text
+
+
+def _granted_plan_decision(goal: str) -> Decision:
+    """Build a minimal, real Decision for a monkeypatched authorize_and_run_plan to return.
+
+    Mirrors tests/unit/test_cli_main.py's own ``_make_decision`` helper
+    -- a real ``Decision`` object, not a fabricated ad hoc stand-in.
+    """
+    descriptor = CapabilityDescriptor(
+        id=PLANNING_RUN_PLAN_CAPABILITY_ID,
+        effects=Effect.EXECUTE,
+        description="A test capability.",
+    )
+    invocation = CapabilityInvocation(descriptor, Tainted({"goal": goal}, Provenance.user()))
+    return Decision(
+        tier=Tier.CONFIRM,
+        granted=True,
+        reasons=DecisionReason.BASE_TIER,
+        invocation=invocation,
+    )
+
+
+async def test_a_recognized_plan_command_is_granted_and_runs_the_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "plan ..." -> confirmed -> granted -> authorize_and_run_plan is actually called.
+
+    Monkeypatches authorize_and_run_plan directly in
+    jarvis.kernel.voice_loop's own module namespace -- unlike "code",
+    "plan" has no injectable dispatcher-factory seam to swap in a fake
+    reasoning provider through (authorize_and_run_plan's own real,
+    local-only default provider has no override parameter reaching all
+    the way up through run_voice_loop -- see
+    _authorize_and_execute's own docstring for why this is a real,
+    deliberate difference from coding_target_repo/email_port, not an
+    oversight). This is the same technique
+    tests/unit/test_cli_main.py's own "plan run" tests already use.
+    """
+    received: list[str] = []
+
+    async def fake_authorize_and_run_plan(
+        goal: str,
+        provider: object | None = None,
+        *,
+        physical_confirmation_available: bool,
+        remote_confirmation_available: bool,
+        chain_path: Path,
+    ) -> tuple[Decision, None]:
+        del provider, physical_confirmation_available, remote_confirmation_available, chain_path
+        received.append(goal)
+        return _granted_plan_decision(goal), None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.kernel.voice_loop"],
+        "authorize_and_run_plan",
+        fake_authorize_and_run_plan,
+    )
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("plan read a.txt then summarize it"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+    )
+
+    assert received == ["read a.txt then summarize it"]
+    assert tts.spoken == ["Done."]
+
+
+async def test_a_denied_plan_command_never_runs_the_plan(tmp_path: Path) -> None:
+    """A "plan" request denied at physical confirmation is denied by the real, unmocked
+    outer Tier.CONFIRM gate -- proving voice does not bypass it, and that no plan step's
+    own separate authorization is ever even attempted."""
+    tts = _FakeTtsPort()
+    chain_path = tmp_path / "audit_chain.json"
+
+    await run_voice_loop(
+        chain_path=chain_path,
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("plan read a.txt then summarize it"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == 1  # only the real, denied outer gate -- no plan step ever ran
+    assert chain[0].decision.granted is False
+
+
+async def test_the_confirmation_prompt_names_the_plan_goal(tmp_path: Path) -> None:
+    """The prompt shown for physical confirmation names the real goal."""
+    confirmation = _FakePhysicalConfirmationPort(approve=False)
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("plan read a.txt then summarize it"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "read a.txt then summarize it" in prompt_text
+
+
+async def test_a_recognized_search_jobs_command_is_granted_and_opens_the_real_url(
+    tmp_path: Path,
+) -> None:
+    """ "search jobs ... on linkedin" -> confirmed -> granted -> the real BravePort opens the URL."""  # noqa: E501
+    tts = _FakeTtsPort()
+    browser = _FakeBrave()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("search jobs python developer on linkedin"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        browser=browser,
+    )
+
+    assert tts.spoken == ["Done."]
+    assert browser.opened == ["https://www.linkedin.com/jobs/search/?keywords=python+developer"]
+
+
+async def test_a_denied_search_jobs_command_never_opens_a_url(tmp_path: Path) -> None:
+    """A "search jobs" request denied at physical confirmation never opens a real URL --
+    proving voice does not bypass job_search.open_results's own Tier.CONFIRM floor."""
+    tts = _FakeTtsPort()
+    browser = _FakeBrave()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("search jobs python developer on linkedin"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        browser=browser,
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    assert browser.opened == []
+
+
+async def test_search_jobs_without_a_site_asks_which_site_and_never_authorizes(
+    tmp_path: Path,
+) -> None:
+    """Omitting the site never guesses -- it asks, and authorization/confirmation never run."""
+    tts = _FakeTtsPort()
+    confirmation = _FakePhysicalConfirmationPort(approve=True)
+    browser = _FakeBrave()
+    chain_path = tmp_path / "audit_chain.json"
+
+    await run_voice_loop(
+        chain_path=chain_path,
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("search jobs python developer"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        browser=browser,
+    )
+
+    assert len(tts.spoken) == 1
+    assert "which site" in tts.spoken[0].lower()
+    assert "python developer" in tts.spoken[0]
+    assert confirmation.prompts == []  # never even asked
+    assert browser.opened == []
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == 0  # nothing was authorized, so nothing was audited
+
+
+async def test_the_confirmation_prompt_names_the_job_search_site_and_keywords(
+    tmp_path: Path,
+) -> None:
+    """The prompt shown for physical confirmation names the real site and keywords."""
+    confirmation = _FakePhysicalConfirmationPort(approve=False)
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("search jobs python developer on indeed"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+        browser=_FakeBrave(),
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "indeed" in prompt_text
+    assert "python developer" in prompt_text

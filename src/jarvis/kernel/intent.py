@@ -125,6 +125,29 @@ for calendar, whenever attendees are present) that denies whenever
 ``physical_confirmation_available`` is ``False``, regardless of the
 voice loop's own confirmation prompt answer -- proven by a real test
 in ``tests/unit/test_voice_loop.py``.
+
+"plan" mirrors "code"'s identical single-word "keyword + rest of
+text" shape -- everything after the keyword becomes the goal, resolved
+to ``kernel.capabilities.PLANNING_RUN_PLAN_CAPABILITY_ID`` (ADR-0062).
+Voice never bypasses that capability's own per-step authorization in
+any way: ``kernel/voice_loop.py`` calls
+``authorize_and_run_plan`` completely unmodified, the exact same
+outer-gate/per-step guarantee every other real caller gets.
+
+"search jobs" (this module's third two-word command keyword, after
+"send email"/"create event") resolves "search jobs <keywords> on
+linkedin"/"on indeed" to
+``kernel.capabilities.JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID`` -- see
+:func:`_resolve_search_jobs` for the exact grammar and its own real,
+named limitations. **A real, deliberate design point, not shared with
+any prior two-word command**: omitting the site clause does not fall
+through to ``UnrecognizedIntent`` -- it produces
+:class:`AmbiguousJobSearchSite`, a distinct result type letting
+``kernel.voice_loop`` speak a specific clarifying question ("which
+site?") instead of either guessing a default site (which
+``job_search.open_results``'s own design explicitly rejects, per
+``docs/architecture/job-search-scoping-notes.md``) or the generic "I
+didn't understand that."
 """
 
 from __future__ import annotations
@@ -140,10 +163,13 @@ from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
+    JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
+    PLANNING_RUN_PLAN_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
 )
+from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, MUSIC_COMMAND_NAMES
 
 if TYPE_CHECKING:
@@ -173,7 +199,35 @@ class UnrecognizedIntent:
     """A transcript matched no known command. Never a guess -- see module docstring."""
 
 
+@dataclass(frozen=True)
+class AmbiguousJobSearchSite:
+    """The "search jobs <keywords>" command matched, but no linkedin/indeed site was given.
+
+    Real, deliberate decision, not a gap: mirrors
+    ``kernel.job_search``'s own "never guess a site" design (see that
+    module's docstring for the ToS-driven reasoning behind
+    ``job_search.open_results`` existing at all). Returning this
+    instead of silently defaulting to one site, or instead of
+    ``UnrecognizedIntent``, lets the caller (``kernel.voice_loop``)
+    speak a real, specific clarifying question rather than either
+    guessing or the generic "I didn't understand that." A real,
+    honest limitation, stated plainly: this is a single-turn voice
+    loop with no conversation memory (see module docstring's own
+    "Known, real limitation" note for a different, related gap) --
+    "asking" here means speaking a prompt and waiting for the *next*
+    wake-word-triggered utterance to repeat the whole command with a
+    site included, not a true multi-turn slot-filling exchange.
+    """
+
+    keywords: str
+
+
 _UNRECOGNIZED = UnrecognizedIntent()
+
+_JOB_SEARCH_SITE_BY_NAME: dict[str, JobSearchSite] = {
+    "linkedin": JobSearchSite.LINKEDIN,
+    "indeed": JobSearchSite.INDEED,
+}
 
 
 def _resolve_read(rest: str) -> ResolvedIntent | UnrecognizedIntent:
@@ -213,6 +267,26 @@ def _resolve_code(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     return ResolvedIntent(
         capability_id=CODING_RUN_TASK_CAPABILITY_ID,
         arguments=Tainted({"task": rest}, Provenance.user()),
+    )
+
+
+def _resolve_plan(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve the "plan" command: everything after the keyword is the goal to plan for.
+
+    Mirrors "code"'s identical "keyword + rest of text" shape --
+    resolves to ``kernel.capabilities.PLANNING_RUN_PLAN_CAPABILITY_ID``,
+    another real, already-registered static capability (ADR-0062).
+    Every real plan step is separately, individually authorized inside
+    ``application/planning/executor.py``; a granted "plan" command here
+    only ever means "the planner may run at all," exactly as it does
+    for every other real caller -- see ``kernel/planning.py``'s own
+    module docstring for the full "no batch pre-approval" guarantee.
+    """
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=PLANNING_RUN_PLAN_CAPABILITY_ID,
+        arguments=Tainted({"goal": rest}, Provenance.user()),
     )
 
 
@@ -304,6 +378,47 @@ def _resolve_create_event(rest: str) -> ResolvedIntent | UnrecognizedIntent:
     )
 
 
+def _resolve_search_jobs(rest: str) -> ResolvedIntent | UnrecognizedIntent | AmbiguousJobSearchSite:
+    """Resolve "search jobs <keywords> [on linkedin|on indeed]".
+
+    Mirrors ``_resolve_send_email``/``_resolve_create_event``'s own
+    "fixed keyword grammar" shape, with one real difference: the site
+    clause is not optional the way "with <attendees>" is for create
+    event -- omitting it produces a real, different, ambiguous result
+    (:class:`AmbiguousJobSearchSite`), never a resolved intent with a
+    silently-guessed default site.
+
+    A real, named limitation: the last (rightmost) " on " in ``rest``
+    is treated as the site separator, so keywords that themselves
+    contain the substring " on " near the end (e.g. "jobs on call
+    rotations on linkedin") could misparse. Accepted, matching this
+    module's own established tolerance for this class of edge case
+    (see ``_resolve_create_event``'s own verbatim-time limitation).
+    Voice search never supplies a location -- unlike the CLI's own
+    ``--location`` flag, this grammar has no keyword for it; a real,
+    deliberate scope limit, not an oversight.
+    """
+    if not rest:
+        return _UNRECOGNIZED
+    lowered = rest.lower()
+    on_index = lowered.rfind(" on ")
+    if on_index == -1:
+        return AmbiguousJobSearchSite(keywords=rest.strip())
+
+    keywords_text = rest[:on_index].strip()
+    site_text = lowered[on_index + len(" on ") :].strip()
+    site = _JOB_SEARCH_SITE_BY_NAME.get(site_text)
+    if not keywords_text or site is None:
+        return _UNRECOGNIZED
+
+    return ResolvedIntent(
+        capability_id=JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+        arguments=Tainted(
+            {"site": site.value, "keywords": keywords_text, "location": None}, Provenance.user()
+        ),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -335,12 +450,14 @@ def _split_two_word_command(text: str, command: str) -> str | None:
     return None
 
 
-def _resolve_two_word_command(text: str) -> ResolvedIntent | UnrecognizedIntent | None:
-    """Try "send email"/"create event" -- the only two-word command keywords this module has.
+def _resolve_two_word_command(
+    text: str,
+) -> ResolvedIntent | UnrecognizedIntent | AmbiguousJobSearchSite | None:
+    """Try "send email"/"create event"/"search jobs" -- this module's two-word command keywords.
 
-    Returns ``None`` (not ``UnrecognizedIntent``) when neither
-    two-word prefix matches at all, so :func:`resolve_intent` falls
-    through to its existing single-word dispatch.
+    Returns ``None`` (not ``UnrecognizedIntent``) when no two-word
+    prefix matches at all, so :func:`resolve_intent` falls through to
+    its existing single-word dispatch.
     """
     rest = _split_two_word_command(text, "send email")
     if rest is not None:
@@ -348,21 +465,25 @@ def _resolve_two_word_command(text: str) -> ResolvedIntent | UnrecognizedIntent 
     rest = _split_two_word_command(text, "create event")
     if rest is not None:
         return _resolve_create_event(rest)
+    rest = _split_two_word_command(text, "search jobs")
+    if rest is not None:
+        return _resolve_search_jobs(rest)
     return None
 
 
 def resolve_intent(  # noqa: PLR0911 -- one return per command keyword, mirrors the module's flat dispatch shape
     transcript: Transcript,
-) -> ResolvedIntent | UnrecognizedIntent:
+) -> ResolvedIntent | UnrecognizedIntent | AmbiguousJobSearchSite:
     """Resolve ``transcript``'s text to a known command, or ``UnrecognizedIntent`` if none matches.
 
     Matching is case-insensitive (on the command word(s) only) and
-    whitespace-trimmed. "send email"/"create event" are matched as a
-    fixed two-word prefix first (see :func:`_resolve_two_word_command`);
-    every other command matches on its first word alone. For every
-    single-word command except "read"/"remember"/"recall"/"code", any
-    remaining text makes the match fail (a zero-argument command does
-    not silently ignore trailing words) rather than resolving anyway.
+    whitespace-trimmed. "send email"/"create event"/"search jobs" are
+    matched as a fixed two-word prefix first (see
+    :func:`_resolve_two_word_command`); every other command matches on
+    its first word alone. For every single-word command except
+    "read"/"remember"/"recall"/"code"/"plan", any remaining text makes
+    the match fail (a zero-argument command does not silently ignore
+    trailing words) rather than resolving anyway.
     """
     text = transcript.text.strip()
     if not text:
@@ -384,6 +505,8 @@ def resolve_intent(  # noqa: PLR0911 -- one return per command keyword, mirrors 
         return _resolve_recall(rest)
     if command == "code":
         return _resolve_code(rest)
+    if command == "plan":
+        return _resolve_plan(rest)
     if rest:
         return _UNRECOGNIZED
     return _resolve_zero_argument_command(command)

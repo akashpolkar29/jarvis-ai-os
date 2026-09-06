@@ -176,8 +176,10 @@ from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
+    JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
+    PLANNING_RUN_PLAN_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
 )
 from jarvis.kernel.coding import authorize_and_run_coding_task
@@ -186,10 +188,18 @@ from jarvis.kernel.communications import (
     authorize_and_send_email,
 )
 from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
-from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
+from jarvis.kernel.intent import (
+    AmbiguousJobSearchSite,
+    ResolvedIntent,
+    UnrecognizedIntent,
+    resolve_intent,
+)
+from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
+from jarvis.kernel.planning import authorize_and_run_plan
+from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
@@ -203,6 +213,7 @@ if TYPE_CHECKING:
     from jarvis.domain.capability import CapabilityId
     from jarvis.domain.policy import Decision
     from jarvis.kernel.music import MusicCommand
+    from jarvis.ports.brave import BravePort
     from jarvis.ports.calendar import CalendarPort
     from jarvis.ports.email import EmailPort
     from jarvis.ports.embedding import EmbeddingPort
@@ -283,6 +294,13 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:  # noqa: PLR0911 -- o
     if resolved.capability_id == CALENDAR_CREATE_EVENT_CAPABILITY_ID:
         summary_text = resolved.arguments.value.get("summary")
         return f"JARVIS wants to: create a calendar event -- '{summary_text}'. Approve?"
+    if resolved.capability_id == PLANNING_RUN_PLAN_CAPABILITY_ID:
+        goal_text = resolved.arguments.value.get("goal")
+        return f"JARVIS wants to: plan and run -- '{goal_text}'. Approve?"
+    if resolved.capability_id == JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID:
+        keywords_text = resolved.arguments.value.get("keywords")
+        site_text = resolved.arguments.value.get("site")
+        return f"JARVIS wants to: search {site_text} for '{keywords_text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -305,6 +323,7 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one para
     coding_dispatcher_factory: DispatcherFactory | None,
     email_port: EmailPort | None,
     calendar_port: CalendarPort | None,
+    browser: BravePort | None,
 ) -> str:
     """Dispatch the resolved capability to its (unchanged, M0) composition function.
 
@@ -335,6 +354,29 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one para
     shape, for resolved "send email"/"create event" commands
     respectively -- see the module docstring for the same "no safe
     default" reasoning.
+
+    ``browser`` is a pass-through to ``authorize_and_open_job_search``'s
+    own existing, optional parameter, for a resolved "search jobs"
+    command -- **a genuinely different reason than
+    ``coding_target_repo``/``email_port``'s own "no safe default"
+    class**, stated plainly rather than smoothed into the same
+    framing: ``job_search.open_results`` already has a real, safe
+    default (``BraveCliAdapter()``, the same real, ordinary,
+    already-live-verified mechanism ``desktop.brave_open_url`` uses),
+    so there is no "not configured" message for this command. This
+    parameter exists purely so tests can override it, the identical
+    reason ``media_player``/``embedding_port`` exist above -- a granted
+    "search jobs" command with no override would otherwise launch a
+    real, visible Brave window during an automated test run. "plan"
+    needed no equivalent new parameter at all:
+    ``authorize_and_run_plan``'s own real, local-only default provider
+    is already the accepted, documented behavior this codebase uses
+    everywhere a "plan"/"code"/"draft" command's cloud provider is not
+    explicitly configured (see ``kernel/planning.py``'s own module
+    docstring) -- tests that need to avoid the real local Ollama
+    server instead monkeypatch ``authorize_and_run_plan`` directly, the
+    same technique ``tests/unit/test_cli_main.py``'s own ``plan run``
+    tests already use.
 
     Returns the text to speak back: a file's content on a granted
     read, otherwise a short granted/denied description.
@@ -441,6 +483,31 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one para
         )
         return _describe(event_outcome.decision)
 
+    if resolved.capability_id == PLANNING_RUN_PLAN_CAPABILITY_ID:
+        goal_text = str(resolved.arguments.value["goal"])
+        plan_decision, _plan_result = await authorize_and_run_plan(
+            goal_text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+        )
+        return _describe(plan_decision)
+
+    if resolved.capability_id == JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID:
+        site = JobSearchSite(str(resolved.arguments.value["site"]))
+        keywords_text = str(resolved.arguments.value["keywords"])
+        location = resolved.arguments.value.get("location")
+        job_search_decision = authorize_and_open_job_search(
+            site,
+            keywords_text,
+            cast("str | None", location),
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            browser=browser,
+        )
+        return _describe(job_search_decision)
+
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(
         music_command,
@@ -471,6 +538,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
     coding_dispatcher_factory: DispatcherFactory | None,
     email_port: EmailPort | None,
     calendar_port: CalendarPort | None,
+    browser: BravePort | None,
 ) -> None:
     """Transcribe, resolve, confirm, and authorize+execute one VAD-confirmed speech segment."""
     transcript = await stt.transcribe(segment)
@@ -485,6 +553,16 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
 
     resolved = resolve_intent(transcript.value)
     _logger.debug("resolve_intent result: %r", resolved)
+    if isinstance(resolved, AmbiguousJobSearchSite):
+        # A real, deliberate "ask, don't guess" branch (see
+        # AmbiguousJobSearchSite's own docstring) -- never reaches
+        # authorization at all, exactly like UnrecognizedIntent below.
+        await _speak(
+            tts,
+            play_fn,
+            f"Which site -- say 'search jobs {resolved.keywords} on linkedin' or 'on indeed'.",
+        )
+        return
     if isinstance(resolved, UnrecognizedIntent):
         await _speak(tts, play_fn, "I didn't understand that.")
         return
@@ -508,6 +586,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
             coding_dispatcher_factory=coding_dispatcher_factory,
             email_port=email_port,
             calendar_port=calendar_port,
+            browser=browser,
         )
     except (
         JarvisError,
@@ -519,6 +598,7 @@ async def _handle_utterance(  # noqa: PLR0913 -- one per injectable port plus ch
         MemoryIntegrityViolationError,
         SecretNotFoundError,
         CalendarEventCreationError,
+        BrowserLaunchFailedError,
         OSError,
         UnicodeDecodeError,
         KeyError,
@@ -559,6 +639,7 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
     coding_dispatcher_factory: DispatcherFactory | None = None,
     email_port: EmailPort | None = None,
     calendar_port: CalendarPort | None = None,
+    browser: BravePort | None = None,
 ) -> None:
     """Run the voice pipeline until ``wake_word``'s stream ends (never, for the real adapter).
 
@@ -628,6 +709,15 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
             required ``calendar_port`` parameter, for a resolved
             "create event" command. No default, for the same reason as
             ``email_port``.
+        browser: Pass-through to ``authorize_and_open_job_search``'s
+            own existing, optional parameter, for a resolved "search
+            jobs" command. Defaults to that function's own default (a
+            real ``BraveCliAdapter``) -- unlike ``email_port``/
+            ``calendar_port``, this always has a safe default; override
+            in tests to avoid launching a real, visible browser
+            window. See ``_authorize_and_execute``'s own docstring for
+            the full "genuinely different from the no-safe-default
+            class" reasoning.
     """
     wake_word = wake_word or OpenWakeWordAdapter()
     vad = vad or SileroVadAdapter()
@@ -657,4 +747,5 @@ async def run_voice_loop(  # noqa: PLR0913 -- one per injectable port plus chain
                 coding_dispatcher_factory=coding_dispatcher_factory,
                 email_port=email_port,
                 calendar_port=calendar_port,
+                browser=browser,
             )

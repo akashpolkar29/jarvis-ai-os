@@ -13,16 +13,21 @@ what's live-verified, and what real gaps remain open.
 
 What works today: a capability-based policy engine enforcing a
 four-tier authorization ladder (`ALLOW`/`CONFIRM`/`MANUAL_ONLY`/`DENY`),
-a hash-chained and persisted audit log, a capability registry with 38
-real, statically-registered capabilities (plus several dynamic-effect
-ones whose tier depends on argument content), and a working `jarvis`
-CLI covering voice interaction, multi-provider reasoning, desktop
-control (Brave, VS Code, the Claude/ChatGPT desktop apps, Docker, Git),
-memory/retrieval with backup/restore/wipe, browser automation, a
-sandboxed coding agent, email/calendar (IMAP/SMTP/CalDAV, both reading
-and sending), multi-step task planning with per-step authorization
-(`jarvis plan run`, ADR-0062 — no batch pre-approval, ever), and
-job-application research/drafting (research and drafting only — no
+a hash-chained (and, since 2026-09-07, timestamped) and persisted
+audit log, a capability registry with 40 real, statically-registered
+capabilities (plus several dynamic-effect ones whose tier depends on
+argument content), and a working `jarvis` CLI covering voice
+interaction (see `docs/protocol/README.md`'s own `listen` voice-grammar
+table for exactly which spoken commands are recognized), multi-provider
+reasoning, desktop control (Brave, VS Code, the Claude/ChatGPT desktop
+apps, Docker, Git), memory/retrieval with backup/restore/wipe, browser
+automation, a sandboxed coding agent, email/calendar (IMAP/SMTP/CalDAV,
+both reading and sending), assisted job search (`jarvis job-search` —
+opens a real search-results page in the user's own browser; never
+reads or scrapes listing content, per LinkedIn's/Indeed's own ToS),
+multi-step task planning with per-step authorization (`jarvis plan
+run`, ADR-0062 — no batch pre-approval, ever), and job-application
+research/drafting (research and drafting only — no
 auto-apply, a structural boundary, not a policy-tier gate). See
 `docs/protocol/README.md` for the real, current CLI surface,
 `docs/plugin-guide/`, and `docs/threat-model/v0.md` for exactly what's

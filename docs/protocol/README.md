@@ -104,6 +104,41 @@ always needs both hosts.
 question through a real GTK4 confirmation dialog instead of modeling a
 fixed, upfront confirmation state.
 
+### `listen`'s real, current voice grammar
+
+**Added 2026-09-07 — this section previously did not exist.** Every
+recognized command below is fixed keyword/phrase matching only (no
+NLU), resolved by `kernel/intent.py::resolve_intent()`; anything else
+is spoken back as "I didn't understand that" and never reaches
+authorization. Every resolved command still confirms via a real,
+per-utterance physical-confirmation prompt (see above) and authorizes
+through the exact same capability/tier path any other entry point
+uses — voice never bypasses a capability's own floor.
+
+| Spoken phrase | Resolves to |
+| --- | --- |
+| `ping` | `ping` |
+| `play` / `pause` / `next` / `previous` | the matching `music.*` command |
+| `read <path>` | `fs.read_file` |
+| `remember <text>` | `memory.write` |
+| `recall <query>` | `memory.retrieve` (speaks back up to 3 results) |
+| `code <task>` | `coding.run_task` (needs `coding_target_repo`/`coding_dispatcher_factory` pre-configured, or speaks an honest "not configured") |
+| `send email to <recipients> subject <subject> body <body>` | `communications.send_email` (needs `email_port` pre-configured) |
+| `create event <summary> from <start> to <end> [with <attendees>]` | `communications.create_calendar_event` (needs `calendar_port` pre-configured) |
+| `plan <goal>` | `planning.run_plan` — every real plan step is still separately, individually authorized (ADR-0062); a granted "plan" only ever means the planner may run at all |
+| `search jobs <keywords> on linkedin`/`on indeed` | `job_search.open_results` |
+
+**Two real, named limitations, not oversights**: `create event`'s
+`<start>`/`<end>` are matched verbatim, not parsed from natural spoken
+language ("tomorrow at 3") — a caller must speak an exact ISO-8601
+string. `search jobs` omitting the site clause never guesses a
+default site — it speaks a clarifying question and waits for the next
+wake-word-triggered utterance to repeat the whole command with a site
+included (no true multi-turn slot-filling; see `kernel/intent.py`'s
+own `AmbiguousJobSearchSite` docstring). `search jobs` also has no
+spoken way to supply a location, unlike the CLI's own `--location`
+flag.
+
 Every other subcommand shares three flags:
 
 | Flag | Default | Meaning |
