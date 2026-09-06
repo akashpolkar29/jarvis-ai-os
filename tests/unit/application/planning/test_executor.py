@@ -25,7 +25,11 @@ from jarvis.domain.capability import (
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.registry import CapabilityRegistry
-from jarvis.kernel.capabilities import READ_FILE_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.capabilities import (
+    MEMORY_WIPE_CAPABILITY_ID,
+    READ_FILE_CAPABILITY_ID,
+    build_default_registry,
+)
 from jarvis.kernel.capability_dispatch import PLAN_STEP_EXECUTORS
 
 _TWO_STEPS = 2
@@ -171,3 +175,79 @@ def test_execute_plan_works_with_the_real_kernel_dispatch_registry() -> None:
 
     assert result.aborted is False
     assert len(result.step_records) == 1
+
+
+def test_a_real_manual_only_capability_not_wired_is_rejected_before_authorization() -> None:
+    """Adversarial verification (ADR-0062): memory.wipe (real, MANUAL_ONLY) has no executor wired.
+
+    Confirms the FIRST of the executor's own two real, independent
+    guards: `memory.wipe` is not in `PLAN_STEP_EXECUTORS` at all today,
+    so a plan step naming it is rejected via the "no registered
+    executor" check, before `get_descriptor`/`authorize_by_id` is ever
+    reached -- not because of its tier specifically, but because it is
+    simply not a wired capability. Nothing is authorized, nothing is
+    executed, no memory-wipe side effect of any kind occurs.
+    """
+    steps = (PlanStep(MEMORY_WIPE_CAPABILITY_ID, {}),)
+
+    with pytest.raises(PlanValidationError):
+        execute_plan(
+            steps,
+            _orchestrator(),
+            PLAN_STEP_EXECUTORS,
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=mock.Mock(),
+        )
+
+
+def test_a_real_manual_only_capability_if_hypothetically_wired_still_fails_the_tier_check() -> None:
+    """Adversarial verification (ADR-0062): the tier check is a real, second, independent guard.
+
+    Simulates the exact scenario ADR-0062's own text flags as a real
+    risk: a future, careless addition of a non-ALLOW capability to a
+    plan-step-executors mapping. `memory.wipe`'s own REAL descriptor
+    (read from the real, live `build_default_registry()`, not a fake
+    one) is `Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`, always
+    `Tier.MANUAL_ONLY` -- confirms the tier check independently catches
+    this even when a capability *is* present in the executors mapping,
+    and that the hypothetical executor itself is never called (no
+    silent mis-authorization, no crash, no real side effect).
+    """
+    hypothetically_wired_executor = mock.Mock()
+    steps = (PlanStep(MEMORY_WIPE_CAPABILITY_ID, {}),)
+
+    with pytest.raises(PlanValidationError):
+        execute_plan(
+            steps,
+            _orchestrator(),
+            {MEMORY_WIPE_CAPABILITY_ID: hypothetically_wired_executor},
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=mock.Mock(),
+        )
+    hypothetically_wired_executor.assert_not_called()
+
+
+def test_a_dynamic_effect_capability_not_in_the_static_registry_is_rejected_cleanly() -> None:
+    """Adversarial verification: a plan step naming a real, dynamic-effect, unregistered capability.
+
+    `communications.send_email` is deliberately never in
+    `build_default_registry()` (its real Effect varies per invocation
+    -- see `kernel/capabilities.py`'s own comment). Confirms this is
+    still a clean `PlanValidationError`, caught by the "no registered
+    executor" check before `get_descriptor` would otherwise raise
+    `CapabilityNotRegistered` uncaught -- not a crash, not an
+    unhandled exception escaping `execute_plan`.
+    """
+    steps = (PlanStep(CapabilityId("communications.send_email"), {}),)
+
+    with pytest.raises(PlanValidationError):
+        execute_plan(
+            steps,
+            _orchestrator(),
+            PLAN_STEP_EXECUTORS,
+            physical_confirmation_available=True,
+            remote_confirmation_available=True,
+            chain_path=mock.Mock(),
+        )
