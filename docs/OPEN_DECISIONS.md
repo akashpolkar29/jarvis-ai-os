@@ -139,6 +139,16 @@ wired into the dispatch registry; a further, real restriction to
 docstring for why. Retry/replan and plan-preview (real, open
 sub-questions in the design doc) remain genuinely unbuilt.
 
+**Updated 2026-09-06**: `planning.run_plan` is now real, CLI-reachable
+via `jarvis plan run "<goal>"` -- no change to the outer gate or any
+plan step's own separate authorization, only a new argument-parsing
+and dispatch entry point. `communications.list_email`/
+`communications.read_email` (real, already-implemented, `Tier.ALLOW`
+capabilities that had never had a CLI entry point -- a real, named gap
+from the adapter-failure-resilience pass) are likewise now
+CLI-reachable, via `jarvis email list`/`jarvis email read
+<message-id>`. See `docs/protocol/README.md`'s subcommand table.
+
 ## 6b. ~~LSP-based code intelligence (minimal, non-LSP half)~~ -- IMPLEMENTED 2026-09-05
 
 **Resolved/built**: real, direct instruction to implement

@@ -27,8 +27,10 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-05 — this table previously listed only the original
-5 M0 subcommands; it now covers all 33 real, current ones.** Each
+**Updated 2026-09-06 — this table previously listed 33 real subcommands;
+it now covers all 36, adding `plan run`/`email list`/`email read`, three
+already-real, already-tested capabilities that had never had a CLI
+entry point until this pass.** Each
 capability's own real effect/tier classification is documented at its
 own registration site in `kernel/capabilities.py`, not repeated here —
 this table exists to answer "what does this subcommand actually call,"
@@ -68,6 +70,9 @@ not to duplicate the policy engine's own reasoning.
 | `git-commit <repo-dir> <message>` | `git.commit` | `repo-dir`, `message` |
 | `git-push <repo-dir> <remote> <branch>` | `git.push` | `repo-dir`, `remote`, `branch` |
 | `git-force-push <repo-dir> <remote> <branch>` | `git.force_push` | `repo-dir`, `remote`, `branch` |
+| `plan run <goal>` | `planning.run_plan` (ADR-0062 — outer gate only; every proposed step is separately, individually authorized, never in bulk) | `goal` |
+| `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
+| `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
 
@@ -81,10 +86,14 @@ later siblings `list-dir`/`move-file`/`delete-file` do. Both are
 historical accretion, not a deliberate design choice, and neither has
 been renamed — a rename would be a real, user-facing breaking change.
 
-`send-email`/`create-calendar-event` have no default adapter
-configuration (real per-deployment IMAP/SMTP/CalDAV settings, not this
-project's decision) — the four/three flags above are required, with
-no default, every invocation.
+`send-email`/`create-calendar-event`/`email list`/`email read` have no
+default adapter configuration (real per-deployment IMAP/SMTP/CalDAV
+settings, not this project's decision) — the connection flags above
+are required, with no default, every invocation. `email list`/`email
+read` require `--smtp-host` too even though it's functionally unused
+for these two read-only commands — one `ImapEmailAdapter` class
+implements the full `EmailPort` read+write surface, so its constructor
+always needs both hosts.
 
 `listen` does not take `--physical-confirmation-available`/
 `--remote-confirmation-available` — it asks a real, per-utterance

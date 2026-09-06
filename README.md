@@ -19,7 +19,9 @@ ones whose tier depends on argument content), and a working `jarvis`
 CLI covering voice interaction, multi-provider reasoning, desktop
 control (Brave, VS Code, the Claude/ChatGPT desktop apps, Docker, Git),
 memory/retrieval with backup/restore/wipe, browser automation, a
-sandboxed coding agent, email/calendar (IMAP/SMTP/CalDAV), and
+sandboxed coding agent, email/calendar (IMAP/SMTP/CalDAV, both reading
+and sending), multi-step task planning with per-step authorization
+(`jarvis plan run`, ADR-0062 — no batch pre-approval, ever), and
 job-application research/drafting (research and drafting only — no
 auto-apply, a structural boundary, not a policy-tier gate). See
 `docs/protocol/README.md` for the real, current CLI surface,
