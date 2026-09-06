@@ -78,6 +78,7 @@ def test_audit_record_rejects_mismatched_hash() -> None:
             decision=decision,
             previous_hash=GENESIS_PREVIOUS_HASH,
             record_hash="0" * 64,
+            written_at="2026-09-07T00:00:00+00:00",
         )
 
 
@@ -99,7 +100,7 @@ def test_audit_chain_supports_reload_from_a_list_of_existing_records() -> None:
     record_count = 3
     source_chain = AuditChain()
     for index in range(record_count):
-        source_chain.append(_decision({"index": index}))
+        source_chain.append(_decision({"index": index}), written_at="2026-09-07T00:00:00+00:00")
 
     reloaded_chain = AuditChain(list(source_chain))
     result = reloaded_chain.verify()
@@ -123,15 +124,15 @@ def test_append_raises_on_non_canonicalizable_argument_value() -> None:
     decision = _decision({"bad": Opaque()})
     chain = AuditChain()
     with pytest.raises(AuditRecordNotSerializable):
-        chain.append(decision)
+        chain.append(decision, written_at="2026-09-07T00:00:00+00:00")
 
 
 def test_audit_chain_getitem_and_len() -> None:
     """AuditChain supports len() and indexing without exposing the internal list."""
     expected_length = 2
     chain = AuditChain()
-    first = chain.append(_decision({"n": 1}))
-    second = chain.append(_decision({"n": 2}))
+    first = chain.append(_decision({"n": 1}), written_at="2026-09-07T00:00:00+00:00")
+    second = chain.append(_decision({"n": 2}), written_at="2026-09-07T00:00:00+00:00")
     assert len(chain) == expected_length
     assert chain[0] == first
     assert chain[1] == second
@@ -140,7 +141,7 @@ def test_audit_chain_getitem_and_len() -> None:
 def test_audit_record_is_frozen() -> None:
     """AuditRecord instances cannot be mutated through normal attribute assignment."""
     chain = AuditChain()
-    record = chain.append(_decision())
+    record = chain.append(_decision(), written_at="2026-09-07T00:00:00+00:00")
     with pytest.raises(dataclasses.FrozenInstanceError):
         record.sequence = 99  # type: ignore[misc]
 
@@ -174,8 +175,12 @@ def test_record_hash_is_sensitive_to_the_argument_value() -> None:
     """
     chain_a = AuditChain()
     chain_b = AuditChain()
-    record_a = chain_a.append(_decision({"path": "/home/user/a.txt"}))
-    record_b = chain_b.append(_decision({"path": "/home/user/b.txt"}))
+    record_a = chain_a.append(
+        _decision({"path": "/home/user/a.txt"}), written_at="2026-09-07T00:00:00+00:00"
+    )
+    record_b = chain_b.append(
+        _decision({"path": "/home/user/b.txt"}), written_at="2026-09-07T00:00:00+00:00"
+    )
     assert record_a.record_hash != record_b.record_hash
 
 
@@ -206,7 +211,7 @@ def test_reloaded_digest_placeholder_is_not_rehashed() -> None:
     value_digest = digest_value(real_value)
 
     fresh_decision = _decision(real_value)
-    fresh_record = AuditChain().append(fresh_decision)
+    fresh_record = AuditChain().append(fresh_decision, written_at="2026-09-07T00:00:00+00:00")
 
     placeholder_decision = _decision({ARGUMENT_DIGEST_KEY: value_digest})
     reconstructed_record = AuditRecord(
@@ -214,6 +219,7 @@ def test_reloaded_digest_placeholder_is_not_rehashed() -> None:
         decision=placeholder_decision,
         previous_hash=GENESIS_PREVIOUS_HASH,
         record_hash=fresh_record.record_hash,
+        written_at="2026-09-07T00:00:00+00:00",
     )
 
     assert reconstructed_record.record_hash == fresh_record.record_hash

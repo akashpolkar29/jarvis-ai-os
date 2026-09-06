@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.brave import BraveCliAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.docker import DockerCliAdapter
 from jarvis.adapters.git import GitCliAdapter
@@ -160,7 +161,9 @@ def authorize_and_open_brave_url(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID,
@@ -216,7 +219,9 @@ def authorize_and_open_vscode_file(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID,
@@ -316,7 +321,9 @@ def authorize_and_send_text_to_chat_app(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         CHAT_APP_CAPABILITY_IDS[app],
@@ -456,7 +463,9 @@ async def authorize_and_run_terminal_command(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         TERMINAL_RUN_CAPABILITY_ID,
@@ -543,7 +552,9 @@ def authorize_and_list_docker_containers(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DOCKER_LIST_CONTAINERS_CAPABILITY_ID,
@@ -602,7 +613,9 @@ def authorize_and_run_docker_container(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DOCKER_RUN_CONTAINER_CAPABILITY_ID,
@@ -660,7 +673,9 @@ def authorize_and_stop_docker_container(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DOCKER_STOP_CONTAINER_CAPABILITY_ID,
@@ -720,7 +735,9 @@ def authorize_and_build_docker_image(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DOCKER_BUILD_IMAGE_CAPABILITY_ID,
@@ -790,7 +807,9 @@ def authorize_and_get_git_status(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         GIT_STATUS_CAPABILITY_ID,
@@ -848,7 +867,9 @@ def authorize_and_create_git_branch(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         GIT_CREATE_BRANCH_CAPABILITY_ID,
@@ -905,7 +926,9 @@ def authorize_and_commit_git(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         GIT_COMMIT_CAPABILITY_ID,
@@ -966,7 +989,9 @@ def authorize_and_push_git(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         GIT_PUSH_CAPABILITY_ID,
@@ -1030,7 +1055,9 @@ def authorize_and_force_push_git(  # noqa: PLR0913
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         GIT_FORCE_PUSH_CAPABILITY_ID,

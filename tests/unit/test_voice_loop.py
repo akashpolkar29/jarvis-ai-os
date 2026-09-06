@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.validation.pytest_validator import PytestValidator
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.application.reasoning.arbiter import Arbiter
@@ -651,7 +652,9 @@ async def test_a_recognized_code_command_is_granted_and_invokes_the_coding_agent
     provider = _CountingProvider()
     target_repo = _target_repo_with_pytest_convention(tmp_path)
 
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     await run_voice_loop(
         chain_path=chain_path,
@@ -681,7 +684,9 @@ async def test_a_denied_code_command_never_invokes_the_coding_agent(tmp_path: Pa
     provider = _CountingProvider()
     target_repo = _target_repo_with_pytest_convention(tmp_path)
 
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     await run_voice_loop(
         chain_path=tmp_path / "audit_chain.json",
@@ -727,7 +732,9 @@ async def test_the_confirmation_prompt_names_the_coding_task(tmp_path: Path) -> 
     provider = _CountingProvider()
     target_repo = _target_repo_with_pytest_convention(tmp_path)
 
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     await run_voice_loop(
         chain_path=tmp_path / "audit_chain.json",

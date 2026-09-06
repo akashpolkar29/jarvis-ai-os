@@ -60,18 +60,20 @@ def test_append_serializes_concurrent_callers_so_sequences_never_collide() -> No
     release_first_call = threading.Event()
     call_count = 0
 
-    def _blocking_compute(sequence: int, decision: Decision, previous_hash: str) -> str:
+    def _blocking_compute(
+        sequence: int, decision: Decision, previous_hash: str, written_at: str
+    ) -> str:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             first_call_entered.set()
             release_first_call.wait(timeout=5)
-        return _ORIGINAL_COMPUTE(sequence, decision, previous_hash)
+        return _ORIGINAL_COMPUTE(sequence, decision, previous_hash, written_at)
 
     results: list[object] = []
 
     def _worker() -> None:
-        results.append(chain.append(_decision()))
+        results.append(chain.append(_decision(), written_at="2026-09-07T00:00:00+00:00"))
 
     with patch.object(audit_module, "_compute_record_hash", side_effect=_blocking_compute):
         first_thread = threading.Thread(target=_worker)
@@ -120,7 +122,7 @@ def test_many_real_concurrent_appends_never_produce_a_duplicate_sequence() -> No
     thread_count = 32
 
     def _worker() -> None:
-        chain.append(_decision())
+        chain.append(_decision(), written_at="2026-09-07T00:00:00+00:00")
 
     threads = [threading.Thread(target=_worker) for _ in range(thread_count)]
     for thread in threads:

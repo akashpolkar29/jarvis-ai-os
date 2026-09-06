@@ -35,6 +35,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.communications.writer import CalendarEventAuthorizer, EmailSendAuthorizer
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
@@ -52,11 +53,15 @@ _NON_SECRET = [Classification.PUBLIC, Classification.PERSONAL, Classification.SE
 
 
 def _email_authorizer() -> EmailSendAuthorizer:
-    return EmailSendAuthorizer(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return EmailSendAuthorizer(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _calendar_authorizer() -> CalendarEventAuthorizer:
-    return CalendarEventAuthorizer(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return CalendarEventAuthorizer(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _body(classification: Classification) -> Tainted[str]:

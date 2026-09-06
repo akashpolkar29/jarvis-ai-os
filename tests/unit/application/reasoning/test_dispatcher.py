@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.arbiter import Arbiter
 from jarvis.application.reasoning.dispatcher import Dispatcher
@@ -78,7 +79,9 @@ def _dispatcher(
     self_repair: tuple[tuple[ProviderProfile, _FakeReasoningProvider], ...] = (),
     second_provider: tuple[tuple[ProviderProfile, _FakeReasoningProvider], ...] = (),
 ) -> Dispatcher:
-    router = ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    router = ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
     providers = {
         EscalationRung.SELF_REPAIR: self_repair,
         EscalationRung.SECOND_PROVIDER: second_provider,

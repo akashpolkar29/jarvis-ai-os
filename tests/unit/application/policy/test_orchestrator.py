@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
@@ -22,6 +24,27 @@ from jarvis.domain.registry import CapabilityRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+
+class _FakeClock:
+    """A ClockPort test double reporting one fixed, real, timezone-aware instant.
+
+    Mirrors ``tests/unit/application/memory/test_retention.py``'s own
+    ``_FakeClock`` precedent exactly -- this file doesn't assert on
+    ``written_at``'s exact value anywhere (that's
+    ``test_audit.py``/``test_orchestrator.py``'s own dedicated
+    written_at tests' job), it only needs a real ``ClockPort`` to
+    satisfy the orchestrator's now-required constructor argument.
+    """
+
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
+
+
+_CLOCK = _FakeClock(datetime(2026, 9, 7, tzinfo=UTC))
 
 
 def _descriptor(effects: Effect, capability_id: str = "test.capability") -> CapabilityDescriptor:
@@ -80,7 +103,7 @@ class _MutableConfirmationSource:
 def test_granted_decision_is_returned_and_appended() -> None:
     """An ALLOW-tier decision is both returned and present in the chain."""
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
     invocation = _invocation(Effect.READ_LOCAL)
 
     decision = orchestrator.authorize(invocation, _NO_CONFIRMATION)
@@ -93,7 +116,7 @@ def test_granted_decision_is_returned_and_appended() -> None:
 def test_denied_decision_is_still_returned_and_appended() -> None:
     """A MANUAL_ONLY decision denied for lack of physical confirmation is still audited."""
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
     invocation = _invocation(Effect.DESTRUCTIVE)
 
     decision = orchestrator.authorize(invocation, _NO_CONFIRMATION)
@@ -106,7 +129,7 @@ def test_denied_decision_is_still_returned_and_appended() -> None:
 def test_sequential_calls_produce_a_verifiable_chain() -> None:
     """Multiple authorize() calls on one orchestrator produce a chain that verifies."""
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
 
     orchestrator.authorize(_invocation(Effect.READ_LOCAL), _NO_CONFIRMATION)
     orchestrator.authorize(_invocation(Effect.DESTRUCTIVE), _NO_CONFIRMATION)
@@ -131,7 +154,7 @@ def test_unauditable_decision_raises_and_is_not_appended() -> None:
         """A deliberately opaque, non-canonicalizable value."""
 
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
     invocation = _invocation(Effect.READ_LOCAL, {"bad": Opaque()})
 
     with pytest.raises(AuditRecordNotSerializable):
@@ -143,8 +166,8 @@ def test_unauditable_decision_raises_and_is_not_appended() -> None:
 def test_chain_is_injected_not_constructed_internally() -> None:
     """Two orchestrators sharing one injected chain both append to that same chain."""
     chain = AuditChain()
-    first_orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
-    second_orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    first_orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
+    second_orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
 
     first_orchestrator.authorize(_invocation(Effect.READ_LOCAL), _NO_CONFIRMATION)
     second_orchestrator.authorize(_invocation(Effect.EXECUTE), _NO_CONFIRMATION)
@@ -159,7 +182,7 @@ def test_authorize_by_id_granted_matches_authorize() -> None:
     registry = CapabilityRegistry()
     descriptor = _descriptor(Effect.READ_LOCAL)
     registry.register(descriptor)
-    orchestrator = AuthorizationOrchestrator(chain, registry)
+    orchestrator = AuthorizationOrchestrator(chain, registry, clock=_CLOCK)
     arguments: Tainted[Mapping[str, object]] = Tainted({}, Provenance.user())
 
     decision = orchestrator.authorize_by_id(descriptor.id, arguments, _NO_CONFIRMATION)
@@ -175,7 +198,7 @@ def test_authorize_by_id_denied_matches_authorize() -> None:
     registry = CapabilityRegistry()
     descriptor = _descriptor(Effect.DESTRUCTIVE)
     registry.register(descriptor)
-    orchestrator = AuthorizationOrchestrator(chain, registry)
+    orchestrator = AuthorizationOrchestrator(chain, registry, clock=_CLOCK)
     arguments: Tainted[Mapping[str, object]] = Tainted({}, Provenance.user())
 
     decision = orchestrator.authorize_by_id(descriptor.id, arguments, _NO_CONFIRMATION)
@@ -193,7 +216,7 @@ def test_authorize_by_id_unregistered_id_raises_and_appends_nothing() -> None:
     partial happens either way.
     """
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
     arguments: Tainted[Mapping[str, object]] = Tainted({}, Provenance.user())
 
     with pytest.raises(CapabilityNotRegistered):
@@ -208,14 +231,16 @@ def test_authorize_by_id_and_authorize_produce_identical_results() -> None:
     arguments: Tainted[Mapping[str, object]] = Tainted({}, Provenance.user())
 
     direct_chain = AuditChain()
-    direct_orchestrator = AuthorizationOrchestrator(direct_chain, CapabilityRegistry())
+    direct_orchestrator = AuthorizationOrchestrator(
+        direct_chain, CapabilityRegistry(), clock=_CLOCK
+    )
     direct_invocation = CapabilityInvocation(descriptor, arguments)
     direct_decision = direct_orchestrator.authorize(direct_invocation, _NO_CONFIRMATION)
 
     by_id_chain = AuditChain()
     by_id_registry = CapabilityRegistry()
     by_id_registry.register(descriptor)
-    by_id_orchestrator = AuthorizationOrchestrator(by_id_chain, by_id_registry)
+    by_id_orchestrator = AuthorizationOrchestrator(by_id_chain, by_id_registry, clock=_CLOCK)
     by_id_decision = by_id_orchestrator.authorize_by_id(descriptor.id, arguments, _NO_CONFIRMATION)
 
     assert direct_decision == by_id_decision
@@ -226,14 +251,14 @@ def test_get_descriptor_returns_the_registered_descriptor() -> None:
     registry = CapabilityRegistry()
     descriptor = _descriptor(Effect.READ_LOCAL)
     registry.register(descriptor)
-    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry, clock=_CLOCK)
 
     assert orchestrator.get_descriptor(descriptor.id) is descriptor
 
 
 def test_get_descriptor_raises_for_unregistered_capability() -> None:
     """get_descriptor() raises CapabilityNotRegistered for an id that was never registered."""
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=_CLOCK)
 
     with pytest.raises(CapabilityNotRegistered):
         orchestrator.get_descriptor(CapabilityId("fs.read_file"))
@@ -245,7 +270,7 @@ def test_get_descriptor_does_not_touch_the_chain() -> None:
     registry = CapabilityRegistry()
     descriptor = _descriptor(Effect.READ_LOCAL)
     registry.register(descriptor)
-    orchestrator = AuthorizationOrchestrator(chain, registry)
+    orchestrator = AuthorizationOrchestrator(chain, registry, clock=_CLOCK)
 
     orchestrator.get_descriptor(descriptor.id)
 
@@ -257,14 +282,14 @@ def test_is_registered_true_for_registered_capability() -> None:
     registry = CapabilityRegistry()
     descriptor = _descriptor(Effect.READ_LOCAL)
     registry.register(descriptor)
-    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry, clock=_CLOCK)
 
     assert orchestrator.is_registered(descriptor.id) is True
 
 
 def test_is_registered_false_for_unregistered_capability() -> None:
     """is_registered() is False for an id that was never registered."""
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=_CLOCK)
 
     assert orchestrator.is_registered(CapabilityId("fs.read_file")) is False
 
@@ -272,7 +297,7 @@ def test_is_registered_false_for_unregistered_capability() -> None:
 def test_is_registered_does_not_touch_the_chain() -> None:
     """is_registered() is a pure read: it is not a decision and is never audited."""
     chain = AuditChain()
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=_CLOCK)
 
     orchestrator.is_registered(CapabilityId("fs.read_file"))
 
@@ -281,7 +306,7 @@ def test_is_registered_does_not_touch_the_chain() -> None:
 
 def test_list_capabilities_empty_registry_returns_empty_tuple() -> None:
     """list_capabilities() on an empty registry returns an empty tuple."""
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=_CLOCK)
 
     assert orchestrator.list_capabilities() == ()
 
@@ -293,7 +318,7 @@ def test_list_capabilities_returns_every_registered_descriptor() -> None:
     second = _descriptor(Effect.DESTRUCTIVE, "fs.delete_file")
     registry.register(first)
     registry.register(second)
-    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry, clock=_CLOCK)
 
     capabilities = orchestrator.list_capabilities()
 
@@ -306,7 +331,7 @@ def test_list_capabilities_does_not_touch_the_chain() -> None:
     chain = AuditChain()
     registry = CapabilityRegistry()
     registry.register(_descriptor(Effect.READ_LOCAL))
-    orchestrator = AuthorizationOrchestrator(chain, registry)
+    orchestrator = AuthorizationOrchestrator(chain, registry, clock=_CLOCK)
 
     orchestrator.list_capabilities()
 
@@ -320,7 +345,7 @@ def test_get_current_context_returns_the_port_supplied_context() -> None:
         remote_confirmation_available=False,
     )
     orchestrator = AuthorizationOrchestrator(
-        AuditChain(), CapabilityRegistry(), confirmation=confirmation
+        AuditChain(), CapabilityRegistry(), confirmation=confirmation, clock=_CLOCK
     )
 
     context = orchestrator.get_current_context()
@@ -330,7 +355,7 @@ def test_get_current_context_returns_the_port_supplied_context() -> None:
 
 def test_get_current_context_raises_without_a_confirmation_port_configured() -> None:
     """get_current_context() raises when no ConfirmationPort was provided at construction."""
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=_CLOCK)
 
     with pytest.raises(RuntimeError, match="no ConfirmationPort configured"):
         orchestrator.get_current_context()
@@ -343,7 +368,9 @@ def test_get_current_context_does_not_touch_the_chain() -> None:
         physical_confirmation_available=True,
         remote_confirmation_available=True,
     )
-    orchestrator = AuthorizationOrchestrator(chain, CapabilityRegistry(), confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, CapabilityRegistry(), confirmation=confirmation, clock=_CLOCK
+    )
 
     orchestrator.get_current_context()
 
@@ -361,7 +388,7 @@ def test_get_current_context_is_fetched_fresh_not_cached() -> None:
     """
     source = _MutableConfirmationSource(_NO_CONFIRMATION)
     orchestrator = AuthorizationOrchestrator(
-        AuditChain(), CapabilityRegistry(), confirmation=source
+        AuditChain(), CapabilityRegistry(), confirmation=source, clock=_CLOCK
     )
 
     first = orchestrator.get_current_context()
@@ -387,16 +414,51 @@ def test_authorize_with_fetched_context_matches_authorize_with_explicit_context(
 
     fetched_chain = AuditChain()
     fetched_orchestrator = AuthorizationOrchestrator(
-        fetched_chain, CapabilityRegistry(), confirmation=confirmation
+        fetched_chain, CapabilityRegistry(), confirmation=confirmation, clock=_CLOCK
     )
     fetched_decision = fetched_orchestrator.authorize(
         invocation, fetched_orchestrator.get_current_context()
     )
 
     explicit_chain = AuditChain()
-    explicit_orchestrator = AuthorizationOrchestrator(explicit_chain, CapabilityRegistry())
+    explicit_orchestrator = AuthorizationOrchestrator(
+        explicit_chain, CapabilityRegistry(), clock=_CLOCK
+    )
     explicit_decision = explicit_orchestrator.authorize(invocation, _NO_CONFIRMATION)
 
     assert fetched_decision == explicit_decision
     assert len(fetched_chain) == 1
     assert len(explicit_chain) == 1
+
+
+def test_authorize_appends_written_at_from_the_injected_clock() -> None:
+    """The appended record's written_at is exactly clock.now().isoformat(), computed nowhere else."""  # noqa: E501
+    fixed_instant = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    chain = AuditChain()
+    orchestrator = AuthorizationOrchestrator(
+        chain, CapabilityRegistry(), clock=_FakeClock(fixed_instant)
+    )
+
+    orchestrator.authorize(_invocation(Effect.READ_LOCAL), _NO_CONFIRMATION)
+
+    assert chain[0].written_at == fixed_instant.isoformat()
+
+
+def test_sequential_real_calls_produce_monotonically_sane_written_at() -> None:
+    """Two sequential real calls never produce a later-then-earlier written_at pair.
+
+    Uses the real SystemClockAdapter (not _CLOCK/_FakeClock) -- this is
+    the one test in this file proving real, live wall-clock behavior,
+    not just that a supplied value is threaded through correctly.
+    """
+    chain = AuditChain()
+    orchestrator = AuthorizationOrchestrator(
+        chain, CapabilityRegistry(), clock=SystemClockAdapter()
+    )
+
+    orchestrator.authorize(_invocation(Effect.READ_LOCAL), _NO_CONFIRMATION)
+    orchestrator.authorize(_invocation(Effect.EXECUTE), _NO_CONFIRMATION)
+
+    first_written_at = datetime.fromisoformat(chain[0].written_at)
+    second_written_at = datetime.fromisoformat(chain[1].written_at)
+    assert second_written_at >= first_written_at

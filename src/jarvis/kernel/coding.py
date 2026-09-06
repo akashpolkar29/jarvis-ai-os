@@ -84,6 +84,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.reasoning.local import PROFILE as LOCAL_PROVIDER_PROFILE
 from jarvis.adapters.reasoning.local import LocalReasoningAdapter
@@ -206,7 +207,9 @@ async def authorize_and_run_coding_task(  # noqa: PLR0913 -- one per composition
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         CODING_RUN_TASK_CAPABILITY_ID,

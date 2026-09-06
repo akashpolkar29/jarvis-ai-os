@@ -52,6 +52,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.reasoning.local import LocalReasoningAdapter
 from jarvis.application.planning.executor import execute_plan
@@ -132,7 +133,9 @@ async def authorize_and_run_plan(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         PLANNING_RUN_PLAN_CAPABILITY_ID,

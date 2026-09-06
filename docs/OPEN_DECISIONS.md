@@ -86,30 +86,39 @@ project. `memory` keeps its nested subcommand group
 bare `read`. See `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`'s
 own "Real decision recorded" section. No code changed.
 
-## 5. The audit chain's real, open structural gaps -- one of four closed 2026-09-05
+## 5. The audit chain's real, open structural gaps -- two of four closed
 
 **Resolved in part**: the user chose option 1 (7 real decisions
 prompt, Decision 6) -- restrictive `0o600` file permissions, now
 applied unconditionally on every real `save()`. Raises the bar against
-casual/other-local-user tampering. **Does not close the other three**,
-stated plainly, not rounded up:
+casual/other-local-user tampering. **Updated 2026-09-07**: the
+timestamp gap is now closed too -- `AuditRecord` gained a real,
+additive `written_at` field (ISO-8601, sourced from a real
+`ClockPort`, included in the hash so tampering with it alone is
+caught exactly like any other field). **Does not close the remaining
+two**, stated plainly, not rounded up:
 
 - **Non-atomic writes**: `save()`'s `Path.write_text()` is still not
   atomic -- a process killed mid-write leaves a truncated, invalid
   JSON file. Investigated directly in `docs/threat-model/v0.md`'s own
   "Phase 10 -- 5 smaller tasks" section (10-phase combined pass), still
   open, unrelated to file permissions.
-- **No timestamp field**: `AuditRecord` records `sequence`/`decision`/
-  `previous_hash`/`record_hash` only -- no wall-clock time at all.
-  Named directly in `kernel/audit.py`'s own module docstring, still
-  open, unrelated to file permissions.
+- ~~No timestamp field~~ -- **CLOSED 2026-09-07**: `AuditRecord.written_at`
+  is real, additive, hash-included. A real, deliberate breaking
+  change to the on-disk format, stated plainly, not silently papered
+  over: a pre-2026-09-07 chain file has no `written_at` key at all, so
+  loading one raises a plain `KeyError` -- there is no migration path,
+  by construction, mirroring ADR-0027's own already-accepted precedent
+  for this exact file format. See `jarvis.domain.audit`'s own module
+  docstring and `docs/architecture/audit-log-integrity-scoping-notes.md`'s
+  own updated note for the full account.
 - **Cross-process race**: two independent processes racing to save the
   same `--chain-path` file still causes the second `save()` to
   silently overwrite the first's new record entirely -- still open,
   unrelated to file permissions.
 
 **What's still needed**: a real architecture decision on the remaining
-three gaps in `JsonFileAuditStorageAdapter`'s own persistence format.
+two gaps in `JsonFileAuditStorageAdapter`'s own persistence format.
 Full investigation, four real candidate fixes for the
 whole-file-replacement/no-tamper-evidence gap specifically, and the
 real record of Decision 6's own scope, in

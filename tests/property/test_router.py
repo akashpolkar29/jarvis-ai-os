@@ -23,6 +23,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.router import ModelRouter
 from jarvis.domain.audit import AuditChain
@@ -42,7 +43,9 @@ CLOUD_PROFILES = st.builds(
 
 
 def _router() -> ModelRouter:
-    return ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _task(classification: Classification) -> Tainted[str]:

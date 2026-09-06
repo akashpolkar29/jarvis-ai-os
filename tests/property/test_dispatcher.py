@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.arbiter import Arbiter
 from jarvis.application.reasoning.dispatcher import Dispatcher
@@ -51,7 +52,9 @@ class _FakeValidator:
 
 
 def _dispatcher(verdict: Verdict) -> Dispatcher:
-    router = ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    router = ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
     providers = {
         EscalationRung.SELF_REPAIR: ((_LOCAL_PROFILE, _FakeReasoningProvider()),),
         EscalationRung.SECOND_PROVIDER: ((_FAMILY_A_PROFILE, _FakeReasoningProvider()),),

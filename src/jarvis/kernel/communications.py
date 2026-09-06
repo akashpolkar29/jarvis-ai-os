@@ -77,6 +77,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.communications.writer import CalendarEventAuthorizer, EmailSendAuthorizer
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -136,7 +137,9 @@ async def authorize_and_list_email(  # noqa: PLR0913 -- one per composition-func
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         EMAIL_LIST_MESSAGES_CAPABILITY_ID,
@@ -188,7 +191,9 @@ async def authorize_and_read_email(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         EMAIL_READ_MESSAGE_CAPABILITY_ID,
@@ -233,7 +238,9 @@ async def authorize_and_list_calendar_events(  # noqa: PLR0913 -- one per compos
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         CALENDAR_LIST_EVENTS_CAPABILITY_ID,
@@ -310,7 +317,9 @@ async def authorize_and_send_email(  # noqa: PLR0913 -- one per composition-func
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
     authorizer = EmailSendAuthorizer(orchestrator)
 
     body_value = Tainted(body, Provenance.user())
@@ -389,7 +398,9 @@ async def authorize_and_create_calendar_event(  # noqa: PLR0913 -- one per compo
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
     authorizer = CalendarEventAuthorizer(orchestrator)
 
     summary_value = Tainted(summary, Provenance.user())

@@ -56,13 +56,17 @@ def _build_varied_chain() -> AuditChain:
         _descriptor(Effect.READ_LOCAL, "fs.read_file"),
         Tainted({"path": "/tmp/example"}, Provenance.user()),
     )
-    chain.append(evaluate(allow_invocation, _NO_CONFIRMATION))
+    chain.append(
+        evaluate(allow_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
+    )
 
     manual_only_invocation = CapabilityInvocation(
         _descriptor(Effect.DESTRUCTIVE, "fs.delete_file"),
         Tainted({}, Provenance.user()),
     )
-    chain.append(evaluate(manual_only_invocation, _NO_CONFIRMATION))
+    chain.append(
+        evaluate(manual_only_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
+    )
 
     tainted_invocation = CapabilityInvocation(
         _descriptor(Effect.WRITE_LOCAL, "notes.append"),
@@ -71,7 +75,9 @@ def _build_varied_chain() -> AuditChain:
             Provenance.external("untrusted-webpage.example", Classification.PERSONAL),
         ),
     )
-    chain.append(evaluate(tainted_invocation, _NO_CONFIRMATION))
+    chain.append(
+        evaluate(tainted_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
+    )
 
     return chain
 
@@ -107,6 +113,7 @@ def test_round_trip_preserves_content_and_verifies(tmp_path: Path) -> None:
     for loaded_record, original_record in zip(loaded, original, strict=True):
         assert loaded_record.sequence == original_record.sequence
         assert loaded_record.previous_hash == original_record.previous_hash
+        assert loaded_record.written_at == original_record.written_at
         assert loaded_record.record_hash == original_record.record_hash
 
         loaded_decision = loaded_record.decision
@@ -140,7 +147,7 @@ def test_saved_file_never_contains_the_raw_argument_value(tmp_path: Path) -> Non
         Tainted({"path": sensitive_marker}, Provenance.user()),
     )
     chain = AuditChain()
-    chain.append(evaluate(invocation, _NO_CONFIRMATION))
+    chain.append(evaluate(invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00")
 
     JsonFileAuditStorageAdapter(chain_path).save(chain)
 
@@ -166,6 +173,32 @@ def test_loading_a_pre_digest_only_format_file_raises_key_error(tmp_path: Path) 
         arguments = record["decision"]["invocation"]["arguments"]
         arguments["value"] = {}
         del arguments["value_digest"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(KeyError):
+        adapter.load()
+
+
+def test_loading_a_pre_written_at_format_file_raises_key_error(tmp_path: Path) -> None:
+    """A chain file written before the written_at field existed (2026-09-07) fails loudly.
+
+    The real, honest compatibility-break finding, asserted by a test,
+    not just described in prose: adding written_at to the hashed tuple
+    means every record_hash computed before this change is invalid
+    under the new formula. There is no migration path, by construction
+    -- see domain/audit.py's own module docstring for the full
+    reasoning, and test_loading_a_pre_digest_only_format_file_raises_key_error
+    above for the identical, already-accepted precedent this mirrors
+    exactly (ADR-0027's own Tainted-digest change made the same real
+    tradeoff for this same file format, once before).
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    adapter.save(_build_varied_chain())
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for record in raw:
+        del record["written_at"]
     path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(KeyError):
@@ -228,6 +261,29 @@ def test_editing_a_real_past_decision_field_directly_on_disk_is_caught_on_load(
 
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw[1]["decision"]["granted"] = True  # forge a denial into a grant, record_hash untouched
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(AuditRecordTampered):
+        adapter.load()
+
+
+def test_editing_the_written_at_field_directly_on_disk_is_caught_on_load(tmp_path: Path) -> None:
+    """Tampering with written_at alone (record_hash untouched) is caught exactly like any other field.
+
+    written_at (2026-09-07) is included in the hashed tuple (see
+    domain/audit.py's own module docstring), so backdating or
+    forward-dating a record without also recomputing a matching hash
+    is exactly the same class of forgery
+    test_editing_a_real_past_decision_field_directly_on_disk_is_caught_on_load
+    above already proves for a Decision field -- this is the same
+    real mechanism, a new field.
+    """  # noqa: E501
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    adapter.save(_build_varied_chain())
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw[0]["written_at"] = "1970-01-01T00:00:00+00:00"  # forged, record_hash untouched
     path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(AuditRecordTampered):
@@ -352,14 +408,16 @@ def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_write
         _descriptor(Effect.READ_LOCAL, "ping"),
         Tainted({}, Provenance.user()),
     )
-    first_new_record = first_writer_chain.append(evaluate(first_new_invocation, _NO_CONFIRMATION))
+    first_new_record = first_writer_chain.append(
+        evaluate(first_new_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
+    )
 
     second_new_invocation = CapabilityInvocation(
         _descriptor(Effect.READ_LOCAL, "git.status"),
         Tainted({}, Provenance.user()),
     )
     second_new_record = second_writer_chain.append(
-        evaluate(second_new_invocation, _NO_CONFIRMATION)
+        evaluate(second_new_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
     )
 
     JsonFileAuditStorageAdapter(path).save(first_writer_chain)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.memory.carry_forward import authorize_reasoning_call_with_recalled_context
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.router import ModelRouter
@@ -32,7 +33,9 @@ _FULL_CONFIRMATION = PolicyContext(
 
 
 def _router() -> ModelRouter:
-    return ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _record(classification: Classification) -> MemoryRecord:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.router import ModelRouter
 from jarvis.application.reasoning.unverifiable import (
@@ -60,7 +61,9 @@ class _FakePresentation:
 
 
 def _router() -> ModelRouter:
-    return ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _task() -> Tainted[str]:

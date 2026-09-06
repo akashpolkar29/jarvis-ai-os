@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.sandbox import BwrapSandboxAdapter
 from jarvis.adapters.validation.pytest_validator import PytestValidator
 from jarvis.adapters.workspace import LocalWorkspaceAdapter
@@ -88,7 +89,11 @@ async def test_dispatcher_run_against_a_disposable_workspace_leaves_the_real_rep
     )
     try:
         validator = PytestValidator(disposable.workspace)
-        router = ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+        router = ModelRouter(
+            AuthorizationOrchestrator(
+                AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+            )
+        )
         dispatcher = Dispatcher(
             EscalationLadder(),
             Arbiter(),

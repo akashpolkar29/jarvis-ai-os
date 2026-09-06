@@ -27,6 +27,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
 from jarvis.domain.capability import CapabilityId, Tier
@@ -94,7 +95,9 @@ _EXPECTED_TIER_BY_CAPABILITY: dict[str, Tier] = {
 
 
 def _orchestrator() -> AuthorizationOrchestrator:
-    return AuthorizationOrchestrator(AuditChain(), build_default_registry())
+    return AuthorizationOrchestrator(
+        AuditChain(), build_default_registry(), clock=SystemClockAdapter()
+    )
 
 
 def test_expected_tier_table_covers_every_registered_capability_exactly() -> None:

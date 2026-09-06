@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.sandbox import BwrapSandboxAdapter
 from jarvis.adapters.validation.pytest_validator import PytestValidator
 from jarvis.adapters.workspace import LocalWorkspaceAdapter
@@ -146,7 +147,11 @@ class _FlakyThenPassingProvider:
 
 def _dispatcher_factory_for(provider: ReasoningPort) -> DispatcherFactory:
     def _build(workspace: WorkspacePort) -> Dispatcher:
-        router = ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+        router = ModelRouter(
+            AuthorizationOrchestrator(
+                AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+            )
+        )
         validator = PytestValidator(workspace)
         providers = {EscalationRung.SELF_REPAIR: ((_LOCAL_PROFILE, provider),)}
         return Dispatcher(EscalationLadder(), Arbiter(), router, validator, providers)
@@ -155,7 +160,9 @@ def _dispatcher_factory_for(provider: ReasoningPort) -> DispatcherFactory:
 
 
 def _dependencies_for(provider: ReasoningPort) -> CodingLoopDependencies:
-    authorizer = CodeWriteAuthorizer(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    authorizer = CodeWriteAuthorizer(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
     return CodingLoopDependencies(
         sandbox=BwrapSandboxAdapter(),
         workspace_factory=LocalWorkspaceAdapter,

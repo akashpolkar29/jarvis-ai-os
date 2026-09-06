@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.reasoning.cassette import CassettePlayer
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.arbiter import Arbiter
@@ -63,7 +64,9 @@ class _FirstAttemptFailsThenPasses:
 def _build_dispatcher() -> Dispatcher:
     self_repair_player = CassettePlayer.load(_CASSETTES_DIR / "example_self_repair.json")
     second_provider_player = CassettePlayer.load(_CASSETTES_DIR / "example_second_provider.json")
-    router = ModelRouter(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    router = ModelRouter(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
     providers = {
         EscalationRung.SELF_REPAIR: ((_LOCAL_PROFILE, self_repair_player),),
         EscalationRung.SECOND_PROVIDER: ((_FAMILY_A_PROFILE, second_provider_player),),

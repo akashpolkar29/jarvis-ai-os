@@ -8,6 +8,7 @@ point (ADR-0039) rather than a stand-in.
 
 from __future__ import annotations
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.application.reasoning.router import ModelRouter
 from jarvis.domain.audit import AuditChain
@@ -32,7 +33,9 @@ _CLOUD_PROFILE = ProviderProfile(name="family_a", is_local=False)
 
 
 def _router() -> ModelRouter:
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
     return ModelRouter(orchestrator)
 
 
@@ -95,7 +98,9 @@ def test_a_cloud_provider_with_secret_data_is_denied_even_with_full_confirmation
 def test_every_call_produces_a_real_audit_record() -> None:
     """ADR-0039: every attempted reasoning-provider call gets a real, hash-chained audit entry."""
     chain = AuditChain()
-    router = ModelRouter(AuthorizationOrchestrator(chain, CapabilityRegistry()))
+    router = ModelRouter(
+        AuthorizationOrchestrator(chain, CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
     router.authorize_provider_call(_CLOUD_PROFILE, _task(Classification.SECRET), _NO_CONFIRMATION)
 

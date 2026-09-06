@@ -94,6 +94,7 @@ from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.console import GtkConsoleAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -166,7 +167,9 @@ async def authorize_and_open_page(  # noqa: PLR0913 -- one per composition-funct
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         BROWSER_OPEN_PAGE_CAPABILITY_ID,
@@ -218,7 +221,9 @@ async def authorize_and_capture_screenshot(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         BROWSER_SCREENSHOT_CAPABILITY_ID,
@@ -282,7 +287,9 @@ async def authorize_and_query_dom(  # noqa: PLR0913 -- one per composition-funct
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
@@ -347,7 +354,9 @@ async def authorize_and_close_page(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         BROWSER_CLOSE_PAGE_CAPABILITY_ID,

@@ -27,6 +27,7 @@ import importlib.util
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
 from jarvis.domain.policy import PolicyContext
@@ -120,7 +121,7 @@ def test_the_example_capability_authorizes_correctly_end_to_end() -> None:
     """The real orchestrator grants example.word_count regardless of confirmation (Tier.ALLOW)."""
     registry = CapabilityRegistry()
     registry.register(build_example_word_count_descriptor())
-    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry, clock=SystemClockAdapter())
 
     for physical in (True, False):
         for remote in (True, False):

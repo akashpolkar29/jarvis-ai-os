@@ -18,6 +18,7 @@ from pathlib import Path
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.coding.writer import CodeWriteAuthorizer
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
@@ -36,7 +37,9 @@ FILE_STEMS = st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=10)
 
 
 def _authorizer() -> CodeWriteAuthorizer:
-    return CodeWriteAuthorizer(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return CodeWriteAuthorizer(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 @given(CONTEXTS, FILE_STEMS)

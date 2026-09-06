@@ -21,6 +21,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.memory.writer import MemoryWriteAuthorizer
 from jarvis.application.policy.orchestrator import AuthorizationOrchestrator
 from jarvis.domain.audit import AuditChain
@@ -36,7 +37,9 @@ CONTEXTS = st.builds(
 
 
 def _authorizer() -> MemoryWriteAuthorizer:
-    return MemoryWriteAuthorizer(AuthorizationOrchestrator(AuditChain(), CapabilityRegistry()))
+    return MemoryWriteAuthorizer(
+        AuthorizationOrchestrator(AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter())
+    )
 
 
 def _value(classification: Classification) -> Tainted[str]:

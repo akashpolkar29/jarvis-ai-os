@@ -3,10 +3,25 @@
 Every :class:`~jarvis.domain.policy.Decision` is recorded as an
 :class:`AuditRecord` and appended to an :class:`AuditChain`. Each
 record's hash covers its own sequence number, its previous record's
-hash, and a canonical serialization of the Decision itself -- so any
-single change to any record's content, or any change to the chain's
-order, breaks the hash linkage and is detectable by
-:meth:`AuditChain.verify`.
+hash, a real wall-clock timestamp (``written_at``, added 2026-09-07 --
+see :class:`AuditRecord`'s own docstring), and a canonical
+serialization of the Decision itself -- so any single change to any
+record's content, or any change to the chain's order, breaks the hash
+linkage and is detectable by :meth:`AuditChain.verify`.
+
+**A real, deliberate breaking change to the on-disk format, stated
+plainly, mirroring this module's own already-established ADR-0027
+precedent below**: adding ``written_at`` to the hashed tuple means
+every ``record_hash`` computed before this change is invalid under the
+new formula. There is no migration path, by construction: a
+pre-2026-09-07 audit chain file was never persisted with a
+``written_at`` field, so there is nothing to recompute a valid new
+hash from even in principle -- loading one raises a decode error (see
+``adapters/audit_storage.py``'s own ``_decode_record``), not a silent
+wrong answer. This is the same real, accepted tradeoff the Tainted-
+digest change below already made once for this exact chain format;
+see ``docs/architecture/audit-log-integrity-scoping-notes.md`` for the
+recorded decision.
 
 Canonical serialization scheme (see :func:`_canonicalize`): a
 Decision's object graph (Decision -> CapabilityInvocation ->
@@ -212,9 +227,11 @@ def digest_value(value: object) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _compute_record_hash(sequence: int, decision: Decision, previous_hash: str) -> str:
-    """Compute the sha256 hexdigest covering ``(sequence, decision, previous_hash)``."""
-    canonical = _canonicalize((sequence, decision, previous_hash))
+def _compute_record_hash(
+    sequence: int, decision: Decision, previous_hash: str, written_at: str
+) -> str:
+    """Compute the sha256 hexdigest covering ``(sequence, decision, previous_hash, written_at)``."""
+    canonical = _canonicalize((sequence, decision, previous_hash, written_at))
     serialized = json.dumps(canonical, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
@@ -228,6 +245,19 @@ class AuditRecord:
         decision: The Decision being recorded.
         previous_hash: The preceding record's ``record_hash``, or
             :data:`GENESIS_PREVIOUS_HASH` if this is sequence 0.
+        written_at: A real, ISO-8601 wall-clock timestamp, from a real
+            :class:`~jarvis.ports.clock.ClockPort` (never computed
+            here -- domain is pure, stdlib-only, no wall-clock access;
+            the caller that owns a real ``ClockPort`` supplies this
+            string to :meth:`AuditChain.append`). Included in the hash
+            (see :meth:`compute_hash`) so tampering with this field
+            alone is caught exactly like tampering with any other.
+            Added real, additively (2026-09-07) -- closes one of the
+            four real, previously-named audit-chain gaps
+            (`docs/architecture/audit-log-integrity-scoping-notes.md`);
+            the other three (non-atomic writes, the cross-process race,
+            whole-file replacement) remain open, untouched by this
+            change.
         record_hash: This record's own hash -- see :meth:`compute_hash`.
 
     Raises:
@@ -240,6 +270,7 @@ class AuditRecord:
     sequence: int
     decision: Decision
     previous_hash: str
+    written_at: str
     record_hash: str
 
     def __post_init__(self) -> None:
@@ -249,8 +280,10 @@ class AuditRecord:
             raise AuditRecordTampered(msg)
 
     def compute_hash(self) -> str:
-        """Compute this record's hash from its own (sequence, decision, previous_hash)."""
-        return _compute_record_hash(self.sequence, self.decision, self.previous_hash)
+        """Compute this record's hash from its own (sequence, decision, previous_hash, written_at)."""  # noqa: E501
+        return _compute_record_hash(
+            self.sequence, self.decision, self.previous_hash, self.written_at
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -301,7 +334,7 @@ class AuditChain:
         self._records: list[AuditRecord] = list(records)
         self._lock = threading.Lock()
 
-    def append(self, decision: Decision) -> AuditRecord:
+    def append(self, decision: Decision, *, written_at: str) -> AuditRecord:
         """Append a new record for ``decision`` and return it.
 
         The only way a record enters the chain -- there is no way to
@@ -313,6 +346,13 @@ class AuditChain:
 
         Args:
             decision: The Decision to record.
+            written_at: A real, ISO-8601 wall-clock timestamp string.
+                Required, no default -- this module is pure and
+                stdlib-only (no wall-clock access), so the caller must
+                already hold a real value from a real
+                :class:`~jarvis.ports.clock.ClockPort` (see
+                :class:`AuditRecord`'s own docstring for why this
+                field exists at all).
 
         Returns:
             The newly-appended AuditRecord.
@@ -322,11 +362,12 @@ class AuditChain:
             previous_hash = (
                 self._records[-1].record_hash if self._records else GENESIS_PREVIOUS_HASH
             )
-            record_hash = _compute_record_hash(sequence, decision, previous_hash)
+            record_hash = _compute_record_hash(sequence, decision, previous_hash, written_at)
             record = AuditRecord(
                 sequence=sequence,
                 decision=decision,
                 previous_hash=previous_hash,
+                written_at=written_at,
                 record_hash=record_hash,
             )
             self._records.append(record)

@@ -185,7 +185,7 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
         remote_confirmation_available=remote_confirmation_available,
     )
     orchestrator = AuthorizationOrchestrator(
-        chain, build_default_registry(), confirmation=confirmation
+        chain, build_default_registry(), confirmation=confirmation, clock=resolved_clock
     )
     authorizer = MemoryWriteAuthorizer(orchestrator)
 
@@ -278,7 +278,9 @@ def authorize_and_recall(  # noqa: PLR0913 -- one per composition-function pass-
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_RETRIEVE_CAPABILITY_ID,
@@ -366,7 +368,9 @@ def authorize_and_pin(  # noqa: PLR0913 -- one per composition-function pass-thr
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_PIN_CAPABILITY_ID,
@@ -448,7 +452,9 @@ def authorize_and_forget(  # noqa: PLR0913 -- one per composition-function pass-
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_FORGET_CAPABILITY_ID,
@@ -518,7 +524,9 @@ def authorize_and_backup_memory(  # noqa: PLR0913 -- one per composition-functio
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_BACKUP_CAPABILITY_ID,
@@ -592,7 +600,9 @@ def authorize_and_restore_memory(  # noqa: PLR0913 -- one per composition-functi
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_RESTORE_CAPABILITY_ID,
@@ -675,7 +685,9 @@ def authorize_and_wipe_memory(  # noqa: PLR0913 -- one per composition-function 
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
 
     decision = orchestrator.authorize_by_id(
         MEMORY_WIPE_CAPABILITY_ID,

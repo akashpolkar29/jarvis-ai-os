@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.validation.pytest_validator import PytestValidator
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.application.reasoning.arbiter import Arbiter
@@ -92,7 +93,9 @@ async def test_granted_run_actually_invokes_the_coding_agent(tmp_path: Path) -> 
     target_repo.mkdir()
     chain_path = tmp_path / "audit_chain.json"
     provider = _CountingProvider()
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     decision, result = await authorize_and_run_coding_task(
         "fix the failing test",
@@ -115,7 +118,9 @@ async def test_denied_run_never_invokes_the_coding_agent_at_all(tmp_path: Path) 
     target_repo.mkdir()
     chain_path = tmp_path / "audit_chain.json"
     provider = _CountingProvider()
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     decision, result = await authorize_and_run_coding_task(
         "fix the failing test",
@@ -138,7 +143,9 @@ async def test_remote_confirmation_alone_is_sufficient_to_grant(tmp_path: Path) 
     target_repo = tmp_path / "target_repo"
     target_repo.mkdir()
     provider = _CountingProvider()
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     decision, result = await authorize_and_run_coding_task(
         "fix the failing test",
@@ -160,7 +167,9 @@ async def test_a_single_granted_run_appends_a_verifiable_audit_record(tmp_path: 
     target_repo.mkdir()
     chain_path = tmp_path / "audit_chain.json"
     provider = _CountingProvider()
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
 
     await authorize_and_run_coding_task(
         "fix the failing test",
@@ -181,7 +190,9 @@ async def test_a_single_granted_run_appends_a_verifiable_audit_record(tmp_path: 
 
 def test_local_only_dispatcher_factory_registers_the_real_local_provider_alone() -> None:
     """No live call is made here -- see this module's own docstring for why."""
-    orchestrator = AuthorizationOrchestrator(AuditChain(), CapabilityRegistry())
+    orchestrator = AuthorizationOrchestrator(
+        AuditChain(), CapabilityRegistry(), clock=SystemClockAdapter()
+    )
     factory = _local_only_dispatcher_factory(orchestrator)
 
     dispatcher = factory(_DummyWorkspace())

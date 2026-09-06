@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
@@ -101,7 +102,9 @@ def authorize_and_view_audit_history(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         AUDIT_HISTORY_CAPABILITY_ID,

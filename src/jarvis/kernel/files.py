@@ -85,6 +85,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.file_system import LocalFileSystemAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
@@ -216,7 +217,9 @@ def authorize_and_read_file(  # noqa: PLR0913 -- one more than music's 5, for al
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         READ_FILE_CAPABILITY_ID,
@@ -314,7 +317,9 @@ def authorize_and_list_dir(  # noqa: PLR0913 -- one more than music's 5, for all
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         LIST_DIR_CAPABILITY_ID,
@@ -398,7 +403,9 @@ def authorize_and_move_file(  # noqa: PLR0913 -- one per composition-function pa
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         MOVE_FILE_CAPABILITY_ID,
@@ -473,7 +480,9 @@ def authorize_and_delete_file(  # noqa: PLR0913 -- one more than music's 5, for 
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
-    orchestrator = AuthorizationOrchestrator(chain, registry, confirmation=confirmation)
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
 
     decision = orchestrator.authorize_by_id(
         DELETE_FILE_CAPABILITY_ID,

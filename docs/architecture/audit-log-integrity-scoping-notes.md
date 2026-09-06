@@ -153,8 +153,24 @@ and its own sibling finding already named:
   still replace the entire file wholesale, exactly as option 1's own
   original description above already stated -- this decision does not
   claim otherwise.
-- **No timestamp field** exists in `AuditRecord` -- unrelated to file
-  permissions, still open.
+- ~~No timestamp field~~ -- **CLOSED 2026-09-07**: `AuditRecord` gained
+  a real, additive `written_at` field (ISO-8601, sourced from a real
+  `ClockPort`, never `datetime.now()` directly), included in the
+  hashed tuple so tampering with it alone is caught by
+  `AuditRecord.__post_init__`/`AuditChain.verify()` exactly like any
+  other field -- proven by
+  `tests/unit/test_audit_storage_adapter.py::test_editing_the_written_at_field_directly_on_disk_is_caught_on_load`.
+  A real, deliberate breaking change to the on-disk format, stated
+  plainly, not silently papered over: a pre-2026-09-07 chain file has
+  no `written_at` key, so loading one raises a plain `KeyError` --
+  there is no migration path, by construction, mirroring this same
+  file format's own already-accepted ADR-0027 precedent (the
+  Tainted-digest change made the identical real tradeoff once
+  before). `AuthorizationOrchestrator` now requires a `ClockPort` at
+  construction (keyword-only, no default -- `application` cannot
+  construct a real adapter itself, per this project's own C1
+  layered-architecture contract); every real kernel composition
+  function supplies a real `SystemClockAdapter`.
 - **Non-atomic writes** (`Path.write_text`'s own whole-file rewrite,
   no temp-file-then-rename) -- unrelated to file permissions, still
   open; a process killed mid-write can still leave a truncated file.
@@ -162,8 +178,9 @@ and its own sibling finding already named:
   saving the same file simultaneously -- unrelated to file
   permissions, still open; this document's own sibling finding.
 
-These three remain real, open, accepted limitations of the current
-persistence format -- this decision closes exactly one of four real
-gaps, not all four, and is recorded here precisely so a future reader
-does not mistake "the user made a decision about audit-chain
-integrity" for "every audit-chain integrity gap is now closed."
+Two of the four real gaps remain open, accepted limitations of the
+current persistence format -- this decision plus the 2026-09-07
+timestamp addition together close two of four, not all four, and this
+is recorded here precisely so a future reader does not mistake
+"progress was made on audit-chain integrity" for "every audit-chain
+integrity gap is now closed."

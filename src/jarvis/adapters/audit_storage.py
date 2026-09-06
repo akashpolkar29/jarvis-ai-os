@@ -189,6 +189,7 @@ def _encode_record(record: AuditRecord) -> dict[str, Any]:
         "sequence": record.sequence,
         "decision": _encode_decision(record.decision),
         "previous_hash": record.previous_hash,
+        "written_at": record.written_at,
         "record_hash": record.record_hash,
     }
 
@@ -200,11 +201,22 @@ def _decode_record(data: dict[str, Any]) -> AuditRecord:
     record_hash that doesn't match its own content raises
     AuditRecordTampered here -- the same guarantee construction
     already provides everywhere else, not a check special to loading.
+
+    **A real, deliberate breaking-change consequence, stated plainly,
+    not silently handled**: ``written_at`` (2026-09-07) is read via
+    plain ``data["written_at"]``, the same required-key style as every
+    other field here -- a pre-2026-09-07 chain file has no such key at
+    all, so loading one raises a plain ``KeyError`` here, not a
+    special, softer error. No migration path is built (see
+    ``jarvis.domain.audit``'s own module docstring for why); this
+    matches the exact same real, accepted precedent this module's own
+    ADR-0027 Tainted-digest change already established for this file.
     """
     return AuditRecord(
         sequence=data["sequence"],
         decision=_decode_decision(data["decision"]),
         previous_hash=data["previous_hash"],
+        written_at=data["written_at"],
         record_hash=data["record_hash"],
     )
 

@@ -84,6 +84,7 @@ from typing import TYPE_CHECKING
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.candidate_presentation import TtsTextCandidatePresentationAdapter
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.adapters.console import GtkConsoleAdapter
 from jarvis.adapters.draft_storage import LocalDraftStorageAdapter
@@ -208,7 +209,7 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
         remote_confirmation_available=remote_confirmation_available,
     )
     orchestrator = AuthorizationOrchestrator(
-        chain, build_default_registry(), confirmation=confirmation
+        chain, build_default_registry(), confirmation=confirmation, clock=SystemClockAdapter()
     )
     authorizer = DraftWriteAuthorizer(orchestrator)
 

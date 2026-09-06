@@ -83,7 +83,7 @@ def test_append_produces_contiguous_sequence(decisions: list[Decision]) -> None:
     """Appending N decisions yields sequence numbers exactly 0..N-1, no gaps."""
     chain = AuditChain()
     for decision in decisions:
-        chain.append(decision)
+        chain.append(decision, written_at="2026-09-07T00:00:00+00:00")
     assert len(chain) == len(decisions)
     assert [record.sequence for record in chain] == list(range(len(decisions)))
 
@@ -93,7 +93,7 @@ def test_freshly_appended_chain_always_verifies(decisions: list[Decision]) -> No
     """A chain built purely via append() always passes verify()."""
     chain = AuditChain()
     for decision in decisions:
-        chain.append(decision)
+        chain.append(decision, written_at="2026-09-07T00:00:00+00:00")
     result = chain.verify()
     assert result.valid is True
     assert result.first_invalid_sequence is None
@@ -111,7 +111,7 @@ def test_tampering_a_single_field_is_always_detected(decisions: list[Decision], 
     """
     chain = AuditChain()
     for decision in decisions:
-        chain.append(decision)
+        chain.append(decision, written_at="2026-09-07T00:00:00+00:00")
 
     tamper_index = seed % len(chain)
     records = list(chain)
@@ -145,8 +145,14 @@ def test_hashing_is_deterministic_across_independent_chains(recipe: list[tuple[i
     chain_a = AuditChain()
     chain_b = AuditChain()
     for index, tainted in recipe:
-        chain_a.append(_decision_with_arg_order(index, tainted=tainted, reversed_order=False))
-        chain_b.append(_decision_with_arg_order(index, tainted=tainted, reversed_order=True))
+        chain_a.append(
+            _decision_with_arg_order(index, tainted=tainted, reversed_order=False),
+            written_at="2026-09-07T00:00:00+00:00",
+        )
+        chain_b.append(
+            _decision_with_arg_order(index, tainted=tainted, reversed_order=True),
+            written_at="2026-09-07T00:00:00+00:00",
+        )
     hashes_a = [record.record_hash for record in chain_a]
     hashes_b = [record.record_hash for record in chain_b]
     assert hashes_a == hashes_b
@@ -157,7 +163,7 @@ def test_deleting_a_middle_record_is_detected(decisions: list[Decision], seed: i
     """Removing a record from the chain (not just corrupting a field) is caught."""
     chain = AuditChain()
     for decision in decisions:
-        chain.append(decision)
+        chain.append(decision, written_at="2026-09-07T00:00:00+00:00")
 
     delete_index = seed % (len(chain) - 1)  # never delete the last record
     records = list(chain)

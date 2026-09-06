@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.application.planning.executor import (
     PlanStepOutcome,
     PlanStepRecord,
@@ -36,7 +37,9 @@ _TWO_STEPS = 2
 
 
 def _orchestrator() -> AuthorizationOrchestrator:
-    return AuthorizationOrchestrator(AuditChain(), build_default_registry())
+    return AuthorizationOrchestrator(
+        AuditChain(), build_default_registry(), clock=SystemClockAdapter()
+    )
 
 
 def _decision(granted: bool, capability_id: str = "test.cap") -> Decision:
@@ -77,7 +80,7 @@ def test_execute_plan_raises_when_a_step_tier_is_above_allow() -> None:
             id=READ_FILE_CAPABILITY_ID, effects=Effect.WRITE_LOCAL, description="fake, confirm-tier"
         )
     )
-    orchestrator = AuthorizationOrchestrator(AuditChain(), registry)
+    orchestrator = AuthorizationOrchestrator(AuditChain(), registry, clock=SystemClockAdapter())
     steps = (PlanStep(READ_FILE_CAPABILITY_ID, {"path": "/tmp/a.txt"}),)
     fake_executor = mock.Mock()
 

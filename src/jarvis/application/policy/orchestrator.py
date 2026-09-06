@@ -26,12 +26,18 @@ to an injected :class:`~jarvis.domain.audit.AuditChain` -- every
 decision, granted or denied, with no exceptions.
 
 Unlike ``evaluate()``, this class is deliberately stateful: it owns no
-data of its own beyond references to the chain and registry it was
-given, but that reference is exactly why this logic lives here and
-not in ``domain``. Both the chain and the registry are constructor-
+data of its own beyond references to the chain, registry, and clock it
+was given, but that reference is exactly why this logic lives here and
+not in ``domain``. The chain, registry, and clock are all constructor-
 injected, never constructed internally, so their lifetimes are the
 caller's to manage (share either across orchestrators, reload either
-from storage, etc).
+from storage, etc). ``clock`` (2026-09-07, closing one of the audit
+chain's own four previously-named real gaps -- see
+``jarvis.domain.audit.AuditRecord``'s own docstring) is required, not
+optional, since every real ``authorize()`` call now needs a real
+timestamp to append -- see :meth:`AuthorizationOrchestrator.__init__`'s
+own docstring for why this ``application`` module cannot default it
+itself.
 
 Ordering guarantee: the audit append happens strictly before
 ``authorize()`` returns, and any failure from the append (e.g.
@@ -84,6 +90,7 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision, PolicyContext
     from jarvis.domain.provenance import Tainted
     from jarvis.domain.registry import CapabilityRegistry
+    from jarvis.ports.clock import ClockPort
     from jarvis.ports.confirmation import ConfirmationPort
 
 
@@ -95,8 +102,10 @@ class AuthorizationOrchestrator:
         chain: AuditChain,
         registry: CapabilityRegistry,
         confirmation: ConfirmationPort | None = None,
+        *,
+        clock: ClockPort,
     ) -> None:
-        """Store the audit chain, capability registry, and (optional) confirmation port.
+        """Store the audit chain, capability registry, confirmation port, and clock.
 
         Args:
             chain: The chain to append decisions to. Owned by the
@@ -111,10 +120,26 @@ class AuthorizationOrchestrator:
                 default so every existing two-argument construction
                 keeps working unchanged; only :meth:`get_current_context`
                 requires it to be set.
+            clock: The real source of wall-clock time :meth:`authorize`
+                uses for each appended record's ``written_at`` field
+                (2026-09-07). Required, keyword-only, no default --
+                this ``application`` module cannot construct a real
+                default itself (a concrete ``ClockPort`` adapter lives
+                in ``jarvis.adapters``, a layer this one may not import
+                from, per this project's own C1 layered-architecture
+                contract); every real caller is in ``jarvis.kernel``,
+                which already may and does supply a real
+                ``SystemClockAdapter``. Mirrors ``chain``/``registry``'s
+                own already-required, constructor-injected-only
+                pattern, not ``confirmation``'s optional one -- there
+                is no real, valid ``authorize()`` call without a real
+                timestamp, unlike ``get_current_context()``, which
+                only some callers ever use.
         """
         self._chain = chain
         self._registry = registry
         self._confirmation = confirmation
+        self._clock = clock
 
     def authorize(self, invocation: CapabilityInvocation, context: PolicyContext) -> Decision:
         """Evaluate ``invocation`` under ``context`` and audit-log the outcome.
@@ -136,7 +161,7 @@ class AuthorizationOrchestrator:
                 or denied.
         """
         decision = evaluate(invocation, context)
-        self._chain.append(decision)
+        self._chain.append(decision, written_at=self._clock.now().isoformat())
         return decision
 
     def authorize_by_id(
