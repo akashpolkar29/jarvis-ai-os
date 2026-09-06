@@ -10,6 +10,7 @@ real plan step's own authorization/execution) runs for real.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest import mock
@@ -18,6 +19,7 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.application.planning.planner import PlanningError
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.kernel.files import authorize_and_read_file
 from jarvis.kernel.planning import authorize_and_run_plan
 
 if TYPE_CHECKING:
@@ -163,3 +165,119 @@ async def test_a_planning_failure_still_leaves_the_outer_decision_persisted(
     final_chain = JsonFileAuditStorageAdapter(chain_path).load()
     assert len(final_chain) == 1
     assert final_chain.verify().valid is True
+
+
+async def test_a_real_multi_step_plan_is_fully_reconstructable_from_the_audit_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adversarial verification of ADR-0062's own Consequences claim.
+
+    ADR-0062 claims: "every plan step still produces its own real,
+    individually hash-chained audit record, so a plan's own full
+    execution history is fully reconstructable from the existing audit
+    chain with no new logging mechanism." This test proves that claim
+    directly, empirically, not by re-reading the claim: runs a real
+    3-step plan (fs.read_file, fs.list_dir, git.status -- all real
+    `Tier.ALLOW` capabilities) through `authorize_and_run_plan` against
+    a real, temporary chain file, then *independently* loads that chain
+    fresh (a new `JsonFileAuditStorageAdapter` instance, not the one
+    the composition root used) and verifies it end to end.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    chain_path = tmp_path / "audit_chain.json"
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "sub").mkdir()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    plan_response = json.dumps(
+        [
+            {"capability_id": "fs.read_file", "arguments": {"path": str(tmp_path / "a.txt")}},
+            {"capability_id": "fs.list_dir", "arguments": {"path": str(tmp_path / "sub")}},
+            {"capability_id": "git.status", "arguments": {"repo_dir": str(tmp_path)}},
+        ]
+    )
+    provider = _FakeReasoningProvider(plan_response)
+
+    await authorize_and_run_plan(
+        "read a.txt, list sub, check repo status",
+        provider,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+    )
+
+    # Independent reload -- a fresh adapter instance, proving this is real,
+    # persisted, on-disk state, not an artifact of the composition root's
+    # own in-memory chain object.
+    reloaded = JsonFileAuditStorageAdapter(chain_path).load()
+    verification = reloaded.verify()
+
+    expected_capability_sequence = [
+        "planning.run_plan",
+        "fs.read_file",
+        "fs.list_dir",
+        "git.status",
+    ]
+    real_capability_sequence = [
+        record.decision.invocation.descriptor.id.value for record in reloaded
+    ]
+
+    assert verification.valid is True
+    assert real_capability_sequence == expected_capability_sequence
+    assert [record.sequence for record in reloaded] == [0, 1, 2, 3]
+    for index in range(1, len(reloaded)):
+        assert reloaded[index].previous_hash == reloaded[index - 1].record_hash
+    assert all(record.decision.granted for record in reloaded)
+
+
+async def test_a_planned_steps_audit_record_is_structurally_identical_to_a_direct_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A step's own audit record carries no marker distinguishing it from a directly-invoked call.
+
+    Runs the identical real `fs.read_file` call two ways against two
+    separate chain files: once through `planning.run_plan`, once
+    directly via `authorize_and_read_file`. Confirms the resulting
+    `AuditRecord`/`Decision`/`CapabilityInvocation` shapes are
+    field-for-field identical (same tier, same reasons, same
+    descriptor, same argument-digest shape) -- nothing about being
+    part of a plan changes what gets recorded or how.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+
+    planned_chain_path = tmp_path / "planned_chain.json"
+    direct_chain_path = tmp_path / "direct_chain.json"
+
+    plan_response = json.dumps(
+        [{"capability_id": "fs.read_file", "arguments": {"path": str(tmp_path / "a.txt")}}]
+    )
+    provider = _FakeReasoningProvider(plan_response)
+    await authorize_and_run_plan(
+        "read a.txt",
+        provider,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=planned_chain_path,
+    )
+
+    authorize_and_read_file(
+        tmp_path / "a.txt",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=direct_chain_path,
+    )
+
+    planned_records = JsonFileAuditStorageAdapter(planned_chain_path).load()
+    direct_records = JsonFileAuditStorageAdapter(direct_chain_path).load()
+
+    # planned_records[0] is the outer planning.run_plan gate; [1] is the
+    # real fs.read_file step -- compared against direct_records[0], the
+    # only record in the direct-call chain.
+    planned_step = planned_records[1].decision
+    direct_call = direct_records[0].decision
+
+    assert planned_step.tier == direct_call.tier
+    assert planned_step.granted == direct_call.granted
+    assert planned_step.reasons == direct_call.reasons
+    assert planned_step.invocation.descriptor == direct_call.invocation.descriptor
+    assert planned_step.invocation.arguments.value == direct_call.invocation.arguments.value
