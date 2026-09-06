@@ -170,6 +170,8 @@ from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
+from jarvis.application.planning.executor import PlanValidationError
+from jarvis.application.planning.planner import PlanningError
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.coding import authorize_and_run_coding_task
@@ -209,6 +211,7 @@ from jarvis.kernel.memory import (
 )
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
+from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
@@ -223,6 +226,7 @@ from jarvis.ports.vscode import EditorLaunchFailedError
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from jarvis.application.planning.executor import PlanStepRecord
     from jarvis.domain.audit import AuditRecord
     from jarvis.domain.file_system import DirEntry
     from jarvis.domain.memory import MemoryRecord
@@ -355,6 +359,30 @@ def _add_reasoning_parsers(
         help="Where the real drafted file is saved (default: ./drafts).",
     )
     _add_common_flags(draft_parser)
+
+
+def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the plan run subparser -- a real, invocable planning.run_plan (ADR-0062), nested.
+
+    Mirrors ``memory``'s own nested-subcommand shape (the one real,
+    already-accepted precedent for this in this file, per
+    ``docs/OPEN_DECISIONS.md``'s own item 4 -- kept, not renamed).
+    Takes no cloud-provider override flag, on purpose, the identical
+    reasoning ``_add_reasoning_parsers``'s own docstring already gives
+    for ``code``/``draft``: real vendor-family cloud configuration is
+    out of this CLI's own scope. Omitting ``provider`` reaches
+    ``authorize_and_run_plan``'s own real, local-only default, which
+    now logs a real, honest warning about that default's own known
+    reliability gap (`kernel/planning.py`'s own module docstring).
+    """
+    plan_parser = subparsers.add_parser("plan", help="Task-planning commands.")
+    plan_subparsers = plan_parser.add_subparsers(dest="plan_command", required=True)
+
+    plan_run_parser = plan_subparsers.add_parser(
+        "run", help="Propose and run a real, multi-step plan for a goal."
+    )
+    plan_run_parser.add_argument("goal", help="The real, natural-language goal to plan for.")
+    _add_common_flags(plan_run_parser)
 
 
 def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -586,6 +614,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_reasoning_parsers(subparsers)
     _add_file_parsers(subparsers)
     _add_desktop_parsers(subparsers)
+    _add_planning_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -907,6 +936,33 @@ def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str |
     return draft_outcome.decision, (str(draft_outcome.path) if draft_outcome.path else None)
 
 
+def _run_planning_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, tuple[PlanStepRecord, ...] | None]:
+    """Dispatch ``plan run``, returning (decision, plan_step_records).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_reasoning_subcommand` is. Omits ``provider`` entirely,
+    the same real, deliberate scope limit ``_add_planning_parsers``'s
+    own docstring already states -- ``authorize_and_run_plan``'s own
+    real, local-only default resolves automatically, now logging its
+    own real, honest reliability warning (`kernel/planning.py`).
+    `authorize_and_run_plan` is ``async``, so this wraps its own call
+    in ``asyncio.run``, the same shape every other async kernel call
+    in this module already uses.
+    """
+    decision, plan_result = asyncio.run(
+        authorize_and_run_plan(
+            args.goal,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+    )
+    step_records = plan_result.step_records if plan_result is not None else None
+    return decision, step_records
+
+
 def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirEntry, ...] | None]:
     """Dispatch ``list-dir``/``move-file``/``delete-file``, returning (decision, dir_entries).
 
@@ -1121,6 +1177,7 @@ class _CommandOutcome:
     docker_containers: tuple[str, ...] | None = None
     git_status_text: str | None = None
     audit_records: tuple[AuditRecord, ...] | None = None
+    plan_step_records: tuple[PlanStepRecord, ...] | None = None
 
 
 def _run_basic_subcommand(
@@ -1195,6 +1252,11 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
         return _CommandOutcome(
             decision, args.command, reasoning_result_label=reasoning_result_label
         )
+    if args.command == "plan":
+        decision, plan_step_records = _run_planning_subcommand(args)
+        return _CommandOutcome(
+            decision, f"plan {args.plan_command}", plan_step_records=plan_step_records
+        )
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
@@ -1248,6 +1310,10 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
                 f"{audit_record.sequence}: {record_decision.invocation.descriptor.id.value} "
                 f"{status} (tier={record_decision.tier.name}, reasons={record_decision.reasons})"
             )
+    if outcome.plan_step_records is not None:
+        for step_record in outcome.plan_step_records:
+            step_status = "GRANTED" if step_record.decision.granted else "DENIED"
+            print(f"step: {step_record.step.capability_id.value} {step_status}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1286,6 +1352,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         WindowActionFailedError,
         DockerCommandFailedError,
         GitCommandFailedError,
+        PlanningError,
+        PlanValidationError,
         OSError,
         UnicodeDecodeError,
         KeyError,

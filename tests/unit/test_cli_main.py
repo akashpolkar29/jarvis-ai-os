@@ -44,6 +44,8 @@ from jarvis.adapters.email import ImapEmailAdapter
 from jarvis.adapters.memory import UnsupportedMemoryValueError
 from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapter
 from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
+from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
+from jarvis.application.planning.planner import PlanStep
 from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
 from jarvis.domain.capability import (
     CapabilityDescriptor,
@@ -1768,6 +1770,68 @@ def test_draft_subcommand_requires_task() -> None:
         main(["draft"])
 
 
+def test_plan_run_subcommand_executes_and_reports_each_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted plan run reports the outer decision plus one real line per plan step."""
+    received: list[str] = []
+
+    async def fake_authorize_and_run_plan(
+        goal: str,
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, PlanExecutionResult]:
+        received.append(goal)
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        step_decision = _make_decision(granted=True, capability_id="fs.read_file")
+        step = PlanStep(CapabilityId("fs.read_file"), {"path": "/tmp/a.txt"})
+        record = PlanStepRecord(step=step, decision=step_decision, result=None)
+        return decision, PlanExecutionResult(step_records=(record,), aborted=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_plan", fake_authorize_and_run_plan
+    )
+
+    exit_code = main(
+        [
+            "plan",
+            "run",
+            "read a.txt",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["read a.txt"]
+    assert exit_code == 0
+    assert "plan run: GRANTED" in captured.out
+    assert "step: fs.read_file GRANTED" in captured.out
+
+
+def test_plan_run_subcommand_denied_attempts_no_plan_steps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A denied outer gate (no confirmation) never even calls the real kernel function's own planner."""  # noqa: E501
+    exit_code = main(
+        ["plan", "run", "do something", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "plan run: DENIED" in captured.out
+    assert "step:" not in captured.out
+
+
+def test_plan_run_subcommand_requires_goal() -> None:
+    with pytest.raises(SystemExit):
+        main(["plan", "run"])
+
+
 def test_list_dir_subcommand_routes_the_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2736,6 +2800,7 @@ _TOP_LEVEL_COMMANDS = (
     "listen",
 )
 _MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore", "wipe")
+_PLANNING_SUBCOMMANDS = ("run",)
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -2764,6 +2829,13 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "WP-" not in captured.out, (
             f"memory {subcommand} --help leaks a work-package reference"
         )
+
+    for subcommand in _PLANNING_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["plan", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"plan {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, f"plan {subcommand} --help leaks a work-package reference"
 
 
 def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(
