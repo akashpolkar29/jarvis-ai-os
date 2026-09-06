@@ -54,22 +54,27 @@ decision recorded" section for the full reasoning, and
 `docs/architecture/secrets-license-sbom-audit-phase9.md`'s own
 matching update.
 
-## 3b. `icalendar-searcher` (AGPL-3.0-or-later)
+## 3b. ~~`icalendar-searcher` (AGPL-3.0-or-later)~~ -- RESOLVED 2026-09-05
 
-**What's needed**: whether the real `server_expand=True` mitigation
-(tested under Decision 4 of the same prompt) actually avoids invoking
-`icalendar-searcher`'s own code, and if so, whether to apply it
-permanently; if not, the same personal-use reasoning as `piper-tts`
-above, pending the user's own further input.
-
-**Already investigated**: `docs/architecture/secrets-license-sbom-audit-phase9.md`
-(10-phase combined pass, Phase 9) first found this.
-`docs/architecture/license-alternatives-research.md` (3 combined
-tasks, Task 3) confirmed the real usage pattern, quoted the real,
-relevant AGPL license text directly, and found the real,
-no-new-dependency `server_expand=True` mitigation candidate,
-unverified against a real server at the time. See this same prompt's
-own Decision 4 for the real, empirical test result.
+**Resolved**: the real `server_expand=True` mitigation (7 real
+decisions prompt, Decision 4) was tested empirically against a real,
+local Radicale server. Confirmed real: `icalendar_searcher.Searcher.check_component`
+(the substantive filtering/expansion logic) was invoked zero times
+under the new call shape, versus at least once under a real positive
+control using the old shape. Applied as `adapters/calendar.py`'s own
+permanent configuration
+(`calendar.search(..., event=True, server_expand=True)`, replacing the
+deprecated `date_search()`), with a real regression test
+(`tests/integration/test_icalendar_searcher_server_expand.py`)
+proving both results against a real server, every time it runs. The
+dependency remains in `uv.lock` (a transitive dependency of `caldav`
+itself, not directly removable) but is no longer exercised at runtime.
+See `docs/architecture/license-alternatives-research.md`'s own updated
+section for the full methodology, including one real, precise, non-
+obvious finding: `caldav`'s own migration docstring example
+(`expand=True` alongside `server_expand=True`) does NOT fully avoid
+the AGPL code path -- only `server_expand=True` alone, with `expand`
+left at its own default, does.
 
 ## 4. Two real, structural CLI naming inconsistencies
 

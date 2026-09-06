@@ -243,13 +243,77 @@ scratch.
 No dependency was switched. No code changed as a result of this
 decision.
 
-## `icalendar-searcher` (AGPL): see Decision 4's own real, separate outcome
+## `icalendar-searcher` (AGPL): real, empirical resolution (7 real decisions prompt, Decision 4, 2026-09-05)
 
-This dependency's own real resolution (or continued open status) is
-recorded separately -- see `docs/architecture/secrets-license-sbom-audit-phase9.md`'s
-own updated finding and `docs/OPEN_DECISIONS.md`, both updated as part
-of the "7 real decisions" prompt's own Decision 4, not this document's
-Decision 3.
+**The `server_expand=True` mitigation was tested empirically against
+the real, local Radicale test server, and confirmed real -- it has
+now been applied as the permanent configuration.**
+
+### Methodology, more precise than a single yes/no answer
+
+A real, live-instrumented `unittest.mock.patch.object` wrapping
+`icalendar_searcher.Searcher.check_component` (the actual method that
+performs substantive recurrence-filtering/expansion logic --
+confirmed by reading `caldav/search.py`'s own `_filter_search_results`
+directly, not assumed) counted real invocations while a real
+`CalDavCalendarAdapter.list_events()` call ran against a real,
+5-occurrence weekly recurring event seeded directly on the real,
+local Radicale server. A positive control (the same real server, same
+real event, `calendar.search(..., expand=True)` -- functionally
+equivalent to the deprecated `date_search()`'s own default behavior)
+confirmed the instrumentation itself would have caught a real
+invocation, ruling out "it just happened not to fire" as an
+explanation for a negative result.
+
+**Real result**: with `server_expand=True` and `expand` left at its
+own real default (`False`), `check_component` was called **zero
+times** -- proven, not assumed. The positive control confirmed at
+least one real call under the old shape. A deeper check (a real,
+diffed `coverage.py` trace of the entire `icalendar_searcher` package,
+comparing "import + object construction only" against "a full search
+call") found that `server_expand=True` alone executes exactly two
+lines of `icalendar_searcher` code beyond ordinary class/module
+definition -- both inside `Searcher.sort()`'s own generic, non-
+calendar-specific `else: return components.copy()` fallback branch
+(no sort keys were configured) -- not any real filtering, expansion,
+or date-comparison logic.
+
+**A real, precise, non-obvious finding, not in `caldav`'s own
+migration docstring**: `date_search()`'s own deprecation notice
+suggests migrating to `calendar.search(start=start, end=end,
+event=True, expand=True)` -- this combination alone, even with
+`server_expand=True` added, was empirically measured to still invoke
+`check_component` once. The combination that actually avoids it
+requires `expand` to be left at its own real default (`False`); adding
+`expand=True` back in (matching the literal docstring example) partly
+defeats the mitigation. This distinction would not have been caught
+by reading documentation alone -- it required the real, empirical test
+this decision asked for.
+
+**Applied**: `src/jarvis/adapters/calendar.py`'s `_list_events_sync`
+now calls `calendar.search(start=..., end=..., event=True,
+server_expand=True)` instead of the deprecated `calendar.date_search(start,
+end)`. A real regression test
+(`tests/integration/test_icalendar_searcher_server_expand.py`, gated
+behind the same real, local Radicale reachability skip this project's
+other CalDAV integration tests already use) proves both the negative
+result (zero `check_component` calls under the new, real call shape)
+and the positive control (at least one call under the old shape),
+against a real server, every time it runs. Unit tests
+(`tests/unit/adapters/test_calendar.py`) updated to match the new
+`search()`-based Protocol; a dedicated new test guards against a
+future edit silently dropping `server_expand=True` or reintroducing
+`expand=True`.
+
+**This resolves finding 2 from `docs/architecture/secrets-license-sbom-audit-phase9.md`**:
+`icalendar-searcher`'s own AGPL-licensed substantive logic is no
+longer genuinely, actually invoked by this codebase's real, current
+calendar-listing call path -- a real, empirically-verified change, not
+a documentation-only decision like `piper-tts`'s own Decision 3. The
+dependency itself remains in `uv.lock` (removing it outright would
+require `caldav`'s own internals to drop the import, out of this
+project's control) but is no longer exercised at runtime by this
+codebase's own real usage.
 
 ## Conclusion
 

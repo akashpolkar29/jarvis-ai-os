@@ -12,6 +12,7 @@ gap).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import icalendar
 import pytest
@@ -64,18 +65,20 @@ class _FakeCreatedEvent:
 
 
 class _FakeCalendar:
-    """Records every real date_search()/add_event() call, returns canned real events."""
+    """Records every real search()/add_event() call, returns canned real events."""
 
     def __init__(
         self, events: list[_FakeCalendarObject], created_uid: str | None = "new-event-uid"
     ) -> None:
         self.calls: list[tuple[datetime, datetime]] = []
+        self.search_kwargs: list[dict[str, object]] = []
         self.add_event_calls: list[dict[str, object]] = []
         self._events = events
         self._created_uid = created_uid
 
-    def date_search(self, start: datetime, end: datetime) -> list[_FakeCalendarObject]:
-        self.calls.append((start, end))
+    def search(self, server_expand: bool = False, **kwargs: Any) -> list[_FakeCalendarObject]:
+        self.calls.append((kwargs["start"], kwargs["end"]))
+        self.search_kwargs.append({**kwargs, "server_expand": server_expand})
         return self._events
 
     def add_event(
@@ -142,7 +145,7 @@ async def test_list_events_returns_multiple_real_attendees() -> None:
     assert events[0].attendees == ("alice@example.com", "bob@example.com")
 
 
-async def test_list_events_passes_the_real_parsed_start_and_end_to_date_search() -> None:
+async def test_list_events_passes_the_real_parsed_start_and_end_to_search() -> None:
     calendar = _FakeCalendar([])
     adapter = _adapter(calendar)
 
@@ -154,6 +157,28 @@ async def test_list_events_passes_the_real_parsed_start_and_end_to_date_search()
             datetime.fromisoformat("2026-09-30T00:00:00+00:00"),
         )
     ]
+
+
+async def test_list_events_passes_server_expand_true_and_event_true() -> None:
+    """Real decision (7 real decisions prompt, Decision 4, 2026-09-05).
+
+    `server_expand=True` (with `expand` left at its own real default,
+    `False`) is the exact, empirically-confirmed combination that
+    avoids invoking `icalendar_searcher`'s own substantive filtering/
+    expansion logic -- see `_list_events_sync`'s own module comment and
+    `docs/architecture/license-alternatives-research.md` for the full
+    evidence. This test guards against a future edit silently dropping
+    `server_expand=True` or adding `expand=True` back in.
+    """
+    calendar = _FakeCalendar([])
+    adapter = _adapter(calendar)
+
+    await adapter.list_events("2026-09-01T00:00:00+00:00", "2026-09-30T00:00:00+00:00")
+
+    assert len(calendar.search_kwargs) == 1
+    assert calendar.search_kwargs[0]["event"] is True
+    assert calendar.search_kwargs[0]["server_expand"] is True
+    assert "expand" not in calendar.search_kwargs[0]
 
 
 async def test_list_events_returns_empty_tuple_when_nothing_matches() -> None:

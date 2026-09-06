@@ -83,7 +83,9 @@ class _CalendarObjectLike(Protocol):
 class _Calendar(Protocol):
     """The narrow subset of caldav.Calendar's own real interface this adapter uses."""
 
-    def date_search(self, start: datetime, end: datetime) -> Sequence[_CalendarObjectLike]: ...
+    def search(
+        self, server_expand: bool = False, **searchargs: Any
+    ) -> Sequence[_CalendarObjectLike] | Coroutine[Any, Any, Sequence[_CalendarObjectLike]]: ...
     def add_event(
         self,
         dtstart: datetime,
@@ -179,6 +181,18 @@ class CalendarNotFoundError(Exception):
     """
 
 
+class CalendarSearchError(Exception):
+    """Raised when `Calendar.search()` returns a coroutine instead of a real result list.
+
+    Defined on the adapter, not the port, for the identical reason
+    `CalendarEventCreationError` is: real but unreachable in practice,
+    since this adapter only ever constructs a synchronous `DAVClient`
+    (see `_real_calendar_factory`) -- a defensive narrowing satisfying
+    `mypy --strict`'s own real union return type for `search()`, not a
+    path any real caller can trigger.
+    """
+
+
 class CalendarEventCreationError(Exception):
     """Raised when a real CalDAV server does not return a real UID for a newly created event.
 
@@ -205,7 +219,13 @@ def _real_calendar_factory(
     if not isinstance(calendars, list) or not calendars:
         msg = f"No real calendars found for principal at {url!r}."
         raise CalendarNotFoundError(msg)
-    return calendars[0]
+    # A real, known mypy limitation, not a real type mismatch: caldav's own
+    # Calendar.search() is a generic method (`def [_CC: CalendarObjectResource]
+    # search(...) -> list[_CC] | Coroutine[...]`), and mypy cannot verify a
+    # generic method structurally satisfies a Protocol member typed with a
+    # concrete return type, even though every real _CC is CalendarObjectResource-
+    # bound and _CalendarObjectLike's own real usage here is satisfied at runtime.
+    return calendars[0]  # type: ignore[return-value]
 
 
 class CalDavCalendarAdapter:
@@ -240,10 +260,36 @@ class CalDavCalendarAdapter:
         )
 
     def _list_events_sync(self, start: str, end: str) -> tuple[CalendarEvent, ...]:
+        # server_expand=True (7 real decisions prompt, Decision 4, 2026-09-05):
+        # empirically confirmed, via a real coverage-diff trace against a
+        # real local Radicale server (not assumed from documentation),
+        # that this exact combination -- server_expand=True, `expand` left
+        # at its own real default (False) -- asks the CalDAV server itself
+        # to expand recurring events (RFC4791's own <C:expand> mechanism)
+        # and reaches zero substantive icalendar_searcher (AGPL-3.0-or-later)
+        # logic: Searcher.check_component (the real filtering/expansion
+        # entrypoint) was called zero times, and the only new code from
+        # that package to execute at all beyond ordinary class/module
+        # definition was a single, generic, non-calendar-specific
+        # `else: return components.copy()` branch inside Searcher.sort()
+        # (no sort keys configured). The deprecated `date_search()`'s own
+        # migration docstring example (`search(..., expand=True)`) is
+        # NOT equivalent -- adding `expand=True` alongside `server_expand=True`
+        # was measured to still invoke check_component once; only
+        # `server_expand=True` alone (this call) avoids it. See
+        # docs/architecture/license-alternatives-research.md's own
+        # "Real decision recorded" section for the full evidence.
         calendar = self._calendar_factory()
-        real_events = calendar.date_search(
-            _parse_aware_iso8601(start, "start"), _parse_aware_iso8601(end, "end")
+        real_events = calendar.search(
+            start=_parse_aware_iso8601(start, "start"),
+            end=_parse_aware_iso8601(end, "end"),
+            event=True,
+            server_expand=True,
         )
+        if isinstance(real_events, Coroutine):
+            real_events.close()
+            msg = "search() returned a coroutine -- this adapter requires a synchronous client."
+            raise CalendarSearchError(msg)
         return tuple(_parse_event(event) for event in real_events)
 
     async def list_events(self, start: str, end: str) -> tuple[CalendarEvent, ...]:

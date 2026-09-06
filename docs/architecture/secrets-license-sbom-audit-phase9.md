@@ -120,7 +120,18 @@ when it would need re-examination, is recorded in
 (`icalendar-searcher`) has its own real, separate resolution --
 tracked under Decision 4, see `docs/OPEN_DECISIONS.md` and
 `docs/architecture/license-alternatives-research.md` for that
-outcome, whichever way the real evidence lands.
+outcome, whichever way the real evidence lands. **Update (same prompt,
+Decision 4, 2026-09-05)**: finding 2 (`icalendar-searcher`) is now
+resolved for real, empirically, not just documented -- the
+`server_expand=True` mitigation was tested against a real, local
+Radicale server, confirmed to bring real `icalendar_searcher`
+invocation (`Searcher.check_component`) to zero real calls, and
+applied as `adapters/calendar.py`'s own permanent configuration. See
+`docs/architecture/license-alternatives-research.md`'s own updated
+section for the full methodology and evidence. `icalendar-searcher`
+remains in `uv.lock` (it is `caldav`'s own transitive dependency, not
+directly removable) but is no longer exercised at runtime by this
+codebase's own real usage.
 
 **A real, honest note on this prompt's own file-naming assumption**:
 Decision 3, as given, referred to updating
