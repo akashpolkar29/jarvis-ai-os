@@ -177,6 +177,8 @@ from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
+    authorize_and_list_email,
+    authorize_and_read_email,
     authorize_and_send_email,
 )
 from jarvis.kernel.desktop import (
@@ -216,6 +218,7 @@ from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
+from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
@@ -228,6 +231,7 @@ if TYPE_CHECKING:
 
     from jarvis.application.planning.executor import PlanStepRecord
     from jarvis.domain.audit import AuditRecord
+    from jarvis.domain.email import EmailMessage, EmailSummary
     from jarvis.domain.file_system import DirEntry
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
@@ -261,7 +265,22 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
 def _add_communications_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    """Add the send-email/create-calendar-event subparsers, split out to keep _build_parser lean."""
+    """Add the send-email/create-calendar-event/email subparsers.
+
+    Split out to keep _build_parser lean.
+
+    ``email list``/``email read`` are new, nested subcommands wiring
+    two already-real, already-tested, read-only (``Tier.ALLOW``)
+    capabilities (`communications.list_email`/`communications.read_email`)
+    into the CLI for the first time -- a real, named gap from the
+    adapter-failure-resilience pass. Both require the identical real
+    ``ImapEmailAdapter`` flags ``send-email`` already established
+    (``--imap-host``/``--smtp-host``/``--username``/``--password-reference``)
+    -- ``ImapEmailAdapter``'s own real constructor requires
+    ``smtp_host`` unconditionally, even though neither read-only
+    command ever uses it, since one adapter class implements the
+    port's full read+write surface.
+    """
     send_email_parser = subparsers.add_parser(
         "send-email", help="Send a real email to one or more real recipients."
     )
@@ -317,6 +336,48 @@ def _add_communications_parsers(
         ),
     )
     _add_common_flags(create_event_parser)
+
+    email_parser = subparsers.add_parser("email", help="Real, read-only IMAP mailbox commands.")
+    email_subparsers = email_parser.add_subparsers(dest="email_command", required=True)
+
+    email_list_parser = email_subparsers.add_parser(
+        "list", help="List real message summaries in a real IMAP folder."
+    )
+    email_list_parser.add_argument(
+        "--folder", default="INBOX", help="The real IMAP folder to list (default: INBOX)."
+    )
+    email_list_parser.add_argument(
+        "--limit", type=int, default=10, help="Maximum real summaries to return (default: 10)."
+    )
+    _add_email_connection_flags(email_list_parser)
+    _add_common_flags(email_list_parser)
+
+    email_read_parser = email_subparsers.add_parser(
+        "read", help="Read one real message's full content by its real message id."
+    )
+    email_read_parser.add_argument("message_id", help="The real message's own id.")
+    _add_email_connection_flags(email_read_parser)
+    _add_common_flags(email_read_parser)
+
+
+def _add_email_connection_flags(parser: argparse.ArgumentParser) -> None:
+    """Add the real ImapEmailAdapter connection flags ``email list``/``email read`` both need.
+
+    Split out from `_add_communications_parsers` purely because both
+    subcommands need the identical, real four flags -- avoids
+    repeating the same four `add_argument` calls twice.
+    """
+    parser.add_argument("--imap-host", required=True, help="The real IMAP server hostname.")
+    parser.add_argument("--smtp-host", required=True, help="The real SMTP server hostname.")
+    parser.add_argument("--username", required=True, help="The real mailbox username.")
+    parser.add_argument(
+        "--password-reference",
+        required=True,
+        help=(
+            "The keyring reference for this mailbox's password -- "
+            "provisioned out of band, not by this command."
+        ),
+    )
 
 
 def _add_reasoning_parsers(
@@ -898,6 +959,51 @@ def _run_communications_subcommand(args: argparse.Namespace) -> tuple[Decision, 
     return create_outcome.decision, create_outcome.uid
 
 
+def _run_email_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, tuple[Tainted[EmailSummary], ...] | None, Tainted[EmailMessage] | None]:
+    """Dispatch ``email list``/``email read``, returning (decision, summaries, message).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_communications_subcommand` is. Constructs a real
+    ``ImapEmailAdapter`` here (``cli`` is the one layer permitted to,
+    mirroring ``_run_communications_subcommand``'s own identical
+    precedent) and wraps its kernel call in ``asyncio.run``, since both
+    ``authorize_and_list_email``/``authorize_and_read_email`` are
+    ``async``.
+    """
+    email_port = ImapEmailAdapter(
+        args.imap_host,
+        args.username,
+        SecretServiceAdapter(),
+        args.password_reference,
+        smtp_host=args.smtp_host,
+    )
+    if args.email_command == "list":
+        decision, summaries = asyncio.run(
+            authorize_and_list_email(
+                args.folder,
+                args.limit,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+                email_port=email_port,
+            )
+        )
+        return decision, summaries, None
+
+    decision, message = asyncio.run(
+        authorize_and_read_email(
+            args.message_id,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+            email_port=email_port,
+        )
+    )
+    return decision, None, message
+
+
 def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str | None]:
     """Dispatch ``code``/``draft``, returning (decision, result_label).
 
@@ -1178,6 +1284,8 @@ class _CommandOutcome:
     git_status_text: str | None = None
     audit_records: tuple[AuditRecord, ...] | None = None
     plan_step_records: tuple[PlanStepRecord, ...] | None = None
+    email_summaries: tuple[Tainted[EmailSummary], ...] | None = None
+    email_message: Tainted[EmailMessage] | None = None
 
 
 def _run_basic_subcommand(
@@ -1257,6 +1365,14 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
         return _CommandOutcome(
             decision, f"plan {args.plan_command}", plan_step_records=plan_step_records
         )
+    if args.command == "email":
+        decision, email_summaries, email_message = _run_email_subcommand(args)
+        return _CommandOutcome(
+            decision,
+            f"email {args.email_command}",
+            email_summaries=email_summaries,
+            email_message=email_message,
+        )
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
@@ -1314,6 +1430,18 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
         for step_record in outcome.plan_step_records:
             step_status = "GRANTED" if step_record.decision.granted else "DENIED"
             print(f"step: {step_record.step.capability_id.value} {step_status}")
+    if outcome.email_summaries is not None:
+        for tainted_summary in outcome.email_summaries:
+            summary = tainted_summary.value
+            print(f"{summary.message_id}: {summary.sender} -- {summary.subject}")
+    if outcome.email_message is not None:
+        message = outcome.email_message.value
+        print(f"From: {message.sender}")
+        print(f"To: {', '.join(message.recipients)}")
+        print(f"Subject: {message.subject}")
+        print(f"Received: {message.received_at}")
+        print()
+        print(message.body)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1346,6 +1474,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryIntegrityViolationError,
         SecretNotFoundError,
         CalendarEventCreationError,
+        EmailConnectionError,
+        EmailMessageNotFoundError,
         BrowserLaunchFailedError,
         EditorLaunchFailedError,
         WindowNotFoundError,

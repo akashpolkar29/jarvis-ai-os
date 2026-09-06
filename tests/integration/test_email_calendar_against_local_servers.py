@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import smtplib
 import socket
+import sys
 import urllib.error
 import urllib.request
 import uuid
@@ -65,10 +66,13 @@ import pytest
 
 from jarvis.adapters.calendar import CalDavCalendarAdapter
 from jarvis.adapters.email import ImapEmailAdapter
+from jarvis.cli.main import main
 from jarvis.domain.calendar import CalendarEventDraft
 from jarvis.ports.email import EmailMessageNotFoundError
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from jarvis.domain.email import EmailMessage, EmailSummary
     from jarvis.ports.secret import SecretPort
 
@@ -263,6 +267,82 @@ async def test_real_read_message_not_found_raises_against_a_local_greenmail_serv
 
     with pytest.raises(EmailMessageNotFoundError):
         await adapter.read_message(f"<{uuid.uuid4()}@nonexistent.invalid>")  # noqa: TID251 -- real test-data uniqueness
+
+
+def _fake_imap_email_adapter_pointed_at_greenmail(
+    host: str,
+    username: str,
+    secret: object,
+    password_reference: str,
+    *,
+    smtp_host: str,
+) -> ImapEmailAdapter:
+    """Ignore the CLI's own real, production-shaped arguments; return an adapter
+    wired to dial the real, local GreenMail server instead.
+
+    ``cli/main.py``'s ``_run_email_subcommand`` always builds
+    ``ImapEmailAdapter`` with its own default connection factories
+    (real ``IMAP4_SSL``/``SMTP_SSL`` on the standard SSL ports) --
+    exactly the same real, pre-existing gap this module's own
+    ``_make_real_imap_adapter()`` already works around for the
+    kernel-level tests above (GreenMail speaks plain, non-SSL IMAP/SMTP
+    on non-standard ports). Patching this one factory function is the
+    only way to prove the real CLI *argument-parsing and dispatch*
+    path reaches a real server without inventing new CLI flags this
+    task's own hard gates forbid (no new ``--imap-port``/``--use-ssl``
+    surface, no change to the email adapter's own behavior).
+    """
+    del host, username, secret, password_reference, smtp_host
+    return _make_real_imap_adapter()
+
+
+@_greenmail_skip
+def test_real_cli_email_list_and_read_against_a_local_greenmail_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The real ``jarvis email list``/``jarvis email read`` CLI path -- not just
+    the kernel function directly -- against the real, local GreenMail server."""
+    unique_subject = f"real cli integration test {uuid.uuid4()}"  # noqa: TID251 -- real test-data uniqueness
+    real_message_id = f"<{uuid.uuid4()}@localhost>"  # noqa: TID251 -- real test-data uniqueness
+    real_body = f"Real CLI-path body, unique token: {uuid.uuid4()}"  # noqa: TID251 -- same
+    _seed_real_message_via_raw_smtp(
+        message_id=real_message_id, subject=unique_subject, body=real_body
+    )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "ImapEmailAdapter",
+        _fake_imap_email_adapter_pointed_at_greenmail,
+    )
+    chain_path = tmp_path / "audit_chain.json"
+    common_flags = [
+        "--imap-host",
+        "unused.example.com",
+        "--smtp-host",
+        "unused.example.com",
+        "--username",
+        "unused",
+        "--password-reference",
+        "unused-static-test-password",
+        "--physical-confirmation-available",
+        "--chain-path",
+        str(chain_path),
+    ]
+
+    list_exit_code = main(["email", "list", "--limit", "50", *common_flags])
+    list_captured = capsys.readouterr()
+
+    assert list_exit_code == 0
+    assert "email list: GRANTED" in list_captured.out
+    assert unique_subject in list_captured.out
+
+    read_exit_code = main(["email", "read", real_message_id, *common_flags])
+    read_captured = capsys.readouterr()
+
+    assert read_exit_code == 0
+    assert "email read: GRANTED" in read_captured.out
+    assert real_body in read_captured.out
+    assert unique_subject in read_captured.out
 
 
 @_radicale_skip

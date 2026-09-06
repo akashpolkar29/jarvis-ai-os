@@ -54,6 +54,7 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.email import EmailMessage, EmailSummary
 from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
@@ -67,6 +68,7 @@ from jarvis.kernel.music import MusicCommand
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
+from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
@@ -1832,6 +1834,231 @@ def test_plan_run_subcommand_requires_goal() -> None:
         main(["plan", "run"])
 
 
+_EMAIL_COMMON_FLAGS = [
+    "--imap-host",
+    "imap.example.com",
+    "--smtp-host",
+    "smtp.example.com",
+    "--username",
+    "user@example.com",
+    "--password-reference",
+    "example-ref",
+]
+
+
+def test_email_list_subcommand_reports_each_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[str, int]] = []
+
+    async def fake_authorize_and_list_email(  # noqa: PLR0913 -- mirrors the real signature
+        folder: str,
+        limit: int,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[EmailSummary], ...]]:
+        received.append((folder, limit))
+        decision = _make_decision(granted=True, capability_id="communications.list_email")
+        summary = EmailSummary(
+            message_id="<1@localhost>",
+            sender="alice@example.com",
+            subject="Hello",
+            received_at="2026-09-06T00:00:00+00:00",
+        )
+        return decision, (Tainted(summary, Provenance.external("imap", Classification.PERSONAL)),)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_email", fake_authorize_and_list_email
+    )
+
+    exit_code = main(
+        [
+            "email",
+            "list",
+            "--folder",
+            "INBOX",
+            "--limit",
+            "5",
+            *_EMAIL_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [("INBOX", 5)]
+    assert exit_code == 0
+    assert "email list: GRANTED" in captured.out
+    assert "<1@localhost>: alice@example.com -- Hello" in captured.out
+
+
+def test_email_read_subcommand_reports_the_full_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    async def fake_authorize_and_read_email(
+        message_id: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[EmailMessage]]:
+        received.append(message_id)
+        decision = _make_decision(granted=True, capability_id="communications.read_email")
+        message = EmailMessage(
+            message_id="<1@localhost>",
+            sender="alice@example.com",
+            recipients=("bob@example.com",),
+            subject="Hello",
+            body="The message body.",
+            received_at="2026-09-06T00:00:00+00:00",
+        )
+        return decision, Tainted(message, Provenance.external("imap", Classification.PERSONAL))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_email", fake_authorize_and_read_email
+    )
+
+    exit_code = main(
+        [
+            "email",
+            "read",
+            "<1@localhost>",
+            *_EMAIL_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["<1@localhost>"]
+    assert exit_code == 0
+    assert "email read: GRANTED" in captured.out
+    assert "Subject: Hello" in captured.out
+    assert "The message body." in captured.out
+
+
+def test_email_list_subcommand_denied_prints_no_summaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``communications.list_email`` is ``Tier.ALLOW`` (always granted for real) --
+    mirroring ``list-dir``'s own identical-tier precedent, a denied outcome is
+    proven via a fake kernel function, not the real, unconditionally-granting one."""
+
+    async def fake_authorize_and_list_email(  # noqa: PLR0913 -- mirrors the real signature
+        folder: str,  # noqa: ARG001
+        limit: int,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[EmailSummary], ...] | None]:
+        decision = _make_decision(granted=False, capability_id="communications.list_email")
+        return decision, None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_email", fake_authorize_and_list_email
+    )
+
+    exit_code = main(
+        ["email", "list", *_EMAIL_COMMON_FLAGS, "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "email list: DENIED" in captured.out
+
+
+def test_email_read_subcommand_reports_message_not_found_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_read_email(
+        message_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[EmailMessage] | None]:
+        msg = "No message found for id '<missing@localhost>'."
+        raise EmailMessageNotFoundError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_read_email", fake_authorize_and_read_email
+    )
+
+    exit_code = main(
+        [
+            "email",
+            "read",
+            "<missing@localhost>",
+            *_EMAIL_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "No message found" in captured.err
+
+
+def test_email_list_subcommand_reports_connection_error_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_list_email(  # noqa: PLR0913 -- mirrors the real signature
+        folder: str,  # noqa: ARG001
+        limit: int,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[EmailSummary], ...] | None]:
+        msg = "Connection to the IMAP server was lost."
+        raise EmailConnectionError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_email", fake_authorize_and_list_email
+    )
+
+    exit_code = main(
+        [
+            "email",
+            "list",
+            *_EMAIL_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "Connection to the IMAP server was lost" in captured.err
+
+
+def test_email_read_subcommand_requires_message_id() -> None:
+    with pytest.raises(SystemExit):
+        main(["email", "read", *_EMAIL_COMMON_FLAGS])
+
+
+def test_email_list_subcommand_requires_connection_flags() -> None:
+    with pytest.raises(SystemExit):
+        main(["email", "list"])
+
+
 def test_list_dir_subcommand_routes_the_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2801,6 +3028,7 @@ _TOP_LEVEL_COMMANDS = (
 )
 _MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore", "wipe")
 _PLANNING_SUBCOMMANDS = ("run",)
+_EMAIL_SUBCOMMANDS = ("list", "read")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -2836,6 +3064,15 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         captured = capsys.readouterr()
         assert "ADR-" not in captured.out, f"plan {subcommand} --help leaks an ADR reference"
         assert "WP-" not in captured.out, f"plan {subcommand} --help leaks a work-package reference"
+
+    for subcommand in _EMAIL_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["email", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"email {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, (
+            f"email {subcommand} --help leaks a work-package reference"
+        )
 
 
 def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(
