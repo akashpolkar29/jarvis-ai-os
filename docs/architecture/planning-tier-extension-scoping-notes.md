@@ -1,11 +1,12 @@
-# Planning tier-extension scoping notes — extending past `Tier.ALLOW`, investigated, not decided
+# Planning tier-extension scoping notes — extending past `Tier.ALLOW`, investigated, then decided
 
-**Status: research only. No decision made, nothing built.** No code
-was written for this document — no port, no adapter, no application
-module, no capability, no ADR. Mirrors `m7-scoping-notes.md`'s own
-precedent exactly: a real investigation of a genuine, previously-named
-implementation gap, options laid out for the user's own decision.
-Written 2026-09-07.
+**Status: research written 2026-09-07 (no decision, nothing built at
+that point); decided the same day — see "Decision" at the bottom.**
+No code was written for the original research pass — no port,
+adapter, application module, capability, or ADR. Mirrors
+`m7-scoping-notes.md`'s own precedent exactly: a real investigation of
+a genuine, previously-named implementation gap, options laid out for
+the user's own decision.
 
 ## The real, current gap, quoted directly from the real code
 
@@ -185,3 +186,39 @@ that makes it a real question, not a hypothetical one.
 No recommendation is made here; this is options-on-the-table work for
 the user's own decision, exactly like `m7-scoping-notes.md`'s own
 precedent.
+
+## Decision, 2026-09-07 — stay `Tier.ALLOW`-only, permanently for now
+
+The user reviewed all three options above (a new optional kwarg
+threaded through affected composition functions; a parallel,
+plan-aware function layer; leaving the v1 boundary as-is) and chose
+**Option 3**: `planning.run_plan`'s existing `Tier.ALLOW`-only
+restriction stays exactly as implemented, indefinitely. No
+`Provenance`/`Trust` injection seam will be built now.
+
+**A real, considered decision, stated plainly, not an oversight**: no
+real capability currently needs a `Tier.CONFIRM` (or higher) plan
+step — every capability actually wired into
+`kernel/capability_dispatch.py::PLAN_STEP_EXECUTORS` today
+(`fs.read_file`, `fs.list_dir`, `git.status`, `memory.retrieve`) is
+already `Tier.ALLOW`, and no real, concrete use case for a
+higher-tier step has been named. Building Option 1 or Option 2 now
+would be speculative work against a need that has not actually
+occurred — the same "don't build against a hypothetical" discipline
+this project applies elsewhere (see, e.g., `m7-scoping-notes.md`'s own
+retry/replan finding, resolved the same way on 2026-09-07).
+
+**What would justify revisiting this**: a real, concrete future
+capability that genuinely needs to run as a plan step and whose real,
+static tier is `Tier.CONFIRM` or above — at that point, the taint-
+classification gap this document investigates becomes a real blocker,
+not a hypothetical one, and Options 1/2 above (still valid, unchanged)
+would need to be chosen between. The `Tier.MANUAL_ONLY`-specific
+question (whether `execute_plan`'s own flat, single confirmation input
+can ever honestly authorize a `MANUAL_ONLY` step) remains open
+independently of this decision, and would need its own, separate
+resolution even after the taint-classification seam is eventually
+built.
+
+No code changed by this decision. See `docs/OPEN_DECISIONS.md`'s own
+corresponding entry for the master-index record.

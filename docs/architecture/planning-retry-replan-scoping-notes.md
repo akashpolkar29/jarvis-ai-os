@@ -1,9 +1,10 @@
-# Planning retry/replan scoping notes — investigated, not decided
+# Planning retry/replan scoping notes — investigated, then decided
 
-**Status: research only. No decision made, nothing built.** No code
-was written for this document — no port, no adapter, no application
-module, no capability, no ADR. Mirrors `m7-scoping-notes.md`'s own
-precedent exactly. Written 2026-09-07.
+**Status: research written 2026-09-07 (no decision, nothing built at
+that point); decided the same day — see "Decision" at the bottom.**
+No code was written for the original research pass — no port,
+adapter, application module, capability, or ADR. Mirrors
+`m7-scoping-notes.md`'s own precedent exactly.
 
 ## The real, current behavior, quoted directly from the real code
 
@@ -153,3 +154,36 @@ elsewhere in this codebase (`DEFAULT_MAX_CLIMBS`, the `written_at`
 field's own additive-and-hashed shape) rather than inventing new
 patterns. No recommendation is made; this is options-on-the-table work
 for the user's own decision.
+
+## Decision, 2026-09-07 — no retry/replan for now
+
+The user chose to leave a failed or denied plan step exactly as it
+behaves today: `execute_plan()` stops at the first denied or invalid
+step and the plan simply ends there, honestly reporting which step
+failed and why. No bounded retry mechanism and no replan-with-
+feedback mechanism will be built now.
+
+**A real, considered decision, stated plainly, not an oversight**:
+`planning.run_plan` is not in real, heavy use yet — building either
+retry or replan now would be speculative complexity against a problem
+that has not actually occurred (no real plan has yet failed in a way
+retry or replan would have helped, because no real plan has failed at
+all in meaningful volume). This mirrors Decision 1's own identical
+reasoning for the tier-extension question, resolved the same day for
+the same underlying reason: real operating experience should come
+before real complexity, not the other way around.
+
+**What would justify revisiting this**: a real plan failing in
+practice in a way that retry (a transient, environment-shaped failure
+— not a policy denial, per this document's own "retry vs. replan"
+distinction above) or replan (a policy-denied or genuinely bad step
+the provider could plausibly route around given feedback) would
+concretely have helped. Absent that real, observed failure mode, the
+two real sub-questions this document leaves open (a retry/replan
+bound; whether the audit chain needs a new field to group records by
+plan/attempt) remain deferred alongside the mechanism itself — there
+is no reason to decide a bound or an audit-chain shape for a mechanism
+that does not exist.
+
+No code changed by this decision. See `docs/OPEN_DECISIONS.md`'s own
+corresponding entry for the master-index record.

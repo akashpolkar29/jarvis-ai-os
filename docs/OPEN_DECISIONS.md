@@ -204,6 +204,51 @@ of scope**, not merely deferred -- a future capability that did read
 page content would still need to resolve the ToS finding this
 document already established.
 
+## 8. ~~Extending `planning.run_plan` past `Tier.ALLOW`~~ -- DECIDED 2026-09-07
+
+**Decided**: the user reviewed all three real options
+(`docs/architecture/planning-tier-extension-scoping-notes.md`'s own
+new-optional-kwarg / parallel-function-layer / leave-as-is options)
+and chose to leave the v1 `Tier.ALLOW`-only restriction in place,
+permanently for now -- no `Provenance`/`Trust` injection seam will be
+built. A real, considered decision, not an oversight: no real
+capability currently needs a `Tier.CONFIRM`-or-above plan step. See
+that document's own "Decision" section for the full account,
+including what would justify revisiting it (a real, concrete future
+capability that genuinely needs a higher-tier plan step) and the
+separate, still-open `Tier.MANUAL_ONLY` question that survives this
+decision unresolved.
+
+## 9. ~~Retry/replan for a failed plan step~~ -- DECIDED 2026-09-07
+
+**Decided**: the user reviewed
+`docs/architecture/planning-retry-replan-scoping-notes.md`'s own real
+options and chose no retry/replan for now -- a denied or failed plan
+step continues to simply end the plan, exactly as `execute_plan()`
+already behaves. A real, considered decision: `planning.run_plan`
+isn't in real, heavy use yet, so bounded retry/replan would be
+speculative complexity for a problem that hasn't actually occurred.
+See that document's own "Decision" section for the full account,
+including what would justify revisiting it (a real plan failing in
+practice in a way retry or replan would concretely have helped).
+
+## 10. ~~Dynamic/out-of-tree plugin loading~~ -- DECIDED 2026-09-07
+
+**Decided**: the user reviewed
+`docs/architecture/dynamic-plugin-loading-scoping-notes.md`'s own real
+structural finding (same-process code cannot be trusted to honestly
+declare its own `Effect`/`Tier`) and chose not to pursue either real
+mitigation (process-level sandboxing or a tier floor for dynamic
+descriptors), and not to build any loading mechanism, at this time --
+no real out-of-tree plugin use case exists yet. **This remains a real,
+standing, accepted limitation of the current in-process plugin model,
+stated plainly, not silently implied as resolved or safe.** See that
+document's own "Decision" section for the full account, including what
+would justify revisiting it (a real, concrete request or need for
+out-of-tree plugin distribution) and the minimum bar named for
+whatever gets built at that point (at least the tier floor mitigation,
+seriously weighing process-level sandboxing).
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

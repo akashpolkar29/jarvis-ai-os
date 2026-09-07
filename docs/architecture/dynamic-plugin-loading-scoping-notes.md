@@ -1,9 +1,10 @@
-# Dynamic/out-of-tree plugin loading scoping notes — investigated, not decided
+# Dynamic/out-of-tree plugin loading scoping notes — investigated, then decided
 
-**Status: research only. No decision made, nothing built.** No code
-was written for this document — no port, no adapter, no application
-module, no capability, no ADR, no loader. Mirrors `m7-scoping-notes.md`'s
-own precedent exactly. Written 2026-09-07.
+**Status: research written 2026-09-07 (no decision, nothing built at
+that point); decided the same day — see "Decision" at the bottom.**
+No code was written for the original research pass — no port,
+adapter, application module, capability, ADR, or loader. Mirrors
+`m7-scoping-notes.md`'s own precedent exactly.
 
 ## The one finding that matters more than the options below
 
@@ -183,3 +184,48 @@ the user's own decision, exactly like `m7-scoping-notes.md`'s own
 precedent. The one finding stated at the top is not an option among
 these — it is a real constraint any final decision needs to be made
 with, not around.
+
+## Decision, 2026-09-07 — remains an accepted, documented limitation
+
+The user reviewed the real structural security tension this document
+leads with (same-process code cannot be trusted to honestly declare
+its own `Effect`/`Tier` — `CapabilityRegistry.register()` checks only
+for id collisions, never for honesty, and once arbitrary third-party
+code runs in this same process it already has full process privileges
+regardless of what capability it declares) and chose **not** to
+pursue either real mitigation investigated above — process-level
+sandboxing (reusing `BwrapSandboxAdapter`) or a structural tier floor
+for dynamically-loaded descriptors — at this time. No loading
+mechanism (entry points, a scanned directory, or explicit opt-in by
+name) will be built now either.
+
+**Stated plainly, as this document's own opening finding already
+insists on**: this is a real, standing, *accepted* limitation of the
+current in-process plugin model, not something silently implied as
+resolved or safe. `jarvis.plugin_api` remains real and importable
+(Phase 8, 2026-09-05) — a plugin author can *describe* a capability
+against a stable, `domain`-only surface — but nothing loads a
+described capability from outside this source tree, and the real
+security tension named above means that gap is not merely
+unimplemented convenience: it is the reason dynamic loading has not
+been built casually.
+
+**A real, considered decision, not an oversight**: no real
+out-of-tree plugin use case exists yet — there is no actual third
+party asking to distribute a JARVIS plugin today. Building any of the
+three loading mechanisms, let alone the mitigations, now would be
+speculative infrastructure for a need that has not materialized,
+mirroring Decisions 1 and 2's own identical reasoning above.
+
+**What would justify revisiting this**: a real, concrete request or
+need for out-of-tree plugin distribution. At that point, this
+document's own central finding still applies in full — any real
+loading mechanism chosen should be paired with at minimum the tier
+floor mitigation (cheap, closes the specific silent-`Tier.ALLOW`
+failure mode) before being considered safe to ship, and process-level
+sandboxing should be seriously weighed if the plugin ecosystem is
+expected to include code from parties the user has not personally
+reviewed.
+
+No code changed by this decision. See `docs/OPEN_DECISIONS.md`'s own
+corresponding entry for the master-index record.
