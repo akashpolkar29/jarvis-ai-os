@@ -249,6 +249,39 @@ out-of-tree plugin distribution) and the minimum bar named for
 whatever gets built at that point (at least the tier floor mitigation,
 seriously weighing process-level sandboxing).
 
+## 11. ~~Monthly application-folder drafting~~ -- RESOLVED/BUILT 2026-09-08
+
+**Resolved/built**: `job_assistance.prepare_application_folder`
+(`jarvis prepare-application`) implements the user's own real,
+existing workflow -- a per-month folder with a `CV` subfolder and a
+`Cover Letter` subfolder, each holding `.tex` files -- as a real,
+local capability. Creates the two subfolders and copies the user's
+own real CV/cover-letter template files into them verbatim (never
+parsing or rewriting their LaTeX content), then reuses
+`job_assistance.draft` completely unmodified to draft a real, separate
+cover-letter body fragment (`body.tex`) -- never auto-inserted into
+the copied template; the user adds one real `\input{body.tex}` line to
+his own template, once, by hand. Dynamic-effect classification mirrors
+`git.push`/`git.force_push`'s own already-accepted precedent exactly:
+`Effect.WRITE_LOCAL`/`Tier.CONFIRM` ordinarily, escalating to
+`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`/`Tier.MANUAL_ONLY` when
+`--force` is used to overwrite a real, already-existing application
+folder -- without `--force`, an existing folder fails cleanly before
+authorization even runs (`ApplicationFolderAlreadyExistsError`),
+proven by a real test that the first call's own content survives
+untouched.
+
+**No Overleaf integration of any kind exists or is planned**, stated
+plainly: confirmed via Overleaf's own documentation that git access is
+a paid-plan feature, and the user is on the Free plan. This is purely
+local file drafting -- uploading to Overleaf (or not) remains the
+user's own manual step afterward, unchanged from today. A real,
+explicit v1 scope limit, not an oversight: the CV template is copied
+only, never auto-tailored to the specific application; real tailoring
+of clearly-delimited CV fields is a separate, future decision that
+would first need the user to define a real, safe placeholder
+convention in his own template.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

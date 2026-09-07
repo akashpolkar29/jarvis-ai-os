@@ -27,13 +27,16 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-06 — this table previously listed 33 real subcommands;
-it now covers all 37, adding `plan run`/`email list`/`email read`
+**Updated 2026-09-08 — this table previously listed 33 real subcommands;
+it now covers all 38, adding `plan run`/`email list`/`email read`
 (three already-real, already-tested capabilities that had never had a
-CLI entry point until an earlier pass) and `job-search` (a new,
-minimal capability, real assisted browsing — see
+CLI entry point until an earlier pass), `job-search` (a new, minimal
+capability, real assisted browsing — see
 `docs/architecture/job-search-scoping-notes.md`'s own "Resolution"
-section for why this never reads/scrapes listing content).** Each
+section for why this never reads/scrapes listing content), and
+`prepare-application` (real, local-only application-folder drafting —
+no Overleaf integration exists or is planned; see that subcommand's
+own note below).** Each
 capability's own real effect/tier classification is documented at its
 own registration site in `kernel/capabilities.py`, not repeated here —
 this table exists to answer "what does this subcommand actually call,"
@@ -62,6 +65,7 @@ not to duplicate the policy engine's own reasoning.
 | `create-calendar-event` | `communications.create_calendar_event` (dynamic effect) | `--summary`, `--start`, `--end`, `--attendee` (repeatable), `--caldav-url`, `--username`, `--password-reference` |
 | `code <task> <repo-path>` | `coding.run_task` | `task`, `repo-path` |
 | `draft <task>` | `job_assistance.draft` (dynamic effect) | `task` |
+| `prepare-application <job title> <company>` | `job_assistance.prepare_application_folder` (dynamic effect, reuses `job_assistance.draft` internally for the body) | `job title`, `company`, `--base-dir`, `--month-label`, `--cv-template`, `--cover-letter-template`, `--task-description` (optional), `--force` (optional) |
 | `open-brave-url <url>` | `desktop.brave_open_url` | `url` |
 | `open-vscode-file <path>` | `desktop.vscode_open_file` | `path` |
 | `send-claude-text <text>` | `desktop.claude_app_send_text` | `text` |
@@ -98,6 +102,26 @@ read` require `--smtp-host` too even though it's functionally unused
 for these two read-only commands — one `ImapEmailAdapter` class
 implements the full `EmailPort` read+write surface, so its constructor
 always needs both hosts.
+
+`prepare-application` is real, local-only application-folder
+drafting, built on the user's own existing per-month/CV/Cover-Letter
+folder workflow. **No Overleaf integration of any kind exists or is
+planned** unless the user upgrades his real Overleaf plan (git access
+is a paid-plan feature) and asks for it separately — this creates
+folders and copies files entirely locally; uploading to Overleaf
+remains the user's own manual step, same as today. Real, explicit v1
+scope limits, stated plainly, not oversights: the CV template is
+copied verbatim only, never auto-tailored; the cover-letter template
+is likewise copied verbatim, and the drafted body text is written to
+a **separate** `body.tex` file, never inserted into the template
+automatically — the user must add one `\input{body.tex}` line to
+their own cover-letter template, once, by hand, wherever the body
+should appear. Without `--force`, an already-existing application
+folder (matching real, already-submitted application records) fails
+cleanly rather than being touched; `--force` floors this capability at
+`Tier.MANUAL_ONLY`, the same real precedent `git.force_push` already
+established for "the same action, but an explicit, destructive
+overwrite variant."
 
 `listen` does not take `--physical-confirmation-available`/
 `--remote-confirmation-available` — it asks a real, per-utterance

@@ -23,10 +23,16 @@ from typing import TYPE_CHECKING
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.domain.capability import Tier
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.reasoning import ProviderProfile
-from jarvis.kernel.job_assistance import authorize_and_draft_document
+from jarvis.kernel.job_assistance import (
+    ApplicationFolderAlreadyExistsError,
+    ApplicationFolderOutsideBaseDirectoryError,
+    authorize_and_draft_document,
+    authorize_and_prepare_application_folder,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -316,4 +322,236 @@ async def test_a_granted_draft_missing_its_console_override_is_caught_by_the_rea
             chain_path=tmp_path / "audit_chain.json",
             presentation=_FakePresentation(),
             draft_storage=_FakeDraftStorage(tmp_path),
+        )
+
+
+def _write_real_templates(tmp_path: Path) -> tuple[Path, Path]:
+    """Write two real, distinct, minimal .tex template files under tmp_path, return their paths."""
+    cv_template = tmp_path / "cv_template.tex"
+    cover_letter_template = tmp_path / "cover_letter_template.tex"
+    cv_template.write_text("\\documentclass{article}\n\\begin{document}\nCV\n\\end{document}\n")
+    cover_letter_template.write_text(
+        "\\documentclass{article}\n\\begin{document}\n% \\input{body.tex}\n\\end{document}\n"
+    )
+    return cv_template, cover_letter_template
+
+
+async def test_granted_prepare_creates_folders_and_copies_templates_verbatim(
+    tmp_path: Path,
+) -> None:
+    """Real folder/file creation: CV and Cover Letter templates copied byte-for-byte."""
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+    provider = _CountingProvider("local", "Dear Hiring Manager, real drafted body.")
+
+    outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, provider),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.decision.tier == Tier.CONFIRM
+    assert outcome.cv_path == base_dir / "September 2026" / "CV" / "main.tex"
+    assert outcome.cv_path is not None
+    assert outcome.cv_path.read_text() == cv_template.read_text()
+    assert outcome.cover_letter_template_path == (
+        base_dir / "September 2026" / "Cover Letter" / "main.tex"
+    )
+    assert outcome.cover_letter_template_path is not None
+    assert outcome.cover_letter_template_path.read_text() == cover_letter_template.read_text()
+    assert outcome.draft_decision is not None
+    assert outcome.draft_decision.granted is True
+    assert outcome.body_path == base_dir / "September 2026" / "Cover Letter" / "body.tex"
+    assert outcome.body_path is not None
+    assert outcome.body_path.read_text() == "Dear Hiring Manager, real drafted body."
+
+
+async def test_denied_prepare_never_creates_any_real_folder_or_file(tmp_path: Path) -> None:
+    """A denied outer gate (no confirmation) creates nothing at all -- not even a folder."""
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+
+    outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+
+    assert outcome.decision.granted is False
+    assert outcome.cv_path is None
+    assert outcome.cover_letter_template_path is None
+    assert outcome.draft_decision is None
+    assert outcome.body_path is None
+    assert not base_dir.exists()
+
+
+async def test_a_second_call_without_force_raises_and_leaves_the_first_call_untouched(
+    tmp_path: Path,
+) -> None:
+    """Idempotency safety check: a real, existing application folder is never silently touched."""
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+    chain_path = tmp_path / "audit_chain.json"
+
+    first_outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, _CountingProvider("local", "first real body")),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+    assert first_outcome.body_path is not None
+    original_body_content = first_outcome.body_path.read_text()
+
+    with pytest.raises(ApplicationFolderAlreadyExistsError):
+        await authorize_and_prepare_application_folder(
+            base_dir,
+            "September 2026",
+            cv_template,
+            cover_letter_template,
+            "Software Engineer",
+            "Acme Corp",
+            providers=((_PROFILE_A, _CountingProvider("local", "second real body")),),
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            presentation=_FakePresentation(),
+            console=_StubConsole(),
+        )
+
+    # The first call's real, already-drafted content survives untouched.
+    assert first_outcome.body_path.read_text() == original_body_content
+
+
+async def test_force_true_overwrites_and_requires_physical_confirmation_specifically(
+    tmp_path: Path,
+) -> None:
+    """force=True floors at Tier.MANUAL_ONLY -- remote confirmation alone must not suffice."""
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+    chain_path = tmp_path / "audit_chain.json"
+
+    await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, _CountingProvider("local", "first real body")),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+
+    # force=True, but only remote confirmation available -- must be denied.
+    remote_only_outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, _CountingProvider("local", "second real body")),),
+        force=True,
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+    assert remote_only_outcome.decision.granted is False
+    assert remote_only_outcome.decision.tier == Tier.MANUAL_ONLY
+
+    # force=True with real physical confirmation -- granted, real overwrite.
+    forced_outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, _CountingProvider("local", "second real body")),),
+        force=True,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+    assert forced_outcome.decision.granted is True
+    assert forced_outcome.decision.tier == Tier.MANUAL_ONLY
+    assert forced_outcome.body_path is not None
+    assert forced_outcome.body_path.read_text() == "second real body"
+
+
+async def test_a_missing_cv_template_fails_cleanly_with_no_partial_folder(tmp_path: Path) -> None:
+    """A missing/invalid template path fails cleanly -- never leaves a partial folder behind."""
+    _cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    missing_cv_template = tmp_path / "does-not-exist.tex"
+    base_dir = tmp_path / "base"
+
+    with pytest.raises(FileNotFoundError):
+        await authorize_and_prepare_application_folder(
+            base_dir,
+            "September 2026",
+            missing_cv_template,
+            cover_letter_template,
+            "Software Engineer",
+            "Acme Corp",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            presentation=_FakePresentation(),
+            console=_StubConsole(),
+        )
+
+    assert not base_dir.exists()
+
+
+async def test_month_label_escaping_the_base_dir_is_rejected(tmp_path: Path) -> None:
+    """A month_label containing path traversal cannot escape base_dir."""
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+
+    with pytest.raises(ApplicationFolderOutsideBaseDirectoryError):
+        await authorize_and_prepare_application_folder(
+            base_dir,
+            "../../etc",
+            cv_template,
+            cover_letter_template,
+            "Software Engineer",
+            "Acme Corp",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            presentation=_FakePresentation(),
+            console=_StubConsole(),
         )

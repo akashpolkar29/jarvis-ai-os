@@ -61,3 +61,35 @@ def draft_effect_for(classification: Classification) -> Effect:
     if classification is Classification.SECRET:
         return Effect.MEMORY_WRITE
     return Effect.WRITE_LOCAL
+
+
+def prepare_application_folder_effect_for(*, force: bool) -> Effect:
+    """Return the Effect a job_assistance.prepare_application_folder invocation must declare.
+
+    Mirrors `git.push`/`git.force_push`'s own real, already-accepted
+    precedent exactly (`kernel/capabilities.py`): the ordinary case is
+    a real, local write (`Effect.WRITE_LOCAL`, floors `Tier.CONFIRM`)
+    -- creating new folders and copying template files into them for
+    the first time. ``force=True`` means the caller is knowingly
+    overwriting a real, existing application folder's own content
+    (this capability's own pre-authorization guard,
+    `kernel/job_assistance.py`'s own `ApplicationFolderAlreadyExistsError`,
+    already refuses to reach authorization at all otherwise) --
+    exactly the same real-world shape `git.force_push` floors at
+    `Tier.MANUAL_ONLY` for (`Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`,
+    never remote-satisfiable), reused here unconditionally whenever
+    `force` is set, matching `git.force_push`'s own fixed-by-capability-
+    shape tier rather than trying to detect exactly which files would
+    be overwritten.
+
+    Args:
+        force: Whether the caller explicitly requested overwriting a
+            real, existing application folder's own content.
+
+    Returns:
+        ``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`` if ``force``,
+        else ``Effect.WRITE_LOCAL``.
+    """
+    if force:
+        return Effect.DESTRUCTIVE | Effect.IRREVERSIBLE
+    return Effect.WRITE_LOCAL

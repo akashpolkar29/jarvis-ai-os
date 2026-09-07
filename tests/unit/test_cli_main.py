@@ -62,7 +62,11 @@ from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
-from jarvis.kernel.job_assistance import DraftOutcome
+from jarvis.kernel.job_assistance import (
+    ApplicationFolderAlreadyExistsError,
+    DraftOutcome,
+    PrepareApplicationFolderOutcome,
+)
 from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
@@ -1773,6 +1777,256 @@ def test_draft_subcommand_requires_task() -> None:
         main(["draft"])
 
 
+_PREPARE_APPLICATION_COMMON_FLAGS = [
+    "--base-dir",
+    "/tmp/jarvis-test-applications",
+    "--month-label",
+    "September 2026",
+    "--cv-template",
+    "/tmp/jarvis-test-cv.tex",
+    "--cover-letter-template",
+    "/tmp/jarvis-test-cover-letter.tex",
+]
+
+
+def test_prepare_application_subcommand_routes_job_title_and_company(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[Path, str, Path, Path, str, str, str | None]] = []
+
+    async def fake_authorize_and_prepare_application_folder(  # noqa: PLR0913, PLR0917 -- mirrors the real signature
+        base_dir: Path,
+        month_label: str,
+        cv_template_path: Path,
+        cover_letter_template_path: Path,
+        job_title: str,
+        company: str,
+        task_description: str | None,
+        providers: object | None = None,  # noqa: ARG001
+        *,
+        force: bool,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> PrepareApplicationFolderOutcome:
+        received.append(
+            (
+                base_dir,
+                month_label,
+                cv_template_path,
+                cover_letter_template_path,
+                job_title,
+                company,
+                task_description,
+            )
+        )
+        decision = _make_decision(
+            granted=True, capability_id="job_assistance.prepare_application_folder"
+        )
+        return PrepareApplicationFolderOutcome(
+            decision=decision,
+            cv_path=tmp_path / "CV" / "main.tex",
+            cover_letter_template_path=tmp_path / "Cover Letter" / "main.tex",
+            draft_decision=_make_decision(granted=True, capability_id="job_assistance.draft"),
+            body_path=tmp_path / "Cover Letter" / "body.tex",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        fake_authorize_and_prepare_application_folder,
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [
+        (
+            Path("/tmp/jarvis-test-applications"),
+            "September 2026",
+            Path("/tmp/jarvis-test-cv.tex"),
+            Path("/tmp/jarvis-test-cover-letter.tex"),
+            "Software Engineer",
+            "Acme Corp",
+            None,
+        )
+    ]
+    assert exit_code == 0
+
+
+def test_prepare_application_subcommand_prints_the_real_paths_and_reminder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cv_path = tmp_path / "September 2026" / "CV" / "main.tex"
+    copied_cover_letter_template_path = tmp_path / "September 2026" / "Cover Letter" / "main.tex"
+    body_path = tmp_path / "September 2026" / "Cover Letter" / "body.tex"
+
+    async def fake_authorize_and_prepare_application_folder(  # noqa: PLR0913, PLR0917 -- mirrors the real signature
+        base_dir: Path,  # noqa: ARG001
+        month_label: str,  # noqa: ARG001
+        cv_template_path: Path,  # noqa: ARG001
+        cover_letter_template_path: Path,  # noqa: ARG001
+        job_title: str,  # noqa: ARG001
+        company: str,  # noqa: ARG001
+        task_description: str | None,  # noqa: ARG001
+        providers: object | None = None,  # noqa: ARG001
+        *,
+        force: bool,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> PrepareApplicationFolderOutcome:
+        decision = _make_decision(
+            granted=True, capability_id="job_assistance.prepare_application_folder"
+        )
+        return PrepareApplicationFolderOutcome(
+            decision=decision,
+            cv_path=cv_path,
+            cover_letter_template_path=copied_cover_letter_template_path,
+            draft_decision=_make_decision(granted=True, capability_id="job_assistance.draft"),
+            body_path=body_path,
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        fake_authorize_and_prepare_application_folder,
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "prepare-application: GRANTED" in captured.out
+    assert f"CV copied to: {cv_path}" in captured.out
+    assert f"Cover letter template copied to: {copied_cover_letter_template_path}" in captured.out
+    assert "cover-letter body drafting: GRANTED" in captured.out
+    assert f"Cover letter body drafted to: {body_path}" in captured.out
+    assert r"\input{body.tex}" in captured.out
+    assert exit_code == 0
+
+
+def test_prepare_application_subcommand_denied_prints_no_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_prepare_application_folder(  # noqa: PLR0913, PLR0917 -- mirrors the real signature
+        base_dir: Path,  # noqa: ARG001
+        month_label: str,  # noqa: ARG001
+        cv_template_path: Path,  # noqa: ARG001
+        cover_letter_template_path: Path,  # noqa: ARG001
+        job_title: str,  # noqa: ARG001
+        company: str,  # noqa: ARG001
+        task_description: str | None,  # noqa: ARG001
+        providers: object | None = None,  # noqa: ARG001
+        *,
+        force: bool,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> PrepareApplicationFolderOutcome:
+        decision = _make_decision(
+            granted=False, capability_id="job_assistance.prepare_application_folder"
+        )
+        return PrepareApplicationFolderOutcome(
+            decision=decision,
+            cv_path=None,
+            cover_letter_template_path=None,
+            draft_decision=None,
+            body_path=None,
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        fake_authorize_and_prepare_application_folder,
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "prepare-application: DENIED" in captured.out
+    assert "CV copied to:" not in captured.out
+    assert exit_code == 1
+
+
+def test_prepare_application_subcommand_already_exists_reports_a_clean_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The real idempotency safety check surfaces as a clean CLI error, not a crash."""
+
+    async def fake_authorize_and_prepare_application_folder(  # noqa: PLR0913, PLR0917 -- mirrors the real signature
+        base_dir: Path,  # noqa: ARG001
+        month_label: str,  # noqa: ARG001
+        cv_template_path: Path,  # noqa: ARG001
+        cover_letter_template_path: Path,  # noqa: ARG001
+        job_title: str,  # noqa: ARG001
+        company: str,  # noqa: ARG001
+        task_description: str | None,  # noqa: ARG001
+        providers: object | None = None,  # noqa: ARG001
+        *,
+        force: bool,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> PrepareApplicationFolderOutcome:
+        msg = "already has real application content -- pass force=True (CLI: --force)"
+        raise ApplicationFolderAlreadyExistsError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        fake_authorize_and_prepare_application_folder,
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "--force" in captured.err
+
+
+def test_prepare_application_subcommand_requires_job_title_company_and_flags() -> None:
+    with pytest.raises(SystemExit):
+        main(["prepare-application"])
+    with pytest.raises(SystemExit):
+        main(["prepare-application", "Software Engineer", "Acme Corp"])
+
+
 def test_plan_run_subcommand_executes_and_reports_each_step(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3096,6 +3350,7 @@ _TOP_LEVEL_COMMANDS = (
     "delete-file",
     "open-brave-url",
     "job-search",
+    "prepare-application",
     "open-vscode-file",
     "send-claude-text",
     "send-chatgpt-text",

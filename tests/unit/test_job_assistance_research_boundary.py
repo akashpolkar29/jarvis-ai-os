@@ -73,7 +73,16 @@ def test_no_research_orchestration_module_exists_under_job_assistance() -> None:
     """
     real_modules = {path.name for path in _JOB_ASSISTANCE_PACKAGE.glob("*.py")}
 
-    assert real_modules == {"__init__.py", "classification.py", "drafting.py"}
+    # folder_preparation.py (added later) is real, non-speculative
+    # application-folder-drafting orchestration -- not a research
+    # module, so its presence here does not contradict this test's own
+    # real finding.
+    assert real_modules == {
+        "__init__.py",
+        "classification.py",
+        "drafting.py",
+        "folder_preparation.py",
+    }
 
 
 async def test_opening_a_job_posting_application_page_calls_only_open_page(

@@ -78,6 +78,7 @@ precedent exactly.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -92,6 +93,9 @@ from jarvis.adapters.reasoning.local import PROFILE as LOCAL_PROVIDER_PROFILE
 from jarvis.adapters.reasoning.local import LocalReasoningAdapter
 from jarvis.adapters.tts import PiperTtsAdapter
 from jarvis.application.job_assistance.drafting import DraftWriteAuthorizer
+from jarvis.application.job_assistance.folder_preparation import (
+    PrepareApplicationFolderAuthorizer,
+)
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.application.reasoning.router import ModelRouter
 from jarvis.application.reasoning.unverifiable import UnverifiableTaskHandler
@@ -99,6 +103,8 @@ from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import build_default_registry
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from jarvis.domain.policy import Decision
     from jarvis.domain.reasoning import ProviderProfile
     from jarvis.ports.candidate_presentation import CandidatePresentationPort
@@ -232,3 +238,319 @@ async def authorize_and_draft_document(  # noqa: PLR0913 -- one per composition-
         storage.save(chain)
 
     return DraftOutcome(decision=decision, path=path)
+
+
+class ApplicationFolderOutsideBaseDirectoryError(Exception):
+    """Raised when ``month_label`` resolves outside the given ``base_dir`` entirely.
+
+    Not a :class:`~jarvis.domain.errors.JarvisError` subclass -- a
+    kernel-level operational rejection, mirroring
+    ``kernel/files.py``'s own ``PathOutsideAllowedScopeError`` exactly,
+    including its own real, accepted limitation: raised *before* any
+    real ``CapabilityInvocation`` is constructed, so this rejection is
+    not recorded in the audit chain.
+    """
+
+
+class ApplicationFolderAlreadyExistsError(Exception):
+    """Raised when a real application folder already has real content and ``force`` was not given.
+
+    Not a :class:`~jarvis.domain.errors.JarvisError` subclass -- a
+    kernel-level operational rejection, mirroring
+    ``kernel/files.py``'s own ``PathOutsideAllowedScopeError`` exactly:
+    raised *before* any real ``CapabilityInvocation`` is constructed,
+    so a caller who forgot ``--force`` gets a clean, immediate,
+    unambiguous error rather than a policy-engine ``DENIED`` decision
+    -- this is a caller-input mistake, not a real authorization
+    question. Same real, accepted limitation as
+    ``PathOutsideAllowedScopeError``: this rejection is not recorded in
+    the audit chain, since no invocation is ever constructed for it.
+    """
+
+
+def _resolve_within_base(path: Path, base_dir: Path) -> Path:
+    """Resolve ``path`` and confirm it falls within ``base_dir``.
+
+    A real, local re-implementation of ``kernel/files.py``'s own
+    ``_resolve_within_scope`` (that function is module-private to
+    ``kernel/files.py`` and never imported elsewhere in this codebase
+    -- duplicated here rather than imported, matching the existing,
+    established convention). Same real algorithm: catches a malicious
+    or mistaken month/year label (e.g. containing ``..``) attempting
+    to escape the user's own real, chosen ``base_dir``.
+
+    Raises:
+        ApplicationFolderOutsideBaseDirectoryError: If the resolved
+            path does not fall within ``base_dir``.
+    """
+    resolved = path.expanduser().resolve()
+    resolved_base = base_dir.expanduser().resolve()
+    if not resolved.is_relative_to(resolved_base):
+        msg = f"{resolved} is outside the allowed base directory {resolved_base}."
+        raise ApplicationFolderOutsideBaseDirectoryError(msg)
+    return resolved
+
+
+class _ExactPathDraftStorage:
+    r"""A `DraftStoragePort` that always writes to one fixed, real, exact path.
+
+    **A real, deliberate deviation from `DraftStoragePort`'s own
+    documented contract, stated plainly, not accidental**: the port's
+    own docstring guarantees a `save()` call never overwrites an
+    existing file (a real, incrementing suffix instead). This adapter
+    does the opposite on purpose -- it always writes to the exact
+    `target` path given, overwriting if already present -- because
+    `authorize_and_prepare_application_folder`'s own outer
+    authorization gate (see `ApplicationFolderAlreadyExistsError`)
+    already decided, before this ever runs, whether overwriting this
+    specific real file is acceptable (either nothing existed yet, or
+    the caller explicitly passed `force=True` and was authorized at
+    `Tier.MANUAL_ONLY` for exactly that). Reusing
+    `LocalDraftStorageAdapter`'s own generic, always-uniquify behavior
+    here would silently produce `body-1.tex`-style files instead of
+    the real, fixed `body.tex` path a hand-written
+    `\\input{body.tex}` line in the user's own template expects.
+    """
+
+    def __init__(self, target: Path) -> None:
+        """Store the one real, fixed path every real `save()` call writes to."""
+        self._target = target
+
+    def save(self, filename_hint: str, content: str) -> Path:
+        """Write `content` to the fixed `target` path, verbatim, overwriting if present."""
+        del filename_hint
+        self._target.parent.mkdir(parents=True, exist_ok=True)
+        self._target.write_text(content, encoding="utf-8")
+        return self._target
+
+
+@dataclass(frozen=True)
+class PrepareApplicationFolderOutcome:
+    """The result of one authorize_and_prepare_application_folder() call.
+
+    Attributes:
+        decision: The real Decision for the outer folder-preparation
+            gate -- durably appended to the chain regardless of
+            outcome (unless rejected before authorization; see
+            :class:`ApplicationFolderAlreadyExistsError`).
+        cv_path: Where the real CV template was copied to, if granted.
+            ``None`` if denied.
+        cover_letter_template_path: Where the real cover-letter
+            template was copied to, if granted. ``None`` if denied.
+        draft_decision: The real, separate Decision
+            ``job_assistance.draft``'s own, already-existing gate
+            produced for the cover-letter body text. ``None`` if the
+            outer gate was denied (the drafting step is never even
+            attempted in that case).
+        body_path: Where the real, drafted cover-letter body text was
+            written, if both the outer gate and the drafting step were
+            granted. ``None`` otherwise.
+    """
+
+    decision: Decision
+    cv_path: Path | None
+    cover_letter_template_path: Path | None
+    draft_decision: Decision | None
+    body_path: Path | None
+
+
+async def authorize_and_prepare_application_folder(  # noqa: PLR0913, PLR0917 -- one per real, distinct pass-through argument
+    base_dir: Path,
+    month_label: str,
+    cv_template_path: Path,
+    cover_letter_template_path: Path,
+    job_title: str,
+    company: str,
+    task_description: str | None = None,
+    providers: tuple[tuple[ProviderProfile, ReasoningPort], ...] | None = None,
+    *,
+    force: bool = False,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    presentation: CandidatePresentationPort | None = None,
+    console: ConsolePort | None = None,
+) -> PrepareApplicationFolderOutcome:
+    r"""Wire up the stack, authorize preparing one real application folder, run only if granted.
+
+    Real, structural action only -- never parses or rewrites the
+    copied template files' own LaTeX content (see this module's own
+    docstring's real v1 scope limit). Creates
+    ``<base_dir>/<month_label>/CV/main.tex`` and
+    ``<base_dir>/<month_label>/Cover Letter/main.tex`` (verbatim copies
+    of the two given templates) plus
+    ``<base_dir>/<month_label>/Cover Letter/body.tex`` (a real,
+    freshly-drafted LaTeX fragment, reusing ``authorize_and_draft_document``
+    completely unmodified) -- **never** inserted into the copied
+    template automatically. The user must add one real
+    ``\input{body.tex}`` line to their own cover-letter template, once,
+    by hand, wherever the body should appear -- a real, deliberate,
+    one-time manual step, not something this function does on the
+    user's behalf.
+
+    Args:
+        base_dir: The user's own real, chosen base directory for his
+            application folders. Required, no default -- this is the
+            user's own real, per-deployment folder location, the same
+            "no default, per-deployment" reasoning ``--imap-host``
+            already established for real, per-user configuration.
+        month_label: The real month/year label matching the user's own
+            existing naming convention (e.g. ``"September 2026"``).
+            Scope-checked against ``base_dir`` before anything else
+            happens (see :func:`_resolve_within_base`) -- a malicious
+            or mistaken label containing ``..`` cannot escape
+            ``base_dir``.
+        cv_template_path: The user's own real, existing local CV
+            template file. Copied verbatim; never parsed or modified.
+        cover_letter_template_path: The user's own real, existing local
+            cover-letter template file. Copied verbatim; never parsed
+            or modified.
+        job_title: The real job title this application is for --
+            folded into the real drafting task text.
+        company: The real company name this application is for --
+            folded into the real drafting task text.
+        task_description: Real, optional additional context for the
+            drafted cover-letter body (e.g. specific points to
+            emphasize). Folded into the real drafting task text
+            alongside ``job_title``/``company`` if given.
+        providers: Pass-through to ``authorize_and_draft_document``'s
+            own existing, optional parameter. Defaults to that
+            function's own real, local-only default.
+        force: Whether to overwrite a real, already-existing
+            application folder's own content. ``False`` by default --
+            see :class:`ApplicationFolderAlreadyExistsError` for what
+            happens without it, and
+            :func:`~jarvis.application.job_assistance.classification.prepare_application_folder_effect_for`
+            for the real tier consequence of setting it.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to both this call's own
+            outer gate and, separately, to the inner
+            ``authorize_and_draft_document`` call.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted -- both the
+            outer gate's and the inner drafting call's own real
+            decisions land in this same, single file.
+        presentation: Pass-through to ``authorize_and_draft_document``'s
+            own existing, optional parameter.
+        console: Pass-through to ``authorize_and_draft_document``'s own
+            existing, optional parameter; also used for this
+            function's own granted-outer-gate console line.
+
+    Returns:
+        A ``PrepareApplicationFolderOutcome`` -- see its own docstring.
+
+    Raises:
+        ApplicationFolderOutsideBaseDirectoryError: If ``month_label``
+            resolves outside ``base_dir`` entirely. Raised before any
+            authorization happens.
+        ApplicationFolderAlreadyExistsError: If the real target folder
+            already has real content and ``force`` was not given.
+            Raised before any authorization happens -- see that
+            exception's own docstring.
+        FileNotFoundError: If ``cv_template_path``/
+            ``cover_letter_template_path`` do not exist, once the outer
+            gate is granted.
+    """
+    resolved_base = base_dir.expanduser().resolve()
+    month_dir = _resolve_within_base(resolved_base / month_label, resolved_base)
+
+    cv_dir = month_dir / "CV"
+    cover_letter_dir = month_dir / "Cover Letter"
+    cv_target = cv_dir / "main.tex"
+    cover_letter_target = cover_letter_dir / "main.tex"
+    body_target = cover_letter_dir / "body.tex"
+
+    already_exists = cv_target.exists() or cover_letter_target.exists() or body_target.exists()
+    if already_exists and not force:
+        msg = (
+            f"{month_dir} already has real application content -- pass force=True "
+            "(CLI: --force) to overwrite it."
+        )
+        raise ApplicationFolderAlreadyExistsError(msg)
+
+    arguments: Tainted[Mapping[str, object]] = Tainted(
+        {
+            "month_label": month_label,
+            "cv_template_path": str(cv_template_path),
+            "cover_letter_template_path": str(cover_letter_template_path),
+            "job_title": job_title,
+            "company": company,
+            "force": force,
+        },
+        Provenance.user(),
+    )
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, build_default_registry(), confirmation=confirmation, clock=SystemClockAdapter()
+    )
+    authorizer = PrepareApplicationFolderAuthorizer(orchestrator)
+
+    decision = authorizer.authorize_prepare(
+        arguments, force=force, context=orchestrator.get_current_context()
+    )
+
+    cv_path: Path | None = None
+    saved_cover_letter_template_path: Path | None = None
+    draft_decision: Decision | None = None
+    body_path: Path | None = None
+    try:
+        if decision.granted:
+            # Both real template files are validated to exist *before*
+            # any real directory or file is created -- a missing
+            # template fails cleanly here, leaving no partial folder
+            # behind, rather than half-creating one directory/copy
+            # then raising on the second.
+            if not cv_template_path.is_file():
+                msg = f"CV template {cv_template_path} does not exist or is not a real file."
+                raise FileNotFoundError(msg)
+            if not cover_letter_template_path.is_file():
+                msg = (
+                    f"Cover letter template {cover_letter_template_path} does not exist "
+                    "or is not a real file."
+                )
+                raise FileNotFoundError(msg)
+
+            cv_dir.mkdir(parents=True, exist_ok=True)
+            cover_letter_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(cv_template_path, cv_target)
+            shutil.copyfile(cover_letter_template_path, cover_letter_target)
+            cv_path = cv_target
+            saved_cover_letter_template_path = cover_letter_target
+
+            task_text = (
+                f"Write a tailored cover letter body for the {job_title} position at {company}."
+            )
+            if task_description:
+                task_text = f"{task_text} {task_description}"
+
+            draft_outcome = await authorize_and_draft_document(
+                task_text,
+                providers,
+                physical_confirmation_available=physical_confirmation_available,
+                remote_confirmation_available=remote_confirmation_available,
+                chain_path=chain_path,
+                presentation=presentation,
+                draft_storage=_ExactPathDraftStorage(body_target),
+                console=console,
+            )
+            draft_decision = draft_outcome.decision
+            body_path = draft_outcome.path
+
+            _console(console).show_line(f"job_assistance.prepare_application_folder: {month_dir}")
+    finally:
+        storage.save(chain)
+
+    return PrepareApplicationFolderOutcome(
+        decision=decision,
+        cv_path=cv_path,
+        cover_letter_template_path=saved_cover_letter_template_path,
+        draft_decision=draft_decision,
+        body_path=body_path,
+    )

@@ -201,7 +201,12 @@ from jarvis.kernel.files import (
     authorize_and_move_file,
     authorize_and_read_file,
 )
-from jarvis.kernel.job_assistance import authorize_and_draft_document
+from jarvis.kernel.job_assistance import (
+    ApplicationFolderAlreadyExistsError,
+    ApplicationFolderOutsideBaseDirectoryError,
+    authorize_and_draft_document,
+    authorize_and_prepare_application_folder,
+)
 from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
 from jarvis.kernel.memory import (
     authorize_and_backup_memory,
@@ -421,6 +426,69 @@ def _add_reasoning_parsers(
         help="Where the real drafted file is saved (default: ./drafts).",
     )
     _add_common_flags(draft_parser)
+
+
+def _add_prepare_application_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Add the prepare-application subparser -- real, local-only application-folder drafting.
+
+    No Overleaf integration of any kind (the user is on Overleaf's Free
+    plan, which does not support git access) -- this only creates real,
+    local folders, copies the user's own real template files verbatim,
+    and drafts a real, separate cover-letter body fragment. Takes no
+    cloud-provider override flag, the identical reasoning
+    `_add_reasoning_parsers`'s own docstring already gives for
+    `code`/`draft` (this reuses `job_assistance.draft` internally,
+    unmodified).
+    """
+    prepare_parser = subparsers.add_parser(
+        "prepare-application",
+        help=(
+            "Create a real, local CV/Cover Letter application folder from your own "
+            "real templates, and draft a real cover-letter body fragment."
+        ),
+    )
+    prepare_parser.add_argument("job_title", help="The real job title this application is for.")
+    prepare_parser.add_argument("company", help="The real company name this application is for.")
+    prepare_parser.add_argument(
+        "--base-dir",
+        type=Path,
+        required=True,
+        help="Your own real, chosen base directory for application folders. No default.",
+    )
+    prepare_parser.add_argument(
+        "--month-label",
+        required=True,
+        help="The real month/year label, matching your own naming convention "
+        '(e.g. "September 2026"). No default.',
+    )
+    prepare_parser.add_argument(
+        "--cv-template",
+        type=Path,
+        required=True,
+        help="Your own real, existing local CV template file. Copied verbatim.",
+    )
+    prepare_parser.add_argument(
+        "--cover-letter-template",
+        type=Path,
+        required=True,
+        help="Your own real, existing local cover-letter template file. Copied verbatim.",
+    )
+    prepare_parser.add_argument(
+        "--task-description",
+        default=None,
+        help="Real, optional extra context for the drafted cover-letter body.",
+    )
+    prepare_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite a real, already-existing application folder's own content. "
+            "Without this, an existing folder fails cleanly rather than being touched."
+        ),
+    )
+    _add_common_flags(prepare_parser)
 
 
 def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -707,6 +775,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
     _add_job_search_parsers(subparsers)
+    _add_prepare_application_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -1073,6 +1142,47 @@ def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str |
     return draft_outcome.decision, (str(draft_outcome.path) if draft_outcome.path else None)
 
 
+def _run_prepare_application_subcommand(
+    args: argparse.Namespace,
+) -> _CommandOutcome:
+    """Dispatch ``prepare-application``, returning a full ``_CommandOutcome``.
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_reasoning_subcommand` is. Omits ``providers`` entirely,
+    the same real, deliberate scope limit `_add_prepare_application_parsers`'s
+    own docstring already states -- `authorize_and_prepare_application_folder`'s
+    own real, local-only default (via `authorize_and_draft_document`)
+    resolves automatically. `authorize_and_prepare_application_folder`
+    is ``async``, so this wraps its own call in ``asyncio.run``, the
+    same shape `_run_reasoning_subcommand` already uses.
+    """
+    outcome = asyncio.run(
+        authorize_and_prepare_application_folder(
+            args.base_dir,
+            args.month_label,
+            args.cv_template,
+            args.cover_letter_template,
+            args.job_title,
+            args.company,
+            args.task_description,
+            force=args.force,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+    )
+    return _CommandOutcome(
+        outcome.decision,
+        "prepare-application",
+        application_cv_path=(str(outcome.cv_path) if outcome.cv_path else None),
+        application_cover_letter_template_path=(
+            str(outcome.cover_letter_template_path) if outcome.cover_letter_template_path else None
+        ),
+        application_draft_decision=outcome.draft_decision,
+        application_body_path=(str(outcome.body_path) if outcome.body_path else None),
+    )
+
+
 def _run_planning_subcommand(
     args: argparse.Namespace,
 ) -> tuple[Decision, tuple[PlanStepRecord, ...] | None]:
@@ -1336,6 +1446,10 @@ class _CommandOutcome:
     plan_step_records: tuple[PlanStepRecord, ...] | None = None
     email_summaries: tuple[Tainted[EmailSummary], ...] | None = None
     email_message: Tainted[EmailMessage] | None = None
+    application_cv_path: str | None = None
+    application_cover_letter_template_path: str | None = None
+    application_draft_decision: Decision | None = None
+    application_body_path: str | None = None
 
 
 def _run_basic_subcommand(
@@ -1426,6 +1540,8 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
     if args.command == "job-search":
         decision = _run_job_search_subcommand(args)
         return _CommandOutcome(decision, args.command)
+    if args.command == "prepare-application":
+        return _run_prepare_application_subcommand(args)
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
@@ -1495,6 +1611,19 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
         print(f"Received: {message.received_at}")
         print()
         print(message.body)
+    if outcome.application_cv_path is not None:
+        print(f"CV copied to: {outcome.application_cv_path}")
+        print(f"Cover letter template copied to: {outcome.application_cover_letter_template_path}")
+        if outcome.application_draft_decision is not None:
+            draft_status = "GRANTED" if outcome.application_draft_decision.granted else "DENIED"
+            print(f"cover-letter body drafting: {draft_status}")
+        if outcome.application_body_path is not None:
+            print(f"Cover letter body drafted to: {outcome.application_body_path}")
+            print(
+                r'Reminder: add one "\input{body.tex}" line to your own cover-letter '
+                "template, once, by hand, wherever the body should appear -- this is "
+                "never done automatically."
+            )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1537,6 +1666,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         GitCommandFailedError,
         PlanningError,
         PlanValidationError,
+        ApplicationFolderAlreadyExistsError,
+        ApplicationFolderOutsideBaseDirectoryError,
         OSError,
         UnicodeDecodeError,
         KeyError,
