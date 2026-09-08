@@ -12,18 +12,59 @@ below is decided, update its own source doc first, then remove or
 mark it resolved here -- this file should never be the place a
 decision is first recorded.
 
-## 1. M3's own tag
+## Honest status snapshot, 2026-09-08
 
-**What's needed**: cut a real `v0.X` git tag for Milestone 3 (desktop
-control), which has been code-complete since WP-56 but was
-deliberately left untagged while M4/M5/M6 were tagged out of
-sequential order around it.
+Not a new task list -- a real, single-glance picture of where things
+actually stand right now, for future reference. Kept current at each
+pass that touches this file; not re-derived from scratch elsewhere.
 
-**Already investigated**: nothing to investigate -- this is a pure
-action, not a design question. `CLAUDE.md`'s own opening line states
-plainly that M3's tag "remains a deliberately separate, later action"
-no pass has touched. See `CHANGELOG.md`'s own tagged-release entries
-for what M4/M5/M6 shipped around it.
+**Real and done**: the M0-M2 kernel core; M3 (desktop control,
+`v0.7.0`); M4 (memory/retrieval); M5 (browser automation + coding
+agent); M6a (communications) and M6b (job assistance); real task
+planning (`planning.run_plan`, ADR-0062); and the real
+"job-application automation" feature set -- search
+(`job_search.open_results`), draft (`job_assistance.prepare_application_folder`,
+`--record`), and track (the applied-jobs ledger) -- all tagged
+`v0.8.0`, 2026-09-08. All items 1-4 and 6-13 below are resolved,
+decided, or built; only item 5 (two of the audit chain's four real
+structural gaps) remains genuinely open.
+
+**Standing, accepted limitations** (not bugs -- real, named, deliberate
+scope boundaries, none silently dropped): CV templates are always
+copied verbatim, never auto-tailored; no Overleaf integration exists;
+job-application submission is never automated (ADR-0058); the audit
+chain's non-atomic writes and cross-process race remain open (item 5);
+`piper-tts` (GPL) and the `icalendar-searcher` transitive dependency
+(AGPL, its real code path empirically avoided but the package itself
+still present) are both kept, by real, direct user decision;
+`job-application list`'s broad-recall-then-filter approximation can
+miss an old entry in a very large store; two CLI naming
+inconsistencies (`memory`'s nested shape, `fs.read_file`'s bare
+`read`) are left as-is.
+
+**What only the user can do next**: the three real, physical
+verifications no unattended pass can supply (a live, end-to-end voice
+loop utterance; Terminal's synthetic-typing RemoteDesktop portal
+dialog; installing/testing the ChatGPT desktop app, if one ever ships
+for Linux); deciding whether CV auto-tailoring is ever worth building,
+and if so, defining a real, safe placeholder convention in his own
+template first; deciding whether to pursue Overleaf integration if he
+ever upgrades off the Free plan; a real architecture decision on the
+audit chain's two remaining structural gaps (item 5).
+
+## 1. ~~M3's own tag~~ -- RESOLVED 2026-09-06
+
+**Resolved**: M3 (desktop control) was tagged `v0.7.0`, 2026-09-06, a
+real, direct user decision, with its two real, accepted gaps (Terminal's
+synthetic-typing portal call has never fired; the ChatGPT desktop app
+was never tested) stated plainly in the tag's own message, mirroring
+how M2/M5 were each tagged with accepted gaps. **A real, one-off drift
+found and fixed while writing this file's own Task 5 status summary**:
+this item was left claiming the tag was still needed for two days
+after it was actually cut -- no pass had come back to close it out
+until now. See `CHANGELOG.md`'s own `[0.7.0]` entry (itself added
+retroactively the same day `v0.8.0` was tagged) and `git show
+v0.7.0` for the real, full tag message.
 
 ## 2. ~~ADR-0061 (memory backup/restore classification)~~ -- RESOLVED 2026-09-05
 
@@ -323,6 +364,33 @@ Effect/tier: both functions reuse `authorize_and_remember`/
 classification to review -- `record` is exactly `memory.write`'s
 (`Effect.WRITE_LOCAL`/`Tier.CONFIRM`, `Classification.PUBLIC`); `list`
 is exactly `memory.retrieve`'s (`Effect.READ_LOCAL`/`Tier.ALLOW`).
+
+## 13. ~~prepare-application --record wiring, README workflow docs, v0.8.0 tag~~ -- RESOLVED/BUILT 2026-09-08
+
+**Resolved/built**: `prepare-application` gained a real, additive
+`--record` flag -- a granted folder creation also calls
+`job_application.record` automatically (`status=drafted`, the real
+folder just created, derived from `outcome.cv_path`'s own parent's
+parent). Omitting it leaves behavior exactly as before, proven by a
+real test that the ledger function is never even called without the
+flag. A real, end-to-end kernel test (not just a CLI-mock test) proves
+the full prepare -> record -> list chain recovers the correct folder
+path.
+
+A real "Job-application workflow" section was added to `README.md`
+(search -> draft `--record` -> track, submission always manual --
+ADR-0058), and a real drift was found and fixed while verifying
+`docs/protocol/README.md`'s subcommand table rather than assuming it
+was current: its own summary line had miscounted 38 where the table
+itself always correctly listed 39 (now 41, after `job-application
+record`/`list`).
+
+This whole real feature set (search/draft/track) plus the real M7
+task-planning implementation and the "7 real decisions" pass was
+tagged `v0.8.0`, 2026-09-08, a real, direct user decision -- see
+`CHANGELOG.md`'s own `[0.8.0]` entry and the tag's own real, annotated
+message (`git show v0.8.0`) for the full account, including the five
+real, standing limits it names plainly.
 
 ## Maintaining this index
 
