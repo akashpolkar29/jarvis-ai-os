@@ -15,7 +15,9 @@ import pytest
 
 from jarvis.kernel.job_search import (
     JobSearchSite,
+    authorize_and_find_careers_page,
     authorize_and_open_job_search,
+    build_careers_search_url,
     build_job_search_url,
 )
 from jarvis.ports.brave import BrowserLaunchFailedError
@@ -152,3 +154,55 @@ def test_a_denied_decision_is_still_durably_saved(tmp_path: Path) -> None:
     )
 
     assert chain_path.exists()
+
+
+def test_build_careers_search_url_uses_duckduckgo_with_company_and_careers() -> None:
+    """DuckDuckGo, not Google -- see kernel/job_search.py's own module docstring for why."""
+    url = build_careers_search_url("Boston Dynamics")
+
+    assert url == "https://duckduckgo.com/?q=Boston+Dynamics+careers"
+
+
+def test_granted_careers_page_call_really_opens_the_real_built_url(tmp_path: Path) -> None:
+    browser = _StubBrowser()
+
+    decision = authorize_and_find_careers_page(
+        "Boston Dynamics",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser=browser,
+    )
+
+    assert decision.granted is True
+    assert browser.calls == ["https://duckduckgo.com/?q=Boston+Dynamics+careers"]
+
+
+def test_denied_careers_page_call_never_builds_or_opens_a_url(tmp_path: Path) -> None:
+    browser = _StubBrowser()
+
+    decision = authorize_and_find_careers_page(
+        "Boston Dynamics",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser=browser,
+    )
+
+    assert decision.granted is False
+    assert browser.calls == []
+
+
+def test_careers_page_remote_confirmation_alone_is_sufficient_to_grant(tmp_path: Path) -> None:
+    browser = _StubBrowser()
+
+    decision = authorize_and_find_careers_page(
+        "Boston Dynamics",
+        physical_confirmation_available=False,
+        remote_confirmation_available=True,
+        chain_path=tmp_path / "audit_chain.json",
+        browser=browser,
+    )
+
+    assert decision.granted is True
+    assert browser.calls == ["https://duckduckgo.com/?q=Boston+Dynamics+careers"]

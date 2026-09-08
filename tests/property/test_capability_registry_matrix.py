@@ -77,6 +77,7 @@ _EXPECTED_TIER_BY_CAPABILITY: dict[str, Tier] = {
     "git.force_push": Tier.MANUAL_ONLY,
     "git.push": Tier.CONFIRM,
     "git.status": Tier.ALLOW,
+    "job_search.find_careers_page": Tier.CONFIRM,
     "job_search.open_results": Tier.CONFIRM,
     "memory.backup": Tier.CONFIRM,
     "memory.forget": Tier.MANUAL_ONLY,

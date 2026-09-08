@@ -27,6 +27,7 @@ from jarvis.kernel.capabilities import (
     GIT_FORCE_PUSH_CAPABILITY_ID,
     GIT_PUSH_CAPABILITY_ID,
     GIT_STATUS_CAPABILITY_ID,
+    JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
     JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     LIST_DIR_CAPABILITY_ID,
     MEMORY_BACKUP_CAPABILITY_ID,
@@ -47,7 +48,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 40
+_EXPECTED_CAPABILITY_COUNT = 41
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -107,6 +108,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         CALENDAR_LIST_EVENTS_CAPABILITY_ID,
         PLANNING_RUN_PLAN_CAPABILITY_ID,
         JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+        JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
     }
     assert len(registry) == _EXPECTED_CAPABILITY_COUNT
 

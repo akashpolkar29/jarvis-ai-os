@@ -81,6 +81,7 @@ EMAIL_READ_MESSAGE_CAPABILITY_ID = CapabilityId("communications.read_email")
 CALENDAR_LIST_EVENTS_CAPABILITY_ID = CapabilityId("communications.list_calendar_events")
 PLANNING_RUN_PLAN_CAPABILITY_ID = CapabilityId("planning.run_plan")
 JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID = CapabilityId("job_search.open_results")
+JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID = CapabilityId("job_search.find_careers_page")
 
 
 def build_default_registry() -> CapabilityRegistry:
@@ -523,6 +524,25 @@ def build_default_registry() -> CapabilityRegistry:
                 "Indeed's own Terms of Service prohibit automated scraping/bot "
                 "access, structurally enforced by "
                 "tests/meta/test_job_search_no_content_reading.py."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
+            effects=Effect.EXECUTE,
+            description=(
+                "Build a real '<company> careers' search-engine query URL and open "
+                "it in the user's own, real, ordinary Brave browser for the user to "
+                "pick the real careers page themselves -- same Effect.EXECUTE/"
+                "Tier.CONFIRM classification and same BravePort mechanism as "
+                "job_search.open_results, reused for the identical real reason "
+                "(no scraping, a human does the picking). Uses DuckDuckGo, not "
+                "Google -- Google's own robots.txt disallows /search broadly with "
+                "no jobs-specific carve-out and its ToS conditions automated access "
+                "on robots.txt compliance, while DuckDuckGo's robots.txt "
+                "affirmatively allows the query path "
+                "(docs/architecture/job-search-scoping-notes.md's own addendum)."
             ),
         )
     )

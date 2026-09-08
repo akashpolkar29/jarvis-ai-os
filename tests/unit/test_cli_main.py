@@ -3153,6 +3153,77 @@ def test_job_search_subcommand_rejects_an_invalid_site() -> None:
         main(["job-search", "python developer", "--site", "monster"])
 
 
+def test_find_careers_page_subcommand_routes_the_company(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_find_careers_page(
+        company: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(company)
+        return _make_decision(granted=True, capability_id="job_search.find_careers_page")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_find_careers_page",
+        fake_authorize_and_find_careers_page,
+    )
+
+    exit_code = main(
+        [
+            "find-careers-page",
+            "Boston Dynamics",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["Boston Dynamics"]
+    assert exit_code == 0
+
+
+def test_find_careers_page_subcommand_prints_the_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_find_careers_page(
+        company: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        return _make_decision(granted=False, capability_id="job_search.find_careers_page")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_find_careers_page",
+        fake_authorize_and_find_careers_page,
+    )
+
+    exit_code = main(
+        [
+            "find-careers-page",
+            "Boston Dynamics",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "find-careers-page: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_find_careers_page_subcommand_requires_company() -> None:
+    with pytest.raises(SystemExit):
+        main(["find-careers-page"])
+
+
 def test_git_push_subcommand_requires_repo_dir_remote_and_branch() -> None:
     with pytest.raises(SystemExit):
         main(["git-push", "some-repo"])
@@ -4022,6 +4093,7 @@ _TOP_LEVEL_COMMANDS = (
     "delete-file",
     "open-brave-url",
     "job-search",
+    "find-careers-page",
     "prepare-application",
     "open-vscode-file",
     "send-claude-text",

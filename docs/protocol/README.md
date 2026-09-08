@@ -27,15 +27,24 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 — this table previously listed 39 real subcommands
-(a real, one-off miscount briefly stated it as 38 here; the table
-itself was always correct, only this summary line was off by one —
-counted directly by hand, not assumed, while fixing this); it now
-covers 41, adding `job-application record`/`job-application list` (a
-real, thin structured-content convention over the already-real
-`memory.write`/`memory.retrieve` capabilities, not a new capability of
-their own — see that subcommand's own note below). It previously
-covered 33, before that, adding `plan run`/`email list`/`email read`
+**Updated 2026-09-08 (later the same day) — this table now covers 46
+real subcommands, adding `browser open`/`browser screenshot`/`browser
+inspect-dom`/`browser close` (real entry points for four already-real,
+already-tested capabilities used internally but with no CLI of their
+own until now — a real, named gap from the dead-code sweep) and
+`find-careers-page` (a real "<company> careers" DuckDuckGo search,
+opened in the user's own, real, ordinary Brave browser, the identical
+assisted-browsing shape `job-search` already uses — see
+`kernel/job_search.py`'s own module docstring for why DuckDuckGo, not
+Google). Earlier the same day it went from 39 (a real, one-off
+miscount briefly stated it as 38 here; the table itself was always
+correct, only this summary line was off by one — counted directly by
+hand, not assumed, while fixing this) to 41, adding `job-application
+record`/`job-application list` (a real, thin structured-content
+convention over the already-real `memory.write`/`memory.retrieve`
+capabilities, not a new capability of their own — see that
+subcommand's own note below). It previously covered 33, before that,
+adding `plan run`/`email list`/`email read`
 (three already-real, already-tested capabilities that had never had a
 CLI entry point until an earlier pass), `job-search` (a new, minimal
 capability, real assisted browsing — see
@@ -90,6 +99,11 @@ not to duplicate the policy engine's own reasoning.
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `job-search <keywords>` | `job_search.open_results` | `keywords`, `--site linkedin\|indeed` (required), `--location` (optional) |
+| `find-careers-page <company>` | `job_search.find_careers_page` | `company` |
+| `browser open <url>` | `browser.open_page` | `url` |
+| `browser screenshot` | `browser.screenshot` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required, from a prior `browser open`), `--output` (required) |
+| `browser inspect-dom` | `browser.inspect_dom` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required), `--selector` (required) |
+| `browser close` | `browser.close_page` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required) |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
 

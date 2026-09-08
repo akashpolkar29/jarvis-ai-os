@@ -52,6 +52,34 @@ See `tests/meta/test_job_search_no_content_reading.py` for the real,
 mechanical proof, mirroring `test_job_assistance_no_submission.py`'s
 own established AST-scan pattern for ADR-0058's identical shape of
 guarantee.
+
+**`job_search.find_careers_page` (added alongside `job_search.open_results`,
+same module, same real mechanism)**: "given a company name, open a
+real web search for '<company> careers'" -- the same real,
+assisted-browsing shape as `open_results`, not a scraper. **A real,
+deliberate deviation from this addition's own originating prompt,
+reported here rather than silently made**, mirroring this module's
+own already-established precedent above: the prompt named
+`authorize_and_open_page` (headless CDP) as the function to reuse and
+also said "the user picks the real careers page themselves from what
+opens" -- structurally incompatible with each other for the identical
+reason already documented above (headless means invisible; a human
+cannot pick from a page nothing renders on screen). Uses `BravePort`/
+`BraveCliAdapter` instead, exactly like `open_results`. **A second
+real deviation**: the prompt's own working example named Google's
+search page. Investigated directly (`docs/architecture/job-search-scoping-notes.md`'s
+own 2026-09-08 addendum): Google's `robots.txt` disallows `/search`
+broadly with no jobs-specific carve-out, and Google's own Terms of
+Service explicitly condition the automated-access prohibition on
+robots.txt compliance -- the same real category of finding that ruled
+out LinkedIn/Indeed. DuckDuckGo's `robots.txt`, fetched live, instead
+affirmatively `Allow`s the query path (`Allow: /?*`, overriding the
+general query-string disallow) and its Terms of Service page (fetched
+live) contains no automated-access prohibition of its own, deferring
+to a separate Acceptable Use Policy this investigation could not
+independently fetch and quote -- a real, stated limitation, not
+glossed over. Given the affirmative `robots.txt` allowance and the
+absence of a found ToS clause, DuckDuckGo is used instead of Google.
 """
 
 from __future__ import annotations
@@ -66,7 +94,11 @@ from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Provenance, Tainted
-from jarvis.kernel.capabilities import JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.capabilities import (
+    JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
+    JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+    build_default_registry,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -174,6 +206,84 @@ def authorize_and_open_job_search(  # noqa: PLR0913 -- one per real, distinct pa
     try:
         if decision.granted:
             url = build_job_search_url(site, keywords, location)
+            real_browser = browser if browser is not None else BraveCliAdapter()
+            real_browser.open_url(url)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+def build_careers_search_url(company: str) -> str:
+    """Build a real DuckDuckGo search URL for "<company> careers" -- pure, no I/O.
+
+    DuckDuckGo, not Google -- see this module's own docstring for the
+    real, live robots.txt/ToS investigation behind that choice.
+
+    Args:
+        company: The real company name, URL-encoded exactly as given
+            -- not validated or parsed here.
+
+    Returns:
+        A real, complete, ready-to-open DuckDuckGo search URL.
+    """
+    return f"https://duckduckgo.com/?{urlencode({'q': f'{company} careers'})}"
+
+
+def authorize_and_find_careers_page(
+    company: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    browser: BravePort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize opening a real "<company> careers" search, open if granted.
+
+    Same real mechanism as :func:`authorize_and_open_job_search` --
+    build a URL, hand it to the user's own, real, ordinary Brave
+    browser, never read the result. See this module's own docstring
+    for why DuckDuckGo, not the originating prompt's own named Google
+    example.
+
+    Args:
+        company: The real company name to search "<company> careers" for.
+        physical_confirmation_available: Whether a human is physically
+            present, passed straight through to the constructed
+            ``ManualConfirmationAdapter``.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        browser: The port the built URL is sent to if granted. Defaults
+            to a real ``BraveCliAdapter``. Overridable for tests.
+
+    Returns:
+        The ``Decision`` for this call -- durably appended to the
+        chain regardless of outcome. If granted, ``browser`` has
+        already received ``open_url(url)`` by the time this returns
+        (barring an exception it raised); if denied, it was never
+        touched at all, and no URL was ever built into a real request.
+    """
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
+
+    decision = orchestrator.authorize_by_id(
+        JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
+        Tainted({"company": company}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    try:
+        if decision.granted:
+            url = build_careers_search_url(company)
             real_browser = browser if browser is not None else BraveCliAdapter()
             real_browser.open_url(url)
     finally:

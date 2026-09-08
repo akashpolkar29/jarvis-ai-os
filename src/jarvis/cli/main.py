@@ -219,7 +219,11 @@ from jarvis.kernel.job_assistance import (
     authorize_and_draft_document,
     authorize_and_prepare_application_folder,
 )
-from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
+from jarvis.kernel.job_search import (
+    JobSearchSite,
+    authorize_and_find_careers_page,
+    authorize_and_open_job_search,
+)
 from jarvis.kernel.memory import (
     authorize_and_backup_memory,
     authorize_and_forget,
@@ -655,15 +659,16 @@ def _add_browser_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
 def _add_job_search_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    """Add the job-search subparser -- a real, invocable job_search.open_results, flat.
+    """Add the job-search/find-careers-page subparsers -- both real, flat, assisted-browsing only.
 
     Mirrors ``open-brave-url``'s own flat-subcommand shape, not
-    ``plan``/``memory``'s nested one -- job_search.open_results is a
-    single action, not a family of related subcommands. Opens a real
-    search-results URL in the user's own, real, ordinary Brave browser
-    for the user to search/read themselves -- never reads, scrapes, or
-    extracts any page content (see ``kernel/job_search.py``'s own
-    module docstring for the full, real reasoning).
+    ``plan``/``memory``'s nested one -- each is a single action, not a
+    family of related subcommands. Both open a real, real-only URL in
+    the user's own, real, ordinary Brave browser for the user to
+    search/read themselves -- neither reads, scrapes, or extracts any
+    page content (see ``kernel/job_search.py``'s own module docstring
+    for the full, real reasoning, including why ``find-careers-page``
+    uses DuckDuckGo rather than Google).
     """
     job_search_parser = subparsers.add_parser(
         "job-search", help="Open a real LinkedIn/Indeed job-search results page in Brave."
@@ -679,6 +684,13 @@ def _add_job_search_parsers(
         "--location", default=None, help="An optional real location filter."
     )
     _add_common_flags(job_search_parser)
+
+    careers_parser = subparsers.add_parser(
+        "find-careers-page",
+        help="Open a real '<company> careers' search (DuckDuckGo) in Brave.",
+    )
+    careers_parser.add_argument("company", help="The real company name.")
+    _add_common_flags(careers_parser)
 
 
 def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1499,6 +1511,21 @@ def _run_job_search_subcommand(args: argparse.Namespace) -> Decision:
     )
 
 
+def _run_find_careers_page_subcommand(args: argparse.Namespace) -> Decision:
+    """Dispatch ``find-careers-page``, returning its real Decision.
+
+    `authorize_and_find_careers_page` is synchronous, the identical
+    shape `_run_job_search_subcommand` already documents, for the same
+    real reason.
+    """
+    return authorize_and_find_careers_page(
+        args.company,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+
+
 def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirEntry, ...] | None]:
     """Dispatch ``list-dir``/``move-file``/``delete-file``, returning (decision, dir_entries).
 
@@ -1767,7 +1794,7 @@ def _run_basic_subcommand(
     return _CommandOutcome(outcome.decision, args.command, content=outcome.content)
 
 
-def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mirrors this module's flat dispatch shape
+def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcommand family, mirrors this module's flat dispatch shape
     args: argparse.Namespace,
 ) -> _CommandOutcome:
     """Route ``args.command`` to its matching kernel call, gathering everything to print.
@@ -1816,6 +1843,9 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
         return _run_browser_subcommand(args)
     if args.command == "job-search":
         decision = _run_job_search_subcommand(args)
+        return _CommandOutcome(decision, args.command)
+    if args.command == "find-careers-page":
+        decision = _run_find_careers_page_subcommand(args)
         return _CommandOutcome(decision, args.command)
     if args.command == "prepare-application":
         return _run_prepare_application_subcommand(args)
