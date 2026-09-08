@@ -15,7 +15,65 @@ replacement for either.
 
 ## [Unreleased]
 
-Nothing merged to `main` since `v0.8.0` was tagged.
+Nothing merged to `main` since `v0.9.0` was tagged.
+
+## [0.9.0] - 2026-09-08
+
+Browser/filesystem/calendar CLI completeness, voice grammar expansion,
+and a real end-to-end proof -- three real, sequential prompts tagged
+together. Full detail in `CLAUDE.md`'s own "Current Status" section.
+
+### Added
+
+- `jarvis browser open/screenshot/inspect-dom/close` -- real CLI entry
+  points for the four already-real `browser.*` capabilities.
+  `screenshot`/`inspect-dom`/`close` take a real `PageHandle`'s four
+  explicit fields as required flags, since every `jarvis` invocation
+  is a fresh process with no shared in-memory adapter state.
+- `jarvis find-careers-page "<company>"` -- opens a real "<company>
+  careers" DuckDuckGo search in the user's own, real, ordinary Brave
+  browser. DuckDuckGo, not Google -- Google's own `robots.txt`
+  disallows `/search` broadly and its ToS conditions automated access
+  on robots.txt compliance, the same real finding that ruled out
+  LinkedIn/Indeed; DuckDuckGo's `robots.txt` affirmatively allows the
+  query path.
+- `jarvis fs find "<pattern>"` / `jarvis fs search-content "<query>"`
+  / `jarvis fs recent [--limit N]` -- real, recursive, scope-bounded
+  local-file search (`fs.find`/`fs.search_content`/`fs.recent`),
+  reusing `fs.list_dir`'s/`fs.read_file`'s existing
+  `Effect.EGRESS_LOCAL`/`Tier.ALLOW` classification. Every result is
+  re-validated against the existing scope boundary before being
+  returned, since `Path.rglob`-based enumeration can otherwise escape
+  it via a `..`-containing pattern or a symlink. `fs.search_content`
+  has real file-size (1 MB) and file-count (5,000) caps, reported
+  honestly via a real `capped` flag/stderr warning.
+- `jarvis calendar list-events --start --end --caldav-url --username
+  --password-reference` -- the one real, remaining
+  `kernel/communications.py` capability
+  (`communications.list_calendar_events`) with no CLI entry point,
+  found by a direct re-check of every registered
+  `browser.py`/`communications.py`/`desktop.py` composition function.
+- Voice grammar: `find files <pattern>`, `search files <query>`,
+  `recent files`, `careers page <company>` -- four new two-word
+  command keywords, all real, already-registered static capabilities.
+  Voice never bypasses any real tier floor (proven by real tests for
+  both the ALLOW-tier `fs.*` commands and the CONFIRM-tier
+  `find_careers_page`).
+
+### Changed
+
+- Nothing -- this tag is additive only.
+
+### Security / real, honest findings
+
+- Two candidate job-search sites (Glassdoor, Google's own job-search
+  page) were investigated live and **neither was added** -- both
+  failed the same robots.txt/ToS bar that already ruled out
+  LinkedIn/Indeed.
+- Voice grammar deliberately omits `browser open/screenshot/
+  inspect-dom/close` (three of the four need a real `PageHandle`'s
+  technical fields recited aloud) and `calendar list-events` (needs a
+  pre-configured `calendar_port` plus two spoken ISO-8601 timestamps).
 
 ## [0.8.0] - 2026-09-08
 
