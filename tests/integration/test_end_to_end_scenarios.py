@@ -35,13 +35,24 @@ from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
+from jarvis.domain.evidence import Candidate
+from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.reasoning import ProviderProfile
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.desktop import authorize_and_commit_git, authorize_and_get_git_status
-from jarvis.kernel.files import authorize_and_read_file
+from jarvis.kernel.files import authorize_and_read_file, authorize_and_search_content
+from jarvis.kernel.job_application import (
+    authorize_and_list_job_applications,
+    authorize_and_record_job_application,
+)
+from jarvis.kernel.job_assistance import authorize_and_draft_document
+from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from jarvis.domain.evidence import Attempt
 
 
 def _real_ollama_server_is_reachable() -> bool:
@@ -235,3 +246,154 @@ async def test_recalled_memory_context_feeds_a_real_coding_task_then_git_status_
     )
     assert final_status.decision.granted is True
     assert "nothing to commit" in (final_status.status or "").lower()
+
+
+class _StubBrave:
+    """A BravePort test double that records every real open_url call it receives."""
+
+    def __init__(self) -> None:
+        self.opened: list[str] = []
+
+    def open_url(self, url: str) -> None:
+        self.opened.append(url)
+
+
+class _FakeDraftProvider:
+    """A minimal, real ReasoningPort test double -- no real network/model call."""
+
+    def __init__(self, content: str) -> None:
+        self._content = content
+
+    async def generate(
+        self, _task: str, _prior_attempts: tuple[Attempt, ...]
+    ) -> Tainted[Candidate]:
+        candidate = Candidate(author="local", content=self._content)
+        return Tainted(candidate, Provenance.system())
+
+
+class _FakePresentation:
+    """Always selects the first (only) real candidate shown."""
+
+    async def present_and_select(self, candidates: tuple[Candidate, ...]) -> Candidate:
+        return candidates[0]
+
+
+class _FakeDraftStorage:
+    """Writes real content to a real file under tmp_path, mirroring LocalDraftStorageAdapter."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self._tmp_path = tmp_path
+
+    def save(self, filename_hint: str, content: str) -> Path:
+        target = self._tmp_path / f"{filename_hint}.tex"
+        target.write_text(content, encoding="utf-8")
+        return target
+
+
+class _StubConsole:
+    """Records every real line shown -- no real GTK4 window opened."""
+
+    def __init__(self) -> None:
+        self.shown: list[str] = []
+
+    def show_line(self, text: str) -> None:
+        self.shown.append(text)
+
+
+async def test_search_content_locates_a_note_that_feeds_a_draft_and_gets_recorded(
+    tmp_path: Path,
+) -> None:
+    """fs.search_content -> job_search.open_results -> job_assistance.draft -> job_application.
+
+    A realistic session shape from this project's own charter ("find
+    robotics internships" / "continue yesterday's project"): a real
+    note on disk mentioning a target company/role is found by content
+    search, its own real text feeds a real assisted-browsing job
+    search and a real cover-letter draft, and the application is then
+    logged in the real ledger -- real data flowing across all four
+    capability boundaries, not four isolated calls. Fully hermetic
+    (fake browser/provider, matching this codebase's own established
+    "only the true external-I/O edge is faked" convention) -- unlike
+    this file's own Ollama-dependent scenario above, this one is never
+    skip-gated.
+    """
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir()
+    note_path = notes_dir / "job_leads.txt"
+    note_path.write_text(
+        "TODO: apply to Boston Dynamics for the Robotics Intern role.\n"
+        "Mention real-time control experience.\n",
+        encoding="utf-8",
+    )
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+
+    search_outcome = authorize_and_search_content(
+        "Boston Dynamics",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        allowed_root=tmp_path,
+    )
+    assert search_outcome.decision.granted is True
+    assert search_outcome.matches is not None
+    assert len(search_outcome.matches) == 1
+    found_path, _line_number, found_line = search_outcome.matches[0]
+    assert found_path == note_path
+    assert "Robotics Intern" in found_line
+
+    browser = _StubBrave()
+    job_search_decision = authorize_and_open_job_search(
+        JobSearchSite.LINKEDIN,
+        "Robotics Intern",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        browser=browser,
+    )
+    assert job_search_decision.granted is True
+    assert browser.opened == ["https://www.linkedin.com/jobs/search/?keywords=Robotics+Intern"]
+
+    draft_content = f"Dear Hiring Manager, {found_line.strip()}"
+    provider_profile = ProviderProfile(name="local-a", is_local=True)
+    draft_outcome = await authorize_and_draft_document(
+        f"Draft a cover letter referencing: {found_line.strip()}",
+        ((provider_profile, _FakeDraftProvider(draft_content)),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        draft_storage=_FakeDraftStorage(tmp_path),
+        console=_StubConsole(),
+    )
+    assert draft_outcome.decision.granted is True
+    assert draft_outcome.path is not None
+    assert draft_outcome.path.read_text(encoding="utf-8") == draft_content
+
+    record_outcome = authorize_and_record_job_application(
+        "Boston Dynamics",
+        "Robotics Intern",
+        status="drafted",
+        notes=found_line.strip(),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    assert record_outcome.decision.granted is True
+
+    list_outcome = authorize_and_list_job_applications(
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    assert len(list_outcome.records) == 1
+    recorded = list_outcome.records[0].value.value
+    assert isinstance(recorded, dict)
+    assert recorded["company"] == "Boston Dynamics"
+    assert recorded["role"] == "Robotics Intern"
+    assert recorded["status"] == "drafted"
