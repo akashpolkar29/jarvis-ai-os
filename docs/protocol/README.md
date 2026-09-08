@@ -27,8 +27,13 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 (later still the same day) — this table now
-covers 49 real subcommands, adding `fs find`/`fs search-content`/
+**Updated 2026-09-08 (yet later the same day) — this table now covers
+50 real subcommands, adding `calendar list-events`
+(`communications.list_calendar_events` -- a real, previously-missing
+CLI entry point re-confirmed by grepping every real, registered
+`kernel/communications.py` composition function directly, not assumed
+from a stale prior finding; the other four communications functions
+were already wired). It previously covered 49, adding `fs find`/`fs search-content`/
 `fs recent` (real, recursive, bounded local-file search, scoped to
 `allowed_root` -- a real, third, deliberately-introduced CLI naming
 shape, `fs <verb>`, reported plainly in
@@ -106,6 +111,7 @@ not to duplicate the policy engine's own reasoning.
 | `plan run <goal>` | `planning.run_plan` (ADR-0062 — outer gate only; every proposed step is separately, individually authorized, never in bulk) | `goal` |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
+| `calendar list-events` | `communications.list_calendar_events` | `--start`, `--end` (both required, ISO-8601), `--caldav-url`, `--username`, `--password-reference` |
 | `job-search <keywords>` | `job_search.open_results` | `keywords`, `--site linkedin\|indeed` (required), `--location` (optional) |
 | `find-careers-page <company>` | `job_search.find_careers_page` | `company` |
 | `browser open <url>` | `browser.open_page` | `url` |

@@ -184,6 +184,7 @@ from jarvis.kernel.browser import (
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
+    authorize_and_list_calendar_events,
     authorize_and_list_email,
     authorize_and_read_email,
     authorize_and_send_email,
@@ -256,6 +257,7 @@ if TYPE_CHECKING:
 
     from jarvis.application.planning.executor import PlanStepRecord
     from jarvis.domain.audit import AuditRecord
+    from jarvis.domain.calendar import CalendarEvent
     from jarvis.domain.email import EmailMessage, EmailSummary
     from jarvis.domain.file_system import DirEntry
     from jarvis.domain.memory import MemoryRecord
@@ -290,9 +292,20 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
 def _add_communications_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    """Add the send-email/create-calendar-event/email subparsers.
+    """Add the send-email/create-calendar-event/email/calendar subparsers.
 
     Split out to keep _build_parser lean.
+
+    ``calendar list-events`` is a new, nested subcommand wiring one
+    more already-real, already-tested, read-only (``Tier.ALLOW``)
+    capability (`communications.list_calendar_events`) into the CLI
+    for the first time -- a real, named gap re-confirmed directly
+    (grepped `cli/main.py` for every real, registered
+    `kernel/communications.py` composition function; this was the one
+    genuinely missing) rather than assumed still-open from a stale
+    prior finding. Reuses the identical real `CalDavCalendarAdapter`
+    flags `create-calendar-event` already established
+    (`--caldav-url`/`--username`/`--password-reference`).
 
     ``email list``/``email read`` are new, nested subcommands wiring
     two already-real, already-tested, read-only (``Tier.ALLOW``)
@@ -383,6 +396,36 @@ def _add_communications_parsers(
     email_read_parser.add_argument("message_id", help="The real message's own id.")
     _add_email_connection_flags(email_read_parser)
     _add_common_flags(email_read_parser)
+
+    calendar_parser = subparsers.add_parser(
+        "calendar", help="Real, read-only CalDAV calendar commands."
+    )
+    calendar_subparsers = calendar_parser.add_subparsers(dest="calendar_command", required=True)
+
+    calendar_list_events_parser = calendar_subparsers.add_parser(
+        "list-events", help="List real events in a real, given time range."
+    )
+    calendar_list_events_parser.add_argument(
+        "--start", required=True, help="The real range start (ISO-8601)."
+    )
+    calendar_list_events_parser.add_argument(
+        "--end", required=True, help="The real range end (ISO-8601)."
+    )
+    calendar_list_events_parser.add_argument(
+        "--caldav-url", required=True, help="The real CalDAV server URL."
+    )
+    calendar_list_events_parser.add_argument(
+        "--username", required=True, help="The real CalDAV account username."
+    )
+    calendar_list_events_parser.add_argument(
+        "--password-reference",
+        required=True,
+        help=(
+            "The keyring reference for this account's password -- "
+            "provisioned out of band, not by this command."
+        ),
+    )
+    _add_common_flags(calendar_list_events_parser)
 
 
 def _add_email_connection_flags(parser: argparse.ArgumentParser) -> None:
@@ -1300,6 +1343,37 @@ def _run_email_subcommand(
     return decision, None, message
 
 
+def _run_calendar_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, tuple[Tainted[CalendarEvent], ...] | None]:
+    """Dispatch ``calendar list-events``, returning (decision, events).
+
+    Split out from :func:`main` for the identical reason
+    :func:`_run_email_subcommand` is. Constructs a real
+    ``CalDavCalendarAdapter`` here, mirroring
+    ``_run_communications_subcommand``'s own identical precedent for
+    ``create-calendar-event``, and wraps its kernel call in
+    ``asyncio.run``, since ``authorize_and_list_calendar_events`` is
+    ``async``.
+    """
+    calendar_port = CalDavCalendarAdapter(
+        args.caldav_url,
+        args.username,
+        SecretServiceAdapter(),
+        args.password_reference,
+    )
+    return asyncio.run(
+        authorize_and_list_calendar_events(
+            args.start,
+            args.end,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+            calendar_port=calendar_port,
+        )
+    )
+
+
 def _run_reasoning_subcommand(args: argparse.Namespace) -> tuple[Decision, str | None]:
     """Dispatch ``code``/``draft``, returning (decision, result_label).
 
@@ -1827,6 +1901,7 @@ class _CommandOutcome:
     audit_records: tuple[AuditRecord, ...] | None = None
     plan_step_records: tuple[PlanStepRecord, ...] | None = None
     email_summaries: tuple[Tainted[EmailSummary], ...] | None = None
+    calendar_events: tuple[Tainted[CalendarEvent], ...] | None = None
     email_message: Tainted[EmailMessage] | None = None
     application_cv_path: str | None = None
     application_cover_letter_template_path: str | None = None
@@ -1926,6 +2001,11 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
             f"email {args.email_command}",
             email_summaries=email_summaries,
             email_message=email_message,
+        )
+    if args.command == "calendar":
+        decision, calendar_events = _run_calendar_subcommand(args)
+        return _CommandOutcome(
+            decision, f"calendar {args.calendar_command}", calendar_events=calendar_events
         )
     if args.command == "browser":
         return _run_browser_subcommand(args)
@@ -2075,6 +2155,10 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
         for tainted_summary in outcome.email_summaries:
             summary = tainted_summary.value
             print(f"{summary.message_id}: {summary.sender} -- {summary.subject}")
+    if outcome.calendar_events is not None:
+        for tainted_event in outcome.calendar_events:
+            event = tainted_event.value
+            print(f"{event.uid}: {event.summary} ({event.start} -- {event.end})")
     if outcome.email_message is not None:
         message = outcome.email_message.value
         print(f"From: {message.sender}")

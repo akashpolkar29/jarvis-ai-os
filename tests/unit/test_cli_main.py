@@ -48,6 +48,7 @@ from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRe
 from jarvis.application.planning.planner import PlanStep
 from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
 from jarvis.domain.browser import PageHandle
+from jarvis.domain.calendar import CalendarEvent
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -2442,6 +2443,125 @@ def test_email_list_subcommand_requires_connection_flags() -> None:
         main(["email", "list"])
 
 
+_CALENDAR_LIST_EVENTS_COMMON_FLAGS = [
+    "--start",
+    "2026-09-03T00:00:00+00:00",
+    "--end",
+    "2026-09-10T00:00:00+00:00",
+    "--caldav-url",
+    "https://caldav.example.com",
+    "--username",
+    "user@example.com",
+    "--password-reference",
+    "example-ref",
+]
+
+
+def test_calendar_list_events_subcommand_reports_each_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[str, str]] = []
+
+    async def fake_authorize_and_list_calendar_events(  # noqa: PLR0913 -- mirrors the real signature
+        start: str,
+        end: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[CalendarEvent], ...]]:
+        received.append((start, end))
+        decision = _make_decision(granted=True, capability_id="communications.list_calendar_events")
+        event = CalendarEvent(
+            uid="event-1",
+            summary="Team sync",
+            start="2026-09-03T10:00:00+00:00",
+            end="2026-09-03T11:00:00+00:00",
+            attendees=(),
+        )
+        return decision, (Tainted(event, Provenance.external("caldav", Classification.SENSITIVE)),)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_calendar_events",
+        fake_authorize_and_list_calendar_events,
+    )
+
+    exit_code = main(
+        [
+            "calendar",
+            "list-events",
+            *_CALENDAR_LIST_EVENTS_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [("2026-09-03T00:00:00+00:00", "2026-09-10T00:00:00+00:00")]
+    assert exit_code == 0
+    assert "calendar list-events: GRANTED" in captured.out
+    assert (
+        "event-1: Team sync (2026-09-03T10:00:00+00:00 -- 2026-09-03T11:00:00+00:00)"
+        in captured.out
+    )
+
+
+def test_calendar_list_events_subcommand_denied_prints_no_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_list_calendar_events(  # noqa: PLR0913 -- mirrors the real signature
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[CalendarEvent], ...] | None]:
+        decision = _make_decision(
+            granted=False, capability_id="communications.list_calendar_events"
+        )
+        return decision, None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_calendar_events",
+        fake_authorize_and_list_calendar_events,
+    )
+
+    exit_code = main(
+        [
+            "calendar",
+            "list-events",
+            *_CALENDAR_LIST_EVENTS_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "calendar list-events: DENIED" in captured.out
+    assert exit_code == 1
+
+
+def test_calendar_list_events_subcommand_requires_start_and_end() -> None:
+    with pytest.raises(SystemExit):
+        main(["calendar", "list-events", "--caldav-url", "https://caldav.example.com"])
+
+
+def test_calendar_list_events_subcommand_requires_connection_flags() -> None:
+    with pytest.raises(SystemExit):
+        main(["calendar", "list-events", "--start", "2026-09-03T00:00:00+00:00"])
+
+
+def test_calendar_subcommand_requires_a_real_calendar_command() -> None:
+    with pytest.raises(SystemExit):
+        main(["calendar"])
+
+
 def test_list_dir_subcommand_routes_the_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4340,6 +4460,7 @@ _TOP_LEVEL_COMMANDS = (
 _MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore", "wipe")
 _PLANNING_SUBCOMMANDS = ("run",)
 _EMAIL_SUBCOMMANDS = ("list", "read")
+_CALENDAR_SUBCOMMANDS = ("list-events",)
 _JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
 _BROWSER_SUBCOMMANDS = ("open", "screenshot", "inspect-dom", "close")
 _FS_SUBCOMMANDS = ("find", "search-content", "recent")
@@ -4386,6 +4507,15 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "ADR-" not in captured.out, f"email {subcommand} --help leaks an ADR reference"
         assert "WP-" not in captured.out, (
             f"email {subcommand} --help leaks a work-package reference"
+        )
+
+    for subcommand in _CALENDAR_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["calendar", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"calendar {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, (
+            f"calendar {subcommand} --help leaks a work-package reference"
         )
 
     for subcommand in _JOB_APPLICATION_SUBCOMMANDS:
