@@ -21,11 +21,13 @@ pass that touches this file; not re-derived from scratch elsewhere.
 **Real and done**: the M0-M2 kernel core; M3 (desktop control,
 `v0.7.0`); M4 (memory/retrieval); M5 (browser automation + coding
 agent); M6a (communications) and M6b (job assistance); real task
-planning (`planning.run_plan`, ADR-0062); and the real
+planning (`planning.run_plan`, ADR-0062); the real
 "job-application automation" feature set -- search
 (`job_search.open_results`), draft (`job_assistance.prepare_application_folder`,
-`--record`), and track (the applied-jobs ledger) -- all tagged
-`v0.8.0`, 2026-09-08. All items 1-4 and 6-13 below are resolved,
+`--record`), and track (the applied-jobs ledger) -- tagged `v0.8.0`,
+2026-09-08; and browser/filesystem/calendar CLI completeness plus
+voice grammar expansion and a real end-to-end scenario test, tagged
+`v0.9.0`, 2026-09-08. All items 1-4 and 6-14 below are resolved,
 decided, or built; only item 5 (two of the audit chain's four real
 structural gaps) remains genuinely open.
 
@@ -390,6 +392,46 @@ task-planning implementation and the "7 real decisions" pass was
 tagged `v0.8.0`, 2026-09-08, a real, direct user decision -- see
 `CHANGELOG.md`'s own `[0.8.0]` entry and the tag's own real, annotated
 message (`git show v0.8.0`) for the full account, including the five
+real, standing limits it names plainly.
+
+## 14. ~~Browser/fs/calendar CLI completeness, voice grammar expansion, e2e test, v0.9.0 tag~~ -- RESOLVED/BUILT 2026-09-08
+
+**Resolved/built**: three real, sequential prompts closed out the last
+known CLI/voice completeness gaps. `jarvis browser
+open/screenshot/inspect-dom/close` wired the four already-real
+`browser.*` capabilities to the CLI for the first time. Glassdoor and
+Google were both investigated live as new job-search-site candidates
+and both rejected on the same robots.txt/ToS grounds that already
+ruled out LinkedIn/Indeed; `jarvis find-careers-page "<company>"`
+(`job_search.find_careers_page`) was added instead, opening a real
+DuckDuckGo "<company> careers" search in the user's own browser.
+`fs.find`/`fs.search_content`/`fs.recent` (`jarvis fs
+find/search-content/recent`) added real, recursive, scope-bounded
+local-file search, with a real, adversarially-proven re-validation
+step against every raw `rglob` result (a `..`-bearing pattern or a
+real symlink can otherwise escape `allowed_root`). The one remaining
+real gap in desktop/communications CLI wiring
+(`communications.list_calendar_events`) was closed with `jarvis
+calendar list-events`. Four new two-word voice commands (`find files`,
+`search files`, `recent files`, `careers page`) were added, each
+proven not to bypass its own real tier floor. One real, hermetic,
+non-skip-gated end-to-end test now proves `fs.search_content ->
+job_search.open_results -> job_assistance.draft ->
+job_application.record/list` compose correctly with real data flowing
+across all four capability boundaries.
+
+Tagged `v0.9.0`, 2026-09-08, a real, direct user decision (the
+original request, "tag M3 and cut v0.7.1," was found stale against
+real git state -- M3 was already `v0.7.0`, and `v0.9.0` was the
+correct next sequential slot for this completed work). Immediately
+after, a real documentation-consistency audit found and fixed four
+real drifts: `pyproject.toml`'s `version` field was still `"0.6.0"` (a
+real functional bug -- `jarvis --version` was reporting it directly);
+`README.md`'s status paragraph and capability count (40) were both
+stale; `CLAUDE.md`'s own opening line and "Current Status" section had
+never been updated for M6/`v0.6.0` or either of `v0.8.0`/`v0.9.0`. See
+`CHANGELOG.md`'s own `[0.9.0]` entry and the tag's own real, annotated
+message (`git show v0.9.0`) for the full account, including the four
 real, standing limits it names plainly.
 
 ## Maintaining this index

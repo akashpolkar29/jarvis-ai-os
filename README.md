@@ -2,19 +2,23 @@
 
 Privacy-first, plugin-based agent kernel for Linux.
 
-**Status:** pre-alpha. Milestones 0 through 6 are code-complete;
-milestones 4, 5, and 6 are tagged (`v0.4.0`, `v0.5.0`, `v0.6.0`,
-tagged out of strict milestone-sequential order — milestone 3's own
-tag remains a deliberately separate, later action). Milestone 3
-(desktop control) is code-complete but not yet tagged. See
-`docs/ROADMAP.md` and `CLAUDE.md`'s own "Current Status" section for
-the exact, current state of each milestone, including what's real,
-what's live-verified, and what real gaps remain open.
+**Status:** pre-alpha. Milestones 0 through 6 are code-complete and
+tagged (`v0.1.0` through `v0.6.0`, tagged out of strict
+milestone-sequential order — milestone 3's own tag, `v0.7.0`, was the
+last of the six to happen, not the first). Two further tags,
+`v0.8.0` and `v0.9.0`, cover real, cross-cutting work built on top of
+those milestones (a real, invocable task-planning capability; the
+applied-jobs ledger and job-application-automation workflow; browser/
+filesystem/calendar CLI completeness; voice grammar expansion; a real
+end-to-end scenario test) rather than a new milestone of their own.
+See `docs/ROADMAP.md` and `CLAUDE.md`'s own "Current Status" section
+for the exact, current state of each milestone, including what's
+real, what's live-verified, and what real gaps remain open.
 
 What works today: a capability-based policy engine enforcing a
 four-tier authorization ladder (`ALLOW`/`CONFIRM`/`MANUAL_ONLY`/`DENY`),
 a hash-chained (and, since 2026-09-07, timestamped) and persisted
-audit log, a capability registry with 40 real, statically-registered
+audit log, a capability registry with 44 real, statically-registered
 capabilities (plus several dynamic-effect ones whose tier depends on
 argument content), and a working `jarvis` CLI covering voice
 interaction (see `docs/protocol/README.md`'s own `listen` voice-grammar
