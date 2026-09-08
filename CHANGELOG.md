@@ -15,11 +15,111 @@ replacement for either.
 
 ## [Unreleased]
 
-Real work merged to `main` since `v0.6.0` was tagged, not yet cut into
-a new release tag. Two large, sequential passes: a 10-phase combined
-pass, and a 5-mixed-real-tasks pass. Full detail in `CLAUDE.md`'s
-"Current Status" and the individual docs under `docs/architecture/`
-each phase/task produced.
+Nothing merged to `main` since `v0.8.0` was tagged.
+
+## [0.8.0] - 2026-09-08
+
+A real "job-application automation" milestone, tagged directly by the
+user: search (assisted browsing, no scraping) -> draft (a real, local
+CV/Cover-Letter folder, template copied verbatim, a real AI-drafted
+cover-letter body) -> track (the applied-jobs ledger) -- plus the
+real, separate M7 task-planning implementation and a "7 real
+decisions" pass resolving several previously-open items. Full detail
+in `CLAUDE.md`'s own "Current Status" section.
+
+### Added
+
+- `job_search.open_results` (`jarvis job-search <keywords> --site
+  linkedin|indeed`) -- real, assisted browsing only: opens a real
+  search-results URL in the user's own browser, never reads or
+  scrapes listing content. See
+  `docs/architecture/job-search-scoping-notes.md` for the real
+  ToS/robots.txt check behind this.
+- `job_assistance.prepare_application_folder` (`jarvis
+  prepare-application <job title> <company>`) -- creates a real,
+  local `<base>/<Month Year>/CV/` and `.../Cover Letter/` folder pair,
+  copies the user's own real LaTeX templates verbatim (never
+  auto-tailored), and drafts a real, separate cover-letter body
+  (`body.tex`) via `job_assistance.draft`, unmodified. No Overleaf
+  integration of any kind -- git access is a paid-plan feature and the
+  user is on the Free plan.
+- `jarvis.kernel.job_application` (`jarvis job-application record
+  <company> <role> --status ...` / `jarvis job-application list
+  [--status ...]`) -- the applied-jobs ledger. A real, thin
+  structured-content convention layered directly on the already-real
+  `memory.write`/`memory.retrieve` capabilities (a `"kind":
+  "job_application"` marker key inside the stored JSON value), not a
+  new capability, port, or adapter. `authorize_and_remember`'s own
+  `text: str` parameter was retyped to `value: object` to support
+  this -- the domain/adapter/application layers already supported
+  structured values; only this one public signature was the real
+  bottleneck.
+- `prepare-application --record` -- an additive convenience flag: a
+  granted folder creation also calls `job_application.record`
+  automatically (`status=drafted`, the real folder just created).
+  Omitting it leaves behavior exactly as before.
+- `planning.run_plan` (`jarvis plan run <goal>`) -- real, invocable
+  task planning (ADR-0062): a new layer above `Dispatcher` (never a
+  modification to it), every proposed step individually authorized,
+  never pre-approved in bulk. `coding.run_task` also gained real,
+  opt-in file-context injection (off by default, every existing
+  caller's behavior unchanged).
+- `communications.list_email`/`read_email` wired into the CLI
+  (`jarvis email list` / `jarvis email read <message-id>`) -- both
+  already-real, already-tested capabilities had no CLI entry point
+  until this pass.
+- A real, additive `written_at` field on `AuditRecord` (`ClockPort`
+  now threaded through every kernel composition function's own audit
+  trail).
+- Voice grammar for `plan <goal>` and `search jobs <keywords> on
+  linkedin|indeed`, mirroring `kernel/intent.py`'s own established
+  keyword-command pattern -- neither bypasses its own real tier floor.
+
+### Changed
+
+- `icalendar-searcher`'s real AGPL code path is now empirically
+  avoided (`caldav`'s own `server_expand=True`, verified live against
+  a real Radicale server) -- the dependency remains transitively
+  present via `uv.lock` but is no longer exercised at runtime.
+- The audit chain's own JSON file now gets restrictive `0o600`
+  owner-only permissions on every save, including re-tightening an
+  already-existing, looser-permissioned file.
+
+### Fixed
+
+- `docs/protocol/README.md`'s own subcommand-count summary line had
+  drifted by one (claimed 38 where the table itself always correctly
+  listed 39) -- corrected while verifying the table's real, current
+  content rather than assuming it was still accurate.
+
+### Decided (no code changed)
+
+- ADR-0061 (memory backup/restore classification): **Accepted**,
+  directly by the user, after direct review of its full text.
+- `piper-tts` (GPL-3.0-or-later): kept, not switched -- the user's own
+  judgment call that GPL's copyleft trigger (distribution) does not
+  yet apply to this project's current, personal/private use.
+- Two real, structural CLI naming inconsistencies (`memory`'s nested
+  subcommand shape; `fs.read_file`'s bare `read`): left as-is -- not
+  worth a user-facing, potentially script-breaking rename this deep
+  into the project.
+- Extending `planning.run_plan` past `Tier.ALLOW`, retry/replan for a
+  failed plan step, and dynamic/out-of-tree plugin loading: all three
+  real, open scoping questions were reviewed and left as-is for now,
+  each recorded with its own real reasoning.
+
+## [0.7.0] - 2026-09-06
+
+**A real, retroactive CHANGELOG fix, found while preparing `v0.8.0`**:
+this tag was never given its own entry here, even though it was
+created 2026-09-06 -- the section below is exactly what
+`[Unreleased]` used to say at the time, only retitled. Two large,
+sequential passes shipped in this range: a 10-phase combined pass, and
+a 5-mixed-real-tasks pass. This tag's own headline decision, "tag M3
+now, with its two real, accepted gaps stated plainly," is recorded in
+the real, annotated tag message itself (`git show v0.7.0`), not
+duplicated here. Full detail in `CLAUDE.md`'s "Current Status" and the
+individual docs under `docs/architecture/` each phase/task produced.
 
 ### Added
 
