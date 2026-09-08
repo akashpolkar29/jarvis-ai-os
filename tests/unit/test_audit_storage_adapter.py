@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import stat
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -19,9 +19,6 @@ from jarvis.domain.capability import (
 from jarvis.domain.errors import AuditRecordTampered
 from jarvis.domain.policy import PolicyContext, evaluate
 from jarvis.domain.provenance import Classification, Provenance, Tainted
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _NO_CONFIRMATION = PolicyContext(
     physical_confirmation_available=False,
@@ -364,6 +361,53 @@ def test_save_overwrites_a_previous_save(tmp_path: Path) -> None:
     assert len(loaded) == 0
 
 
+def test_save_leaves_no_leftover_temp_file_on_success(tmp_path: Path) -> None:
+    """A successful save() leaves exactly the target file, no stray temp file beside it.
+
+    WP-101 (2026-09-08): save() writes to a temp file in the same
+    directory first, then ``Path.replace``s it over the real path.
+    ``replace`` consumes the temp file (renames it), so nothing named
+    differently from the target should remain in the directory
+    afterward.
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+
+    adapter.save(_build_varied_chain())
+
+    assert [entry.name for entry in tmp_path.iterdir()] == ["audit.json"]
+
+
+def test_save_leaves_the_original_file_untouched_if_the_write_fails_partway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real, simulated crash between temp-file creation and the atomic replace.
+
+    WP-101 (2026-09-08): save() writes the full new content to a temp
+    file, chmods it, then ``Path.replace``s it over the real path in
+    one atomic step. Simulating a failure at the chmod step (standing
+    in for a crash/kill at any point before the replace) must leave
+    the real, pre-existing file at `path` completely untouched -- old
+    content, not truncated, not replaced -- and must not leave the
+    temp file lingering behind either.
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    adapter.save(_build_varied_chain())
+    original_content = path.read_bytes()
+
+    def _raising_chmod(_self: Path, _mode: int) -> None:
+        raise OSError("simulated crash mid-save")
+
+    monkeypatch.setattr(Path, "chmod", _raising_chmod)
+
+    with pytest.raises(OSError, match="simulated crash mid-save"):
+        adapter.save(AuditChain())
+
+    assert path.read_bytes() == original_content
+    assert [entry.name for entry in tmp_path.iterdir()] == ["audit.json"]
+
+
 def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_writers_record(
     tmp_path: Path,
 ) -> None:
@@ -376,12 +420,16 @@ def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_write
     the same --chain-path, or the CLI and a running voice loop both
     targeting the same file -- both load() the same starting chain,
     both append() their own new decision, then save() in sequence.
-    Because save() always overwrites the whole file (this module's own
-    docstring already documents "not handled here: atomic writes" as a
-    known scope limit), the second save() completely replaces the
-    first's -- the first writer's own new record is not merged, not
-    detected as a conflict, and not present anywhere in the final
-    file. verify() on the final loaded chain still reports valid=True:
+    save() itself now writes atomically (WP-101, 2026-09-08, temp-file-
+    then-``Path.replace``) -- neither individual save() call can leave
+    a torn/partial file. That is a different property from this test:
+    atomicity guarantees each *individual* replace is all-or-nothing,
+    it does nothing to arbitrate *between* two replaces racing for the
+    same destination path. The second save() still completely replaces
+    the first's whole, valid file with its own whole, valid file -- the
+    first writer's own new record is not merged, not detected as a
+    conflict, and not present anywhere in the final file. verify() on
+    the final loaded chain still reports valid=True:
     the surviving chain is internally coherent, so this loss is
     invisible to the one integrity check this codebase already has.
 

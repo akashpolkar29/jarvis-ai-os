@@ -171,16 +171,41 @@ and its own sibling finding already named:
   construct a real adapter itself, per this project's own C1
   layered-architecture contract); every real kernel composition
   function supplies a real `SystemClockAdapter`.
-- **Non-atomic writes** (`Path.write_text`'s own whole-file rewrite,
-  no temp-file-then-rename) -- unrelated to file permissions, still
-  open; a process killed mid-write can still leave a truncated file.
+- ~~Non-atomic writes~~ -- **CLOSED 2026-09-08 (WP-101)**: `save()`
+  now writes the full new content to a temp file in the same
+  directory as `path` (same filesystem, required for the next step to
+  be atomic), sets that temp file's permissions, then `Path.replace()`s
+  it over `path` in one, indivisible OS-level step. A crash, kill, or
+  power loss at any point up to the replace leaves `path` exactly as
+  it was before the call; a crash after the replace leaves it exactly
+  as the call intended -- there is no window in which `path` itself is
+  truncated or contains partial JSON. If writing or the replace fails
+  partway, the temp file is removed so it never lingers as a stray,
+  unreferenced file. Proven by two new real tests
+  (`test_save_leaves_no_leftover_temp_file_on_success`,
+  `test_save_leaves_the_original_file_untouched_if_the_write_fails_partway`
+  -- the latter simulates a crash by making `Path.chmod` raise
+  partway through a real `save()` call and confirms the pre-existing
+  file's bytes are unchanged and no stray temp file remains). This is
+  a genuinely different property from file permissions and was not
+  part of Decision 6 -- it closes a separate, sibling gap this same
+  document already named.
 - **The cross-process race** between two legitimate JARVIS processes
-  saving the same file simultaneously -- unrelated to file
-  permissions, still open; this document's own sibling finding.
+  saving the same file simultaneously -- unrelated to file permissions
+  or atomicity, still open; this document's own sibling finding.
+  Atomicity guarantees each individual `save()` call is all-or-nothing;
+  it says nothing about which of two *concurrent* calls targeting the
+  same path wins -- whichever atomic replace lands last still
+  completely replaces the other's whole, valid file, silently
+  discarding the other writer's own newly-appended record. A real fix
+  needs file locking or a real `AuditStoragePort` contract change
+  (e.g. an append-only format), a genuine architecture decision, not
+  built here.
 
-Two of the four real gaps remain open, accepted limitations of the
-current persistence format -- this decision plus the 2026-09-07
-timestamp addition together close two of four, not all four, and this
+Three of the four real gaps are now closed, one remains an open,
+accepted limitation of the current persistence format -- this
+decision, the 2026-09-07 timestamp addition, and the 2026-09-08
+atomic-write fix together close three of four, not all four, and this
 is recorded here precisely so a future reader does not mistake
 "progress was made on audit-chain integrity" for "every audit-chain
 integrity gap is now closed."

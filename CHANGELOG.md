@@ -15,7 +15,20 @@ replacement for either.
 
 ## [Unreleased]
 
-Nothing merged to `main` since `v0.9.0` was tagged.
+### Fixed
+
+- `pyproject.toml`'s `version` field, stale at `0.6.0` since four real
+  tags ago -- `jarvis --version` was reporting a materially wrong
+  version. Bumped to `0.9.0`. A real documentation-consistency audit
+  (WP-100) also refreshed `README.md`'s status paragraph and
+  capability count, and `CLAUDE.md`'s opening line and "Current
+  Status" section, all stale by the same margin.
+- Audit chain non-atomic writes (WP-101): `JsonFileAuditStorageAdapter.save()`
+  now writes to a temp file and `Path.replace()`s it over the real
+  path in one atomic step, closing the "a crash mid-write can leave a
+  truncated file" gap named in `docs/OPEN_DECISIONS.md` item 5. Does
+  not close that item's one remaining gap, the cross-process race
+  between two legitimate writers.
 
 ## [0.9.0] - 2026-09-08
 

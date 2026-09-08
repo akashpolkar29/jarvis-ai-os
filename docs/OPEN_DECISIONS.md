@@ -27,22 +27,24 @@ planning (`planning.run_plan`, ADR-0062); the real
 `--record`), and track (the applied-jobs ledger) -- tagged `v0.8.0`,
 2026-09-08; and browser/filesystem/calendar CLI completeness plus
 voice grammar expansion and a real end-to-end scenario test, tagged
-`v0.9.0`, 2026-09-08. All items 1-4 and 6-14 below are resolved,
-decided, or built; only item 5 (two of the audit chain's four real
-structural gaps) remains genuinely open.
+`v0.9.0`, 2026-09-08; and WP-101 (2026-09-08), which closed the audit
+chain's non-atomic-writes gap (temp-file-then-`Path.replace`, real
+tests proving a simulated mid-save crash leaves the original file
+untouched). All items 1-4 and 6-14 below are resolved, decided, or
+built; only item 5 (one of the audit chain's four real structural
+gaps -- the cross-process race) remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
 copied verbatim, never auto-tailored; no Overleaf integration exists;
 job-application submission is never automated (ADR-0058); the audit
-chain's non-atomic writes and cross-process race remain open (item 5);
-`piper-tts` (GPL) and the `icalendar-searcher` transitive dependency
-(AGPL, its real code path empirically avoided but the package itself
-still present) are both kept, by real, direct user decision;
-`job-application list`'s broad-recall-then-filter approximation can
-miss an old entry in a very large store; two CLI naming
-inconsistencies (`memory`'s nested shape, `fs.read_file`'s bare
-`read`) are left as-is.
+chain's cross-process race remains open (item 5); `piper-tts` (GPL)
+and the `icalendar-searcher` transitive dependency (AGPL, its real
+code path empirically avoided but the package itself still present)
+are both kept, by real, direct user decision; `job-application list`'s
+broad-recall-then-filter approximation can miss an old entry in a very
+large store; two CLI naming inconsistencies (`memory`'s nested shape,
+`fs.read_file`'s bare `read`) are left as-is.
 
 **What only the user can do next**: the three real, physical
 verifications no unattended pass can supply (a live, end-to-end voice
@@ -52,7 +54,8 @@ for Linux); deciding whether CV auto-tailoring is ever worth building,
 and if so, defining a real, safe placeholder convention in his own
 template first; deciding whether to pursue Overleaf integration if he
 ever upgrades off the Free plan; a real architecture decision on the
-audit chain's two remaining structural gaps (item 5).
+audit chain's one remaining structural gap, the cross-process race
+(item 5).
 
 ## 1. ~~M3's own tag~~ -- RESOLVED 2026-09-06
 
@@ -129,7 +132,7 @@ project. `memory` keeps its nested subcommand group
 bare `read`. See `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`'s
 own "Real decision recorded" section. No code changed.
 
-## 5. The audit chain's real, open structural gaps -- two of four closed
+## 5. The audit chain's real, open structural gaps -- three of four closed
 
 **Resolved in part**: the user chose option 1 (7 real decisions
 prompt, Decision 6) -- restrictive `0o600` file permissions, now
@@ -138,14 +141,21 @@ casual/other-local-user tampering. **Updated 2026-09-07**: the
 timestamp gap is now closed too -- `AuditRecord` gained a real,
 additive `written_at` field (ISO-8601, sourced from a real
 `ClockPort`, included in the hash so tampering with it alone is
-caught exactly like any other field). **Does not close the remaining
-two**, stated plainly, not rounded up:
+caught exactly like any other field). **Updated 2026-09-08 (WP-101)**:
+the non-atomic-writes gap is now closed too -- `save()` writes the
+full new content to a temp file in the same directory, sets its
+permissions, then `Path.replace()`s it over the real path in one
+atomic, indivisible OS-level step; a crash, kill, or power loss at any
+point before the replace leaves the real file exactly as it was, never
+truncated or partially written, proven by a real test simulating a
+failure mid-save. **Does not close the one remaining gap**, stated
+plainly, not rounded up:
 
-- **Non-atomic writes**: `save()`'s `Path.write_text()` is still not
-  atomic -- a process killed mid-write leaves a truncated, invalid
-  JSON file. Investigated directly in `docs/threat-model/v0.md`'s own
-  "Phase 10 -- 5 smaller tasks" section (10-phase combined pass), still
-  open, unrelated to file permissions.
+- ~~Non-atomic writes~~ -- **CLOSED 2026-09-08 (WP-101)**:
+  `save()` now writes atomically (temp-file-then-`Path.replace`). See
+  `src/jarvis/adapters/audit_storage.py::JsonFileAuditStorageAdapter.save`'s
+  own docstring and `docs/architecture/audit-log-integrity-scoping-notes.md`'s
+  own updated note for the full account.
 - ~~No timestamp field~~ -- **CLOSED 2026-09-07**: `AuditRecord.written_at`
   is real, additive, hash-included. A real, deliberate breaking
   change to the on-disk format, stated plainly, not silently papered
@@ -158,13 +168,17 @@ two**, stated plainly, not rounded up:
 - **Cross-process race**: two independent processes racing to save the
   same `--chain-path` file still causes the second `save()` to
   silently overwrite the first's new record entirely -- still open,
-  unrelated to file permissions.
+  unaffected by atomicity (each individual `save()` is now
+  all-or-nothing, but atomicity says nothing about which of two
+  racing writers wins). A real fix needs file locking or a real
+  `AuditStoragePort` contract change (e.g. an append-only format), a
+  genuine architecture decision, not built here.
 
-**What's still needed**: a real architecture decision on the remaining
-two gaps in `JsonFileAuditStorageAdapter`'s own persistence format.
-Full investigation, four real candidate fixes for the
-whole-file-replacement/no-tamper-evidence gap specifically, and the
-real record of Decision 6's own scope, in
+**What's still needed**: a real architecture decision on the one
+remaining gap in `JsonFileAuditStorageAdapter`'s own persistence
+format -- the cross-process race. Full investigation, four real
+candidate fixes for the whole-file-replacement/no-tamper-evidence gap
+specifically, and the real record of Decision 6's own scope, in
 `docs/architecture/audit-log-integrity-scoping-notes.md`'s own "Real
 decision recorded and implemented" section.
 

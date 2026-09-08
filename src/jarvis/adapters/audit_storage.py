@@ -50,15 +50,25 @@ classification, sources) is unaffected and still round-trips in full --
 ADR-0027 scopes the digest-only requirement to argument *values*, not
 their provenance metadata.
 
-Not handled here: atomic writes (temp-file-then-rename). A crash
-mid-``save`` can leave a partially-written file. Real robustness
-concern, out of scope for "does a working save/load seam exist."
+``save`` writes atomically (temp-file-then-``os.replace``, WP-101,
+2026-09-08): a crash or kill mid-write can no longer leave a
+truncated, invalid file at ``path`` -- either the old, complete
+content is still there, or the new, complete content is. Still not
+handled here: a lost-update race between two independent *processes*
+both racing to save the same ``path`` -- whichever process's atomic
+replace lands last simply wins outright, silently discarding the
+other's own newly-appended record, with no corruption and no error
+raised. See ``docs/architecture/audit-log-integrity-scoping-notes.md``
+for the full account of what atomicity does and does not close.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import stat
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jarvis.domain.audit import ARGUMENT_DIGEST_KEY, AuditChain, AuditRecord, digest_argument_value
@@ -74,7 +84,6 @@ from jarvis.domain.provenance import Classification, Provenance, Tainted, Trust
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from pathlib import Path
 
 
 def _encode_provenance(provenance: Provenance) -> dict[str, Any]:
@@ -235,37 +244,66 @@ class JsonFileAuditStorageAdapter:
         self._path = path
 
     def save(self, chain: AuditChain) -> None:
-        """Overwrite the file at ``path`` with every record currently in ``chain``.
+        """Atomically overwrite the file at ``path`` with every record in ``chain``.
+
+        Writes the full, new content to a temp file in the same
+        directory as ``path`` (same filesystem, required for
+        ``os.replace`` to be atomic), sets that temp file's
+        permissions, then ``os.replace``s it over ``path`` in one,
+        indivisible OS-level step (WP-101, 2026-09-08). A crash, kill,
+        or power loss at any point up to the replace leaves ``path``
+        exactly as it was before this call; a crash after the replace
+        leaves it exactly as this call intended. There is no window in
+        which ``path`` itself is truncated or contains partial JSON --
+        closing the "non-atomic writes" gap named in
+        ``docs/architecture/audit-log-integrity-scoping-notes.md``. If
+        writing or replacing fails partway, the temp file is removed
+        so it never lingers as a stray, unreferenced file.
 
         Sets restrictive, owner-only permissions (``0o600``) on the
-        file after every save (7 real decisions prompt, Decision 6,
-        2026-09-05) -- the user's own chosen mitigation against
-        casual/other-local-user tampering, the simplest of four real
-        options laid out in
+        temp file before the replace (7 real decisions prompt,
+        Decision 6, 2026-09-05, extended here to apply pre-replace
+        rather than post-write so ``path`` is never briefly readable
+        under a looser mode) -- the user's own chosen mitigation
+        against casual/other-local-user tampering, the simplest of
+        four real options laid out in
         ``docs/architecture/audit-log-integrity-scoping-notes.md``.
-        Explicit ``os.chmod`` is required, not merely relying on
-        ``Path.write_text``'s own default mode: the file's actual
-        permissions after creation follow the process umask (commonly
-        ``0o644``, world-readable), not a fixed, safe value --
-        confirmed directly, not assumed. Applied unconditionally on
-        every save, not only file creation, so a pre-existing file
-        with looser permissions (e.g. one written before this fix
-        existed) is also tightened the next time it's saved.
+        Explicit ``os.chmod`` is required, not merely relying on the
+        temp file's own default mode: ``tempfile.mkstemp`` already
+        creates it ``0o600`` on POSIX, but that is an implementation
+        detail of the stdlib, not a documented, relied-upon guarantee,
+        so this still sets it explicitly rather than assuming it.
+        Applied on every save, not only file creation, so a
+        pre-existing file with looser permissions (e.g. one written
+        before Decision 6 existed) is also tightened the next time
+        it's saved.
 
-        **What this does and does not close, stated plainly**: raises
-        the bar against a casual/other-local-user reading or tampering
-        with the file at rest. Does **not** close the audit chain's
-        other three real, distinct, already-documented gaps -- no
-        timestamp field, non-atomic writes, or a cross-process race
-        between two legitimate JARVIS processes saving simultaneously
-        -- all three remain real, open, accepted limitations,
-        unaffected by this specific decision. See
+        **What this does and does not close, stated plainly**: closes
+        the non-atomic-writes gap. Does **not** close the audit
+        chain's one remaining real, distinct, already-documented gap
+        -- a cross-process race between two legitimate JARVIS
+        processes saving the same file at nearly the same time. Both
+        processes' own atomic replaces still individually succeed;
+        whichever lands last simply wins outright, silently discarding
+        the other's own newly-appended record -- a lost update, not
+        corruption, and still open. See
         ``docs/architecture/audit-log-integrity-scoping-notes.md``'s
         own updated note for the full account.
         """
         records = [_encode_record(record) for record in chain]
-        self._path.write_text(json.dumps(records, indent=2), encoding="utf-8")
-        self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        payload = json.dumps(records, indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+                tmp_file.write(payload)
+            tmp_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            tmp_path.replace(self._path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def load(self) -> AuditChain:
         """Return the chain last saved, or an empty AuditChain if ``path`` doesn't exist yet."""
