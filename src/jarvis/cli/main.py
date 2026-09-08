@@ -201,6 +201,11 @@ from jarvis.kernel.files import (
     authorize_and_move_file,
     authorize_and_read_file,
 )
+from jarvis.kernel.job_application import (
+    VALID_JOB_APPLICATION_STATUSES,
+    authorize_and_list_job_applications,
+    authorize_and_record_job_application,
+)
 from jarvis.kernel.job_assistance import (
     ApplicationFolderAlreadyExistsError,
     ApplicationFolderOutsideBaseDirectoryError,
@@ -491,6 +496,59 @@ def _add_prepare_application_parsers(
     _add_common_flags(prepare_parser)
 
 
+def _add_job_application_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Add the job-application subparser -- a real, thin memory.write/memory.retrieve convention.
+
+    Mirrors ``memory``/``plan``'s own nested-subcommand shape (see
+    ``docs/OPEN_DECISIONS.md``'s own item 4). Neither ``record`` nor
+    ``list`` is a new capability -- both dispatch straight to
+    ``jarvis.kernel.job_application``, which itself reuses
+    ``authorize_and_remember``/``authorize_and_recall`` unmodified.
+    """
+    job_application_parser = subparsers.add_parser(
+        "job-application", help="Track applied job roles as structured memories."
+    )
+    job_application_subparsers = job_application_parser.add_subparsers(
+        dest="job_application_command", required=True
+    )
+
+    record_parser = job_application_subparsers.add_parser(
+        "record", help="Record one applied job role."
+    )
+    record_parser.add_argument("company", help="The real company name.")
+    record_parser.add_argument("role", help="The real role/job title.")
+    record_parser.add_argument(
+        "--status",
+        required=True,
+        choices=VALID_JOB_APPLICATION_STATUSES,
+        help="The real, current status of this application.",
+    )
+    record_parser.add_argument(
+        "--folder",
+        default=None,
+        help=(
+            "The real, local application-folder path from "
+            "'prepare-application', if this application has one. "
+            "Omit if recorded manually."
+        ),
+    )
+    record_parser.add_argument("--notes", default=None, help="Real, optional free-text notes.")
+    _add_common_flags(record_parser)
+
+    list_parser = job_application_subparsers.add_parser(
+        "list", help="List recorded job applications, optionally filtered by status."
+    )
+    list_parser.add_argument(
+        "--status",
+        default=None,
+        choices=VALID_JOB_APPLICATION_STATUSES,
+        help="Only show applications with this exact status.",
+    )
+    _add_common_flags(list_parser)
+
+
 def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add the plan run subparser -- a real, invocable planning.run_plan (ADR-0062), nested.
 
@@ -776,6 +834,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_planning_parsers(subparsers)
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
+    _add_job_application_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -1183,6 +1242,39 @@ def _run_prepare_application_subcommand(
     )
 
 
+def _run_job_application_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, tuple[MemoryRecord, ...] | None]:
+    """Dispatch one ``job-application`` subcommand, returning (decision, records).
+
+    Split out from :func:`_dispatch_command` for the identical reason
+    :func:`_run_memory_subcommand` is. Both branches call straight
+    into ``jarvis.kernel.job_application``, which itself reuses
+    ``authorize_and_remember``/``authorize_and_recall`` unmodified --
+    no new capability exists to dispatch to here.
+    """
+    if args.job_application_command == "record":
+        write_outcome = authorize_and_record_job_application(
+            args.company,
+            args.role,
+            status=args.status,
+            folder=args.folder,
+            notes=args.notes,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return write_outcome.decision, None
+
+    list_outcome = authorize_and_list_job_applications(
+        status=args.status,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return list_outcome.decision, list_outcome.records
+
+
 def _run_planning_subcommand(
     args: argparse.Namespace,
 ) -> tuple[Decision, tuple[PlanStepRecord, ...] | None]:
@@ -1450,6 +1542,7 @@ class _CommandOutcome:
     application_cover_letter_template_path: str | None = None
     application_draft_decision: Decision | None = None
     application_body_path: str | None = None
+    job_application_records: tuple[MemoryRecord, ...] | None = None
 
 
 def _run_basic_subcommand(
@@ -1542,6 +1635,13 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
         return _CommandOutcome(decision, args.command)
     if args.command == "prepare-application":
         return _run_prepare_application_subcommand(args)
+    if args.command == "job-application":
+        decision, job_application_records = _run_job_application_subcommand(args)
+        return _CommandOutcome(
+            decision,
+            f"job-application {args.job_application_command}",
+            job_application_records=job_application_records,
+        )
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
@@ -1555,6 +1655,30 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
         chain_path=args.chain_path,
     )
     return _CommandOutcome(decision, args.command)
+
+
+def _print_job_application_table(records: tuple[MemoryRecord, ...]) -> None:
+    """Print job-application records as a real, readable table -- not a raw memory dump.
+
+    Split out from :func:`_print_outcome` purely to keep its own
+    statement count under ruff's `PLR0915` threshold, the same reason
+    every other multi-line payload branch in this module has already
+    been split out into its own function.
+    """
+    print(f"{'COMPANY':<20}  {'ROLE':<25}  {'DATE':<33}  {'STATUS':<14}  FOLDER")
+    for job_record in records:
+        data = job_record.value.value
+        if not isinstance(data, dict):
+            print(f"{job_record.identifier}: {data!r}")
+            continue
+        folder = data.get("folder") or "-"
+        print(
+            f"{data.get('company', '')!s:<20}  "
+            f"{data.get('role', '')!s:<25}  "
+            f"{data.get('date_applied', '')!s:<33}  "
+            f"{data.get('status', '')!s:<14}  "
+            f"{folder}"
+        )
 
 
 def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one branch per optional payload field
@@ -1575,6 +1699,8 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
             print(f"{record.identifier}: {record.value.value}")
     if outcome.memory_deleted_count is not None:
         print(f"deleted: {outcome.memory_deleted_count}")
+    if outcome.job_application_records is not None:
+        _print_job_application_table(outcome.job_application_records)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:

@@ -47,6 +47,21 @@ apply to acting on an existing record by identifier. ``memory.forget``
 declares ``Effect.DESTRUCTIVE | Effect.IRREVERSIBLE`` (``Tier.MANUAL_ONLY``)
 -- a real, unrecoverable deletion, the same effect combination
 ``git.force_push`` uses for the same "no built-in undo" reason.
+
+**``authorize_and_remember``'s own ``value`` parameter accepts any
+JSON-serializable object, not only ``str``** (a real, additive,
+backward-compatible fix -- confirmed safe by checking every real call
+site passes it positionally, none by the old ``text=`` keyword). The
+domain (``MemoryRecord.value: Tainted[object]``), the adapter
+(``SqliteMemoryAdapter.write()``), and the application layer
+(``memory_effect_for()``, ``MemoryWriteAuthorizer.authorize_write[T]``)
+already supported structured values before this change; only this
+function's own public type hint was the real, narrow bottleneck.
+``jarvis.kernel.job_application`` is the first real caller to pass a
+structured (``dict``) value -- a real, thin convention layered
+directly on top of ``authorize_and_remember``/``authorize_and_recall``,
+not a new capability, port, or adapter (see that module's own
+docstring).
 """
 
 from __future__ import annotations
@@ -120,7 +135,7 @@ class MemoryWriteOutcome:
 
 
 def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pass-through
-    text: str,
+    value: object,
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
@@ -130,18 +145,26 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
     clock: ClockPort | None = None,
     id_port: IdPort | None = None,
 ) -> MemoryWriteOutcome:
-    """Wire up the stack, authorize memorizing ``text``, and write it only if granted.
+    """Wire up the stack, authorize memorizing ``value``, and write it only if granted.
 
     Args:
-        text: The real text to memorize, typed or spoken directly by
-            the user -- wrapped as ``Tainted(text, Provenance.user())``,
-            matching every other directly-typed/spoken argument in
-            this codebase (``ping``'s empty args, a music command,
-            ``fs.read_file``'s path). ``memory_effect_for()``
-            (ADR-0049) resolves the real ``Effect`` this declares from
-            that provenance's own classification -- ``PUBLIC`` here,
-            so this call always floors at ``WRITE_LOCAL``/``CONFIRM``,
-            never the unconditional ``MEMORY_WRITE``/``DENY`` floor a
+        value: The real value to memorize, typed or spoken directly by
+            the user -- a plain ``str`` (the only shape this parameter
+            accepted before ``job_application.record``'s own real,
+            additive fix) or any other JSON-serializable value
+            (``int``/``float``/``bool``/``None``/``list``/``dict`` --
+            see ``adapters/memory.py``'s own ``SqliteMemoryAdapter.write()``
+            docstring for the exact supported set; a non-JSON-
+            serializable value raises ``UnsupportedMemoryValueError``
+            there, not here). Wrapped as
+            ``Tainted(value, Provenance.user())``, matching every other
+            directly-typed/spoken argument in this codebase (``ping``'s
+            empty args, a music command, ``fs.read_file``'s path).
+            ``memory_effect_for()`` (ADR-0049) resolves the real
+            ``Effect`` this declares from that provenance's own
+            classification -- ``PUBLIC`` here, so this call always
+            floors at ``WRITE_LOCAL``/``CONFIRM``, never the
+            unconditional ``MEMORY_WRITE``/``DENY`` floor a
             ``SECRET``-classified value would hit. A future caller
             constructing this value from a less-trusted or more
             sensitive source is responsible for giving it the correct
@@ -175,7 +198,7 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
     milestone never asked for.
     """
     resolved_clock = clock or SystemClockAdapter()
-    value: Tainted[object] = Tainted(text, Provenance.user())
+    tainted_value: Tainted[object] = Tainted(value, Provenance.user())
 
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()
@@ -189,14 +212,14 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
     )
     authorizer = MemoryWriteAuthorizer(orchestrator)
 
-    decision = authorizer.authorize_write(value, orchestrator.get_current_context())
+    decision = authorizer.authorize_write(tainted_value, orchestrator.get_current_context())
 
     identifier: str | None = None
     try:
         if decision.granted:
             adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
             adapter.sweep_expired()
-            identifier = adapter.write(value)
+            identifier = adapter.write(tainted_value)
     finally:
         storage.save(chain)
 

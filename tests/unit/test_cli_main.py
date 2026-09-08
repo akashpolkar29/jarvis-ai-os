@@ -62,6 +62,7 @@ from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.job_application import JobApplicationListOutcome
 from jarvis.kernel.job_assistance import (
     ApplicationFolderAlreadyExistsError,
     DraftOutcome,
@@ -3340,6 +3341,231 @@ def test_git_commit_command_failure_fails_closed_not_a_crash(
     assert "git commit exited non-zero" in captured.err
 
 
+def _make_job_application_record(  # noqa: PLR0913 -- one per test-fixture field
+    identifier: str,
+    *,
+    company: str,
+    role: str,
+    status: str,
+    folder: str | None,
+    date_applied: str = "2026-09-08T00:00:00+00:00",
+    notes: str | None = None,
+) -> MemoryRecord:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    value: dict[str, object] = {
+        "kind": "job_application",
+        "company": company,
+        "role": role,
+        "status": status,
+        "date_applied": date_applied,
+        "folder": folder,
+        "notes": notes,
+    }
+    return MemoryRecord(
+        identifier=identifier,
+        value=Tainted(value, Provenance.user()),
+        written_at=now,
+        expires_at=now,
+    )
+
+
+def test_job_application_record_subcommand_routes_all_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[tuple[str, str, str, str | None, str | None]] = []
+
+    def fake_authorize_and_record_job_application(  # noqa: PLR0913 -- one per composition-function pass-through
+        company: str,
+        role: str,
+        *,
+        status: str,
+        folder: str | None,
+        notes: str | None,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        received.append((company, role, status, folder, notes))
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return MemoryWriteOutcome(decision=decision, identifier="mem:1")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_record_job_application",
+        fake_authorize_and_record_job_application,
+    )
+
+    exit_code = main(
+        [
+            "job-application",
+            "record",
+            "Acme Corp",
+            "Software Engineer",
+            "--status",
+            "applied",
+            "--folder",
+            "/home/user/applications/2026-09/acme",
+            "--notes",
+            "Referred by a friend.",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == [
+        (
+            "Acme Corp",
+            "Software Engineer",
+            "applied",
+            "/home/user/applications/2026-09/acme",
+            "Referred by a friend.",
+        )
+    ]
+    assert exit_code == 0
+
+
+def test_job_application_record_subcommand_rejects_an_invalid_status(tmp_path: Path) -> None:
+    """argparse's own `choices=` rejects an unknown status before any kernel call is made."""
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "job-application",
+                "record",
+                "Acme Corp",
+                "Software Engineer",
+                "--status",
+                "ghosted",
+                "--chain-path",
+                str(tmp_path / "audit_chain.json"),
+            ]
+        )
+
+
+def test_job_application_list_subcommand_routes_status_filter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str | None] = []
+
+    def fake_authorize_and_list_job_applications(
+        *,
+        status: str | None,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> JobApplicationListOutcome:
+        received.append(status)
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return JobApplicationListOutcome(decision=decision, records=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_job_applications",
+        fake_authorize_and_list_job_applications,
+    )
+
+    exit_code = main(
+        [
+            "job-application",
+            "list",
+            "--status",
+            "interviewing",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert received == ["interviewing"]
+    assert exit_code == 0
+
+
+def test_job_application_list_subcommand_prints_a_readable_table(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_job_applications(
+        *,
+        status: str | None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> JobApplicationListOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return JobApplicationListOutcome(
+            decision=decision,
+            records=(
+                _make_job_application_record(
+                    "mem:1",
+                    company="Acme Corp",
+                    role="Software Engineer",
+                    status="applied",
+                    folder="/home/user/applications/2026-09/acme",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_job_applications",
+        fake_authorize_and_list_job_applications,
+    )
+
+    exit_code = main(
+        ["job-application", "list", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "COMPANY" in captured.out
+    assert "ROLE" in captured.out
+    assert "STATUS" in captured.out
+    assert "FOLDER" in captured.out
+    assert "Acme Corp" in captured.out
+    assert "Software Engineer" in captured.out
+    assert "applied" in captured.out
+    assert "/home/user/applications/2026-09/acme" in captured.out
+    assert exit_code == 0
+
+
+def test_job_application_list_subcommand_displays_a_missing_folder_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A manually-recorded application (no --folder) displays as '-', not 'None' or a crash."""
+
+    def fake_authorize_and_list_job_applications(
+        *,
+        status: str | None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> JobApplicationListOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return JobApplicationListOutcome(
+            decision=decision,
+            records=(
+                _make_job_application_record(
+                    "mem:1",
+                    company="Acme Corp",
+                    role="Software Engineer",
+                    status="drafted",
+                    folder=None,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_job_applications",
+        fake_authorize_and_list_job_applications,
+    )
+
+    exit_code = main(
+        ["job-application", "list", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "None" not in captured.out
+    assert "-" in captured.out
+    assert exit_code == 0
+
+
 _TOP_LEVEL_COMMANDS = (
     "send-email",
     "create-calendar-event",
@@ -3374,6 +3600,7 @@ _TOP_LEVEL_COMMANDS = (
 _MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore", "wipe")
 _PLANNING_SUBCOMMANDS = ("run",)
 _EMAIL_SUBCOMMANDS = ("list", "read")
+_JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -3417,6 +3644,17 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "ADR-" not in captured.out, f"email {subcommand} --help leaks an ADR reference"
         assert "WP-" not in captured.out, (
             f"email {subcommand} --help leaks a work-package reference"
+        )
+
+    for subcommand in _JOB_APPLICATION_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["job-application", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, (
+            f"job-application {subcommand} --help leaks an ADR reference"
+        )
+        assert "WP-" not in captured.out, (
+            f"job-application {subcommand} --help leaks a work-package reference"
         )
 
 

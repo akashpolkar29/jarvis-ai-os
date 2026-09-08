@@ -27,11 +27,15 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 — this table previously listed 33 real subcommands;
-it now covers all 38, adding `plan run`/`email list`/`email read`
-(three already-real, already-tested capabilities that had never had a
-CLI entry point until an earlier pass), `job-search` (a new, minimal
-capability, real assisted browsing — see
+**Updated 2026-09-08 — this table previously listed 38 real subcommands;
+it now covers 40, adding `job-application record`/`job-application
+list` (a real, thin structured-content convention over the
+already-real `memory.write`/`memory.retrieve` capabilities, not a new
+capability of their own — see that subcommand's own note below). It
+previously covered 33, before that, adding `plan run`/`email
+list`/`email read` (three already-real, already-tested capabilities
+that had never had a CLI entry point until an earlier pass),
+`job-search` (a new, minimal capability, real assisted browsing — see
 `docs/architecture/job-search-scoping-notes.md`'s own "Resolution"
 section for why this never reads/scrapes listing content), and
 `prepare-application` (real, local-only application-folder drafting —
@@ -66,6 +70,8 @@ not to duplicate the policy engine's own reasoning.
 | `code <task> <repo-path>` | `coding.run_task` | `task`, `repo-path` |
 | `draft <task>` | `job_assistance.draft` (dynamic effect) | `task` |
 | `prepare-application <job title> <company>` | `job_assistance.prepare_application_folder` (dynamic effect, reuses `job_assistance.draft` internally for the body) | `job title`, `company`, `--base-dir`, `--month-label`, `--cv-template`, `--cover-letter-template`, `--task-description` (optional), `--force` (optional) |
+| `job-application record <company> <role>` | `memory.write` (dynamic effect — reused unmodified, no new capability; see that subcommand's own note below) | `company`, `role`, `--status` (required, one of `drafted`/`applied`/`interviewing`/`rejected`/`offer`), `--folder` (optional), `--notes` (optional) |
+| `job-application list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, same vocabulary as `record`) |
 | `open-brave-url <url>` | `desktop.brave_open_url` | `url` |
 | `open-vscode-file <path>` | `desktop.vscode_open_file` | `path` |
 | `send-claude-text <text>` | `desktop.claude_app_send_text` | `text` |
@@ -122,6 +128,25 @@ cleanly rather than being touched; `--force` floors this capability at
 `Tier.MANUAL_ONLY`, the same real precedent `git.force_push` already
 established for "the same action, but an explicit, destructive
 overwrite variant."
+
+`job-application record`/`job-application list` are a real, thin
+structured-content *convention*, not a new capability, port, or
+adapter — closing the original charter's "store the data of applied
+job roles" gap by reusing `memory.write`/`memory.retrieve` completely
+unmodified (see `kernel/job_application.py`'s own module docstring for
+the full reasoning). A recorded application is stored as an ordinary
+memory whose own JSON value carries a fixed `"kind": "job_application"`
+marker key — `MemoryRecord` gained no new field, and no new
+`CapabilityId` was registered. `list`'s own real, honest limitation:
+`RetrievalPort` has no exact-match filter primitive, only
+similarity-ranked top-K search, so `list` recalls broadly (a fixed,
+generous internal limit) and filters precisely on the marker key
+afterward — a store holding far more than that many distinct memories
+could, in principle, have an old job-application record rank below the
+cutoff and go unlisted. `record`'s own effect/tier is exactly
+`memory.write`'s (`Effect.WRITE_LOCAL`/`Tier.CONFIRM` for the
+`Classification.PUBLIC` this data always carries); `list`'s is exactly
+`memory.retrieve`'s (`Effect.READ_LOCAL`/`Tier.ALLOW`).
 
 `listen` does not take `--physical-confirmation-available`/
 `--remote-confirmation-available` — it asks a real, per-utterance

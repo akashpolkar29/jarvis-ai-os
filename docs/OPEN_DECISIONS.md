@@ -282,6 +282,48 @@ of clearly-delimited CV fields is a separate, future decision that
 would first need the user to define a real, safe placeholder
 convention in his own template.
 
+## 12. ~~Applied-jobs ledger~~ -- RESOLVED/BUILT 2026-09-08
+
+**Resolved/built**: `jarvis.kernel.job_application` (`jarvis
+job-application record`/`jarvis job-application list`) closes a real,
+original charter gap -- "store the data of applied job roles" -- as a
+real, thin structured-content *convention* on top of the already-real
+`memory.write`/`memory.retrieve` capabilities, exactly as required: no
+new port, adapter, or `CapabilityId` was built.
+
+**Investigation finding, confirmed before writing any code**:
+`MemoryRecord.value: Tainted[object]`, `SqliteMemoryAdapter.write()`,
+`memory_effect_for()`, and `MemoryWriteAuthorizer.authorize_write[T]`
+already supported arbitrary JSON-serializable structured values (the
+WP-65-era "str-only" limitation this codebase's own history already
+flagged as narrowed, with "no real caller yet" -- this is that real
+caller). Only `authorize_and_remember`'s own public parameter was
+narrower than everything downstream of it; retyped from `text: str` to
+`value: object`, confirmed backward-compatible by checking every real
+call site passes it positionally, none by the old `text=` keyword.
+
+**The real "distinguishing tag" mechanism**: `MemoryRecord` has no
+tag/category field, and `RetrievalPort`'s only real interface
+(`retrieve(query, *, limit)`) is a cosine-similarity-ranked top-K
+search -- confirmed directly, no exact/prefix-match primitive exists
+anywhere in this codebase today. Rather than inventing a new
+`MemoryRecord` field (explicitly ruled out), each job-application
+record embeds a fixed `"kind": "job_application"` marker key inside
+its own JSON value; `list` recalls broadly (a fixed, generous internal
+limit) and filters precisely on that marker afterward. **A real,
+named limitation, not hidden**: a store holding far more distinct
+memories than that internal limit could, in principle, rank an older
+job-application record below the cutoff and have it go unlisted -- an
+inherent consequence of reusing a similarity-ranked retrieval
+mechanism with no exact filter, out of this work package's own scope
+to fix (would need a real `RetrievalPort` interface change).
+
+Effect/tier: both functions reuse `authorize_and_remember`/
+`authorize_and_recall` completely unmodified, so there is no separate
+classification to review -- `record` is exactly `memory.write`'s
+(`Effect.WRITE_LOCAL`/`Tier.CONFIRM`, `Classification.PUBLIC`); `list`
+is exactly `memory.retrieve`'s (`Effect.READ_LOCAL`/`Tier.ALLOW`).
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
