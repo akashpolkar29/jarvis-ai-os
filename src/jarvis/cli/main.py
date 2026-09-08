@@ -493,6 +493,16 @@ def _add_prepare_application_parsers(
             "Without this, an existing folder fails cleanly rather than being touched."
         ),
     )
+    prepare_parser.add_argument(
+        "--record",
+        action="store_true",
+        help=(
+            "After a granted folder creation, also record this application in the "
+            "job-application ledger (status=drafted, folder=the real folder just "
+            "created) -- one command instead of two for the common case. Without "
+            "this, behavior is exactly as before: folder only, no ledger entry."
+        ),
+    )
     _add_common_flags(prepare_parser)
 
 
@@ -1214,6 +1224,15 @@ def _run_prepare_application_subcommand(
     resolves automatically. `authorize_and_prepare_application_folder`
     is ``async``, so this wraps its own call in ``asyncio.run``, the
     same shape `_run_reasoning_subcommand` already uses.
+
+    ``--record`` is a real, additive convenience only: a granted
+    folder creation calls `authorize_and_record_job_application`
+    completely unmodified (`status="drafted"`, `folder=` the real
+    `<base_dir>/<month_label>` folder just created, derived from
+    `outcome.cv_path`'s own parent's parent rather than re-deriving
+    `month_dir` a second time). Without `--record` (the default),
+    behavior is byte-for-byte identical to before this flag existed --
+    no ledger call is ever made.
     """
     outcome = asyncio.run(
         authorize_and_prepare_application_folder(
@@ -1230,6 +1249,19 @@ def _run_prepare_application_subcommand(
             chain_path=args.chain_path,
         )
     )
+    job_application_identifier: str | None = None
+    if args.record and outcome.decision.granted and outcome.cv_path is not None:
+        application_folder = outcome.cv_path.parent.parent
+        record_outcome = authorize_and_record_job_application(
+            args.company,
+            args.job_title,
+            status="drafted",
+            folder=str(application_folder),
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        job_application_identifier = record_outcome.identifier
     return _CommandOutcome(
         outcome.decision,
         "prepare-application",
@@ -1237,6 +1269,7 @@ def _run_prepare_application_subcommand(
         application_cover_letter_template_path=(
             str(outcome.cover_letter_template_path) if outcome.cover_letter_template_path else None
         ),
+        application_job_application_identifier=job_application_identifier,
         application_draft_decision=outcome.draft_decision,
         application_body_path=(str(outcome.body_path) if outcome.body_path else None),
     )
@@ -1542,6 +1575,7 @@ class _CommandOutcome:
     application_cover_letter_template_path: str | None = None
     application_draft_decision: Decision | None = None
     application_body_path: str | None = None
+    application_job_application_identifier: str | None = None
     job_application_records: tuple[MemoryRecord, ...] | None = None
 
 
@@ -1743,6 +1777,8 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
         if outcome.application_draft_decision is not None:
             draft_status = "GRANTED" if outcome.application_draft_decision.granted else "DENIED"
             print(f"cover-letter body drafting: {draft_status}")
+        if outcome.application_job_application_identifier is not None:
+            print(f"job-application recorded: {outcome.application_job_application_identifier}")
         if outcome.application_body_path is not None:
             print(f"Cover letter body drafted to: {outcome.application_body_path}")
             print(

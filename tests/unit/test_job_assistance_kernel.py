@@ -27,6 +27,10 @@ from jarvis.domain.capability import Tier
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.reasoning import ProviderProfile
+from jarvis.kernel.job_application import (
+    authorize_and_list_job_applications,
+    authorize_and_record_job_application,
+)
 from jarvis.kernel.job_assistance import (
     ApplicationFolderAlreadyExistsError,
     ApplicationFolderOutsideBaseDirectoryError,
@@ -374,6 +378,92 @@ async def test_granted_prepare_creates_folders_and_copies_templates_verbatim(
     assert outcome.body_path == base_dir / "September 2026" / "Cover Letter" / "body.tex"
     assert outcome.body_path is not None
     assert outcome.body_path.read_text() == "Dear Hiring Manager, real drafted body."
+
+
+class _FakeEmbeddingPortForMemory:
+    """Maps every text to the same vector -- similarity ranking is not what this test checks."""
+
+    def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        return tuple((1.0, 0.0) for _ in texts)
+
+
+class _SequentialIdPortForMemory:
+    def __init__(self) -> None:
+        self._counter = 0
+
+    def new_id(self) -> str:
+        self._counter += 1
+        return f"mem:{self._counter}"
+
+
+async def test_prepare_then_record_then_list_round_trips_the_real_created_folder(
+    tmp_path: Path,
+) -> None:
+    """The real, end-to-end 'search -> draft -> track' chain: prepare, then record, then list.
+
+    Mirrors cli/main.py's own `--record` wiring exactly (deriving the
+    real application folder from `outcome.cv_path.parent.parent`
+    rather than re-resolving `month_dir` a second time) -- proves the
+    ledger entry this produces is genuinely retrievable with the
+    correct folder path, not just that the two calls don't crash.
+    """
+    cv_template, cover_letter_template = _write_real_templates(tmp_path)
+    base_dir = tmp_path / "base"
+    provider = _CountingProvider("local", "Dear Hiring Manager, real drafted body.")
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    id_port = _SequentialIdPortForMemory()
+
+    prepare_outcome = await authorize_and_prepare_application_folder(
+        base_dir,
+        "September 2026",
+        cv_template,
+        cover_letter_template,
+        "Software Engineer",
+        "Acme Corp",
+        providers=((_PROFILE_A, provider),),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        presentation=_FakePresentation(),
+        console=_StubConsole(),
+    )
+    assert prepare_outcome.decision.granted is True
+    assert prepare_outcome.cv_path is not None
+    application_folder = prepare_outcome.cv_path.parent.parent
+
+    record_outcome = authorize_and_record_job_application(
+        "Acme Corp",
+        "Software Engineer",
+        status="drafted",
+        folder=str(application_folder),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPortForMemory(),
+        id_port=id_port,
+    )
+    assert record_outcome.decision.granted is True
+
+    list_outcome = authorize_and_list_job_applications(
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPortForMemory(),
+        id_port=_SequentialIdPortForMemory(),
+    )
+
+    assert len(list_outcome.records) == 1
+    data = list_outcome.records[0].value.value
+    assert isinstance(data, dict)
+    assert data["kind"] == "job_application"
+    assert data["company"] == "Acme Corp"
+    assert data["role"] == "Software Engineer"
+    assert data["status"] == "drafted"
+    assert data["folder"] == str(base_dir / "September 2026")
+    assert data["notes"] is None
 
 
 async def test_denied_prepare_never_creates_any_real_folder_or_file(tmp_path: Path) -> None:

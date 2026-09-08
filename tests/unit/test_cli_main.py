@@ -2028,6 +2028,125 @@ def test_prepare_application_subcommand_requires_job_title_company_and_flags() -
         main(["prepare-application", "Software Engineer", "Acme Corp"])
 
 
+async def _fake_prepare_application_folder_granted(  # noqa: PLR0913, PLR0917 -- mirrors the real signature
+    base_dir: Path,  # noqa: ARG001
+    month_label: str,  # noqa: ARG001
+    cv_template_path: Path,  # noqa: ARG001
+    cover_letter_template_path: Path,  # noqa: ARG001
+    job_title: str,  # noqa: ARG001
+    company: str,  # noqa: ARG001
+    task_description: str | None,  # noqa: ARG001
+    providers: object | None = None,  # noqa: ARG001
+    *,
+    force: bool,  # noqa: ARG001
+    physical_confirmation_available: bool,  # noqa: ARG001
+    remote_confirmation_available: bool,  # noqa: ARG001
+    chain_path: Path,  # noqa: ARG001
+) -> PrepareApplicationFolderOutcome:
+    cv_path = Path("/tmp/jarvis-test-applications/September 2026/CV/main.tex")
+    return PrepareApplicationFolderOutcome(
+        decision=_make_decision(
+            granted=True, capability_id="job_assistance.prepare_application_folder"
+        ),
+        cv_path=cv_path,
+        cover_letter_template_path=cv_path.parent.parent / "Cover Letter" / "main.tex",
+        draft_decision=_make_decision(granted=True, capability_id="job_assistance.draft"),
+        body_path=cv_path.parent.parent / "Cover Letter" / "body.tex",
+    )
+
+
+def test_prepare_application_with_record_flag_also_records_a_ledger_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--record calls job_application.record with status=drafted and the real created folder."""
+    received: list[tuple[str, str, str, str | None]] = []
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        _fake_prepare_application_folder_granted,
+    )
+
+    def fake_authorize_and_record_job_application(  # noqa: PLR0913 -- one per composition-function pass-through
+        company: str,
+        role: str,
+        *,
+        status: str,
+        folder: str | None = None,
+        notes: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryWriteOutcome:
+        received.append((company, role, status, folder))
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return MemoryWriteOutcome(decision=decision, identifier="mem:99")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_record_job_application",
+        fake_authorize_and_record_job_application,
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--record",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [
+        (
+            "Acme Corp",
+            "Software Engineer",
+            "drafted",
+            "/tmp/jarvis-test-applications/September 2026",
+        )
+    ]
+    assert "job-application recorded: mem:99" in captured.out
+    assert exit_code == 0
+
+
+def test_prepare_application_without_record_flag_records_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Omitting --record is byte-for-byte the same as before this flag existed: no ledger call."""
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_prepare_application_folder",
+        _fake_prepare_application_folder_granted,
+    )
+
+    def fail_if_called(*args: object, **kwargs: object) -> MemoryWriteOutcome:  # noqa: ARG001
+        msg = "authorize_and_record_job_application must not be called without --record"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_record_job_application", fail_if_called
+    )
+
+    exit_code = main(
+        [
+            "prepare-application",
+            "Software Engineer",
+            "Acme Corp",
+            *_PREPARE_APPLICATION_COMMON_FLAGS,
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "job-application recorded:" not in captured.out
+    assert exit_code == 0
+
+
 def test_plan_run_subcommand_executes_and_reports_each_step(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
