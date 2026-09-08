@@ -30,9 +30,13 @@ voice grammar expansion and a real end-to-end scenario test, tagged
 `v0.9.0`, 2026-09-08; and WP-101 (2026-09-08), which closed the audit
 chain's non-atomic-writes gap (temp-file-then-`Path.replace`, real
 tests proving a simulated mid-save crash leaves the original file
-untouched). All items 1-4 and 6-14 below are resolved, decided, or
-built; only item 5 (one of the audit chain's four real structural
-gaps -- the cross-process race) remains genuinely open.
+untouched); and a real, typed project-goal workflow (`jarvis project
+start`/`status`, item 15), closing the original charter's "remember my
+projects" gap at the workflow level, `Tier.ALLOW`-only bounded by
+ADR-0062's own already-accepted v1 ceiling. All items 1-4 and 6-15
+below are resolved, decided, or built; only item 5 (one of the audit
+chain's four real structural gaps -- the cross-process race) remains
+genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -447,6 +451,54 @@ never been updated for M6/`v0.6.0` or either of `v0.8.0`/`v0.9.0`. See
 `CHANGELOG.md`'s own `[0.9.0]` entry and the tag's own real, annotated
 message (`git show v0.9.0`) for the full account, including the four
 real, standing limits it names plainly.
+
+## 15. ~~Typed project-goal workflow (`jarvis project start`/`status`)~~ -- RESOLVED/BUILT 2026-09-08
+
+**Resolved/built**: closes the original charter's "remember my
+projects... continue yesterday's project" gap at the *workflow*
+level -- distinct from `fs.recent`'s file-level support, which already
+existed and covers a different real need (finding recently-touched
+files on disk, not tracking a project goal's own attempt history).
+`jarvis project start "<goal>"` is a thin, real composition wrapping
+the already-real, already-Accepted `planning.run_plan` (ADR-0062)
+completely unmodified -- no new planning/execution engine -- plus a
+real, structured `memory.write` status record on a granted, attempted
+plan, mirroring `job-application record`'s own "structured value on
+top of unmodified memory" convention exactly (item 12). `jarvis
+project status "<goal>"` retrieves the most recent matching record via
+`memory.retrieve`, unmodified. Neither reuses a `Decision`-shaped
+return for every real case: `PlanningError`/`PlanValidationError`
+still propagate exactly as `jarvis plan run` already does, with the
+added, real side effect that the failure reason is now durably
+recorded first.
+
+**A real, load-bearing finding, investigated before building, not
+assumed** (see `kernel/project.py`'s own module docstring for the full
+account): the working prompt that requested this assumed "stuck"
+already meant "a `Tier.CONFIRM` step blocks mid-plan awaiting the
+user." That signal cannot occur in the real, current code --
+`application/planning/executor.py` restricts `planning.run_plan` to
+`Tier.ALLOW`-only steps (narrower than ADR-0062's own stated ceiling,
+a deliberate, already-documented v1 restriction), so any step above
+`ALLOW` fails the whole plan's own pre-flight validation before any
+step runs at all, rather than pausing one step for confirmation.
+"Stuck" was redefined, by the user's own direct choice, to reuse the
+real, reachable signals instead (`PlanningError`/`PlanValidationError`,
+plus a defensively-handled but not-currently-reachable denied-step
+case) -- not the assumed, nonexistent mid-plan-pause signal.
+
+**A real, plainly-stated limit, not rounded up to "done"**:
+"fully autonomous project completion" is not real for any plan
+containing a `Tier.CONFIRM`-or-above step -- today's `Tier.ALLOW`-only
+v1 ceiling means such a plan simply cannot be proposed and validated
+at all, so `project start` fails closed (a real "stuck" status,
+honestly reported) rather than silently completing part of the work.
+Extending the planner past `Tier.ALLOW` was already investigated and
+explicitly deferred (item 8) -- this item does not reopen that
+decision. No retry or replan was added either, matching the
+already-accepted 2026-09-07 decision
+(`docs/architecture/planning-retry-replan-scoping-notes.md`) not to
+build either mechanism yet.
 
 ## Maintaining this index
 

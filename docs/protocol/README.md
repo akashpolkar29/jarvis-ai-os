@@ -27,8 +27,31 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 (yet later the same day) — this table now covers
-50 real subcommands, adding `calendar list-events`
+**Updated 2026-09-08 (a typed-goal-workflow pass, later still) — this
+table now covers 52 real subcommands, adding `project start`/`project
+status` (`jarvis.kernel.project` — a thin, typed-goal workflow atop the
+already-real, already-Accepted `planning.run_plan`, `Effect.EXECUTE`/
+`Tier.CONFIRM` reused exactly, no new capability of its own; a granted,
+attempted plan's own real outcome is additionally recorded via the
+same, already-real `memory.write`/`memory.retrieve` convention
+`job-application record`/`job-application list` already established.
+**A real, load-bearing finding, investigated before building, not
+assumed**: the working prompt that requested this assumed "stuck"
+already meant "a `Tier.CONFIRM` step blocks mid-plan awaiting the
+user" — the real, current planner is restricted to `Tier.ALLOW`-only
+steps (`application/planning/executor.py`'s own documented v1
+restriction, narrower than ADR-0062's own stated ceiling), so any step
+above `ALLOW` fails the whole plan's own validation before any step
+ever runs, rather than pausing one step for confirmation. "Stuck"
+therefore reuses the real, reachable signals instead: `PlanningError`/
+`PlanValidationError` (a real status record is written with the real
+reason, then the same exception still propagates, exactly matching
+`plan run`'s own existing CLI behavior) or a plan step genuinely
+denied mid-execution (not reachable today, since every real
+`PLAN_STEP_EXECUTORS` entry is `Tier.ALLOW` and `Tier.ALLOW` always
+grants — handled defensively anyway, proven by a pure unit test, no
+new registry entry). See `kernel/project.py`'s own module docstring
+for the full account. It previously covered 50, adding `calendar list-events`
 (`communications.list_calendar_events` -- a real, previously-missing
 CLI entry point re-confirmed by grepping every real, registered
 `kernel/communications.py` composition function directly, not assumed
@@ -109,6 +132,8 @@ not to duplicate the policy engine's own reasoning.
 | `git-push <repo-dir> <remote> <branch>` | `git.push` | `repo-dir`, `remote`, `branch` |
 | `git-force-push <repo-dir> <remote> <branch>` | `git.force_push` | `repo-dir`, `remote`, `branch` |
 | `plan run <goal>` | `planning.run_plan` (ADR-0062 — outer gate only; every proposed step is separately, individually authorized, never in bulk) | `goal` |
+| `project start <goal>` | `planning.run_plan` (reused unmodified, no new capability — a real, additive `memory.write` status record also lands on a granted, attempted plan) | `goal` |
+| `project status <goal>` | `memory.retrieve` (reused unmodified, no new capability) | `goal` (must exactly match a prior `project start` call's own goal string) |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `calendar list-events` | `communications.list_calendar_events` | `--start`, `--end` (both required, ISO-8601), `--caldav-url`, `--username`, `--password-reference` |

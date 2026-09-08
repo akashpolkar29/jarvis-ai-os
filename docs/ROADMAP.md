@@ -222,6 +222,23 @@ it.
   individual authorization are unchanged; only a new argument-parsing
   and dispatch entry point was added. See `docs/protocol/README.md`'s
   subcommand table.
+  **Updated 2026-09-08**: `jarvis project start "<goal>"`/`jarvis
+  project status "<goal>"` (`kernel/project.py`) close the original
+  charter's "remember my projects... continue yesterday's project" gap
+  at the workflow level — a thin composition wrapping
+  `planning.run_plan` unmodified, plus a real status record via the
+  same `memory.write`/`memory.retrieve` convention `job-application
+  record`/`list` already established. A real, load-bearing finding
+  from investigating before building: "stuck" cannot mean "a
+  `Tier.CONFIRM` step pauses mid-plan" as first assumed — the real
+  planner is `Tier.ALLOW`-only (`application/planning/executor.py`'s
+  own documented v1 ceiling), so any higher-tier step fails the whole
+  plan's own validation up front, never pausing one step. "Stuck"
+  reuses the real, reachable `PlanningError`/`PlanValidationError`
+  signals instead. "Fully autonomous project completion" remains not
+  real for any plan needing a `Tier.CONFIRM`-or-above step, by the same
+  already-accepted v1 ceiling — see `docs/OPEN_DECISIONS.md` item 15
+  for the full account.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
