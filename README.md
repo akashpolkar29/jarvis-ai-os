@@ -54,6 +54,43 @@ them (a real `Gtk4PhysicalConfirmationAdapter` backs `jarvis listen`
 specifically; every other subcommand's flags are still a direct,
 unverified CLI argument).
 
+## Job-application workflow
+
+Search, draft, and track job applications end to end. **Actual
+submission is always a manual, human step — no capability exists to
+submit an application on your behalf** (see
+[`docs/adr/0058-m6b-no-auto-apply-is-a-structural-boundary-not-a-policy-tier-gate.md`](docs/adr/0058-m6b-no-auto-apply-is-a-structural-boundary-not-a-policy-tier-gate.md):
+"no auto-apply" is a structural boundary, not a policy-tier gate).
+
+```sh
+# 1. Search — assisted browsing only. Opens a real search-results page
+#    in your own browser; never reads or scrapes its content.
+uv run jarvis job-search "robotics internship" --site linkedin --location "Boston, MA" \
+  --physical-confirmation-available --chain-path /tmp/audit_chain.json
+
+# 2. Draft — creates a real, local CV/Cover-Letter folder from your own
+#    templates (copied verbatim, never auto-tailored), drafts a
+#    cover-letter body via a local model, and (--record) logs the
+#    application to the ledger in the same step.
+uv run jarvis prepare-application "Robotics Intern" "Boston Dynamics" \
+  --base-dir ~/applications --month-label "September 2026" \
+  --cv-template ~/templates/cv.tex --cover-letter-template ~/templates/cover-letter.tex \
+  --record --physical-confirmation-available --chain-path /tmp/audit_chain.json
+
+# 3. Track — list every recorded application, optionally by status.
+uv run jarvis job-application list --chain-path /tmp/audit_chain.json
+uv run jarvis job-application list --status interviewing --chain-path /tmp/audit_chain.json
+```
+
+You review what opens in your own browser and submit it yourself.
+Once you have, record the real status change by hand:
+`jarvis job-application record <company> <role> --status applied` (or
+`interviewing`/`rejected`/`offer`). **A real, stated limitation, not
+hidden**: each `record` call always adds a new, separate, timestamped
+ledger entry rather than updating an existing one in place — `list`
+shows every entry, so the same application can appear more than once
+under different statuses as it progresses.
+
 ## Architecture
 
 JARVIS follows Clean Architecture / ports-and-adapters, with the
