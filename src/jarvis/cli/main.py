@@ -172,8 +172,15 @@ from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
+from jarvis.domain.browser import PageHandle
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.audit import authorize_and_view_audit_history
+from jarvis.kernel.browser import (
+    authorize_and_capture_screenshot,
+    authorize_and_close_page,
+    authorize_and_open_page,
+    authorize_and_query_dom,
+)
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
@@ -583,6 +590,68 @@ def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     _add_common_flags(plan_run_parser)
 
 
+def _add_browser_handle_flags(parser: argparse.ArgumentParser) -> None:
+    """Add the four real PageHandle fields as required flags.
+
+    Every ``jarvis`` invocation is a fresh, separate process (no
+    shared in-memory adapter state -- see ``domain/browser.py``'s own
+    module docstring), so ``screenshot``/``inspect-dom``/``close``
+    each need a real, already-open page's own handle reconstructed
+    from its four explicit fields, printed by a prior ``browser open``
+    call, rather than an opaque, unreconstructable in-process
+    reference.
+    """
+    parser.add_argument("--debug-port", type=int, required=True, help="From a prior 'open'.")
+    parser.add_argument("--target-id", required=True, help="From a prior 'open'.")
+    parser.add_argument("--process-id", type=int, required=True, help="From a prior 'open'.")
+    parser.add_argument("--user-data-dir", required=True, help="From a prior 'open'.")
+
+
+def _add_browser_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the browser subparser -- real, invocable browser.open_page/screenshot/inspect_dom/close.
+
+    Mirrors ``memory``/``plan``/``job-application``'s own nested
+    shape: a family of four related actions on a real, CDP-controlled
+    browser page, not a single action. No new capability -- all four
+    already exist, real, tested, and used internally (by
+    ``job_search.open_results``, the coding agent's own browser use),
+    but previously had no CLI entry point of their own (a real, named
+    gap from the dead-code sweep).
+    """
+    browser_parser = subparsers.add_parser(
+        "browser", help="Real, CDP-controlled browser-page automation."
+    )
+    browser_subparsers = browser_parser.add_subparsers(dest="browser_command", required=True)
+
+    open_parser = browser_subparsers.add_parser(
+        "open", help="Open a real, dedicated, headless browser page navigated to a URL."
+    )
+    open_parser.add_argument("url", help="The real URL to navigate to.")
+    _add_common_flags(open_parser)
+
+    screenshot_parser = browser_subparsers.add_parser(
+        "screenshot", help="Capture a real screenshot of an already-open page."
+    )
+    _add_browser_handle_flags(screenshot_parser)
+    screenshot_parser.add_argument(
+        "--output", type=Path, required=True, help="Where the real PNG bytes are written."
+    )
+    _add_common_flags(screenshot_parser)
+
+    inspect_dom_parser = browser_subparsers.add_parser(
+        "inspect-dom", help="Query an already-open page's live DOM for one element's outer HTML."
+    )
+    _add_browser_handle_flags(inspect_dom_parser)
+    inspect_dom_parser.add_argument("--selector", required=True, help="A real CSS selector.")
+    _add_common_flags(inspect_dom_parser)
+
+    close_parser = browser_subparsers.add_parser(
+        "close", help="Terminate an already-open page's real browser subprocess."
+    )
+    _add_browser_handle_flags(close_parser)
+    _add_common_flags(close_parser)
+
+
 def _add_job_search_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
@@ -842,6 +911,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_file_parsers(subparsers)
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
+    _add_browser_parsers(subparsers)
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
     _add_job_application_parsers(subparsers)
@@ -1335,6 +1405,81 @@ def _run_planning_subcommand(
     return decision, step_records
 
 
+def _handle_from_args(args: argparse.Namespace) -> PageHandle:
+    """Reconstruct a real PageHandle from a prior 'browser open' call's own printed fields."""
+    return PageHandle(
+        debug_port=args.debug_port,
+        target_id=args.target_id,
+        process_id=args.process_id,
+        user_data_dir=args.user_data_dir,
+    )
+
+
+def _run_browser_subcommand(
+    args: argparse.Namespace,
+) -> _CommandOutcome:
+    """Dispatch one ``browser`` subcommand, returning a full ``_CommandOutcome``.
+
+    Every real ``kernel.browser`` composition function is ``async``,
+    so each branch wraps its own call in ``asyncio.run``, the same
+    shape ``_run_reasoning_subcommand``/``_run_prepare_application_subcommand``
+    already use.
+    """
+    if args.browser_command == "open":
+        decision, handle = asyncio.run(
+            authorize_and_open_page(
+                args.url,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        return _CommandOutcome(decision, "browser open", browser_page_handle=handle)
+
+    if args.browser_command == "screenshot":
+        decision, screenshot = asyncio.run(
+            authorize_and_capture_screenshot(
+                _handle_from_args(args),
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        if screenshot is not None:
+            args.output.write_bytes(screenshot.value)
+        return _CommandOutcome(
+            decision,
+            "browser screenshot",
+            browser_screenshot_path=(str(args.output) if screenshot is not None else None),
+        )
+
+    if args.browser_command == "inspect-dom":
+        decision, html = asyncio.run(
+            authorize_and_query_dom(
+                _handle_from_args(args),
+                args.selector,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        return _CommandOutcome(
+            decision,
+            "browser inspect-dom",
+            browser_dom_html=(html.value if html is not None else None),
+        )
+
+    decision = asyncio.run(
+        authorize_and_close_page(
+            _handle_from_args(args),
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+    )
+    return _CommandOutcome(decision, "browser close")
+
+
 def _run_job_search_subcommand(args: argparse.Namespace) -> Decision:
     """Dispatch ``job-search``, returning its real Decision.
 
@@ -1577,6 +1722,9 @@ class _CommandOutcome:
     application_body_path: str | None = None
     application_job_application_identifier: str | None = None
     job_application_records: tuple[MemoryRecord, ...] | None = None
+    browser_page_handle: PageHandle | None = None
+    browser_screenshot_path: str | None = None
+    browser_dom_html: str | None = None
 
 
 def _run_basic_subcommand(
@@ -1664,6 +1812,8 @@ def _dispatch_command(  # noqa: PLR0911 -- one return per subcommand family, mir
             email_summaries=email_summaries,
             email_message=email_message,
         )
+    if args.command == "browser":
+        return _run_browser_subcommand(args)
     if args.command == "job-search":
         decision = _run_job_search_subcommand(args)
         return _CommandOutcome(decision, args.command)
@@ -1715,7 +1865,28 @@ def _print_job_application_table(records: tuple[MemoryRecord, ...]) -> None:
         )
 
 
-def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one branch per optional payload field
+def _print_browser_outcome(outcome: _CommandOutcome) -> None:
+    """Print a granted browser subcommand's own real payload -- a handle, a path, or DOM HTML.
+
+    Split out from :func:`_print_outcome` purely to keep its own
+    statement count under ruff's `PLR0915` threshold, the same reason
+    `_print_job_application_table` already exists.
+    """
+    if outcome.browser_page_handle is not None:
+        handle = outcome.browser_page_handle
+        print(f"debug_port: {handle.debug_port}")
+        print(f"target_id: {handle.target_id}")
+        print(f"process_id: {handle.process_id}")
+        print(f"user_data_dir: {handle.user_data_dir}")
+    if outcome.browser_screenshot_path is not None:
+        print(f"saved to: {outcome.browser_screenshot_path}")
+    if outcome.browser_dom_html is not None:
+        print(outcome.browser_dom_html)
+
+
+def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload field
+    outcome: _CommandOutcome,
+) -> None:
     """Print every real payload a dispatched command produced, beyond the decision line.
 
     Split out from :func:`main` purely to keep its own branch count
@@ -1735,6 +1906,7 @@ def _print_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one br
         print(f"deleted: {outcome.memory_deleted_count}")
     if outcome.job_application_records is not None:
         _print_job_application_table(outcome.job_application_records)
+    _print_browser_outcome(outcome)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:

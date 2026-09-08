@@ -47,6 +47,7 @@ from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanStep
 from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
+from jarvis.domain.browser import PageHandle
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -3685,6 +3686,332 @@ def test_job_application_list_subcommand_displays_a_missing_folder_cleanly(
     assert exit_code == 0
 
 
+_FAKE_HANDLE = PageHandle(
+    debug_port=9222, target_id="target-abc", process_id=1234, user_data_dir="/tmp/fake-profile"
+)
+_HANDLE_FLAGS = [
+    "--debug-port",
+    "9222",
+    "--target-id",
+    "target-abc",
+    "--process-id",
+    "1234",
+    "--user-data-dir",
+    "/tmp/fake-profile",
+]
+
+
+def test_browser_open_subcommand_routes_url_and_prints_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    async def fake_authorize_and_open_page(
+        url: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, PageHandle]:
+        received.append(url)
+        decision = _make_decision(granted=True, capability_id="browser.open_page")
+        return decision, _FAKE_HANDLE
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_open_page", fake_authorize_and_open_page
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "open",
+            "https://example.com",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["https://example.com"]
+    assert "browser open: GRANTED" in captured.out
+    assert "debug_port: 9222" in captured.out
+    assert "target_id: target-abc" in captured.out
+    assert "process_id: 1234" in captured.out
+    assert "user_data_dir: /tmp/fake-profile" in captured.out
+    assert exit_code == 0
+
+
+def test_browser_open_subcommand_denied_prints_no_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_open_page(
+        url: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, PageHandle | None]:
+        decision = _make_decision(granted=False, capability_id="browser.open_page")
+        return decision, None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_open_page", fake_authorize_and_open_page
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "open",
+            "https://example.com",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "browser open: DENIED" in captured.out
+    assert "debug_port:" not in captured.out
+    assert exit_code == 1
+
+
+def test_browser_open_subcommand_requires_url() -> None:
+    with pytest.raises(SystemExit):
+        main(["browser", "open"])
+
+
+def test_browser_screenshot_subcommand_reconstructs_handle_and_writes_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[PageHandle] = []
+    output_path = tmp_path / "shot.png"
+
+    async def fake_authorize_and_capture_screenshot(
+        handle: PageHandle,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[bytes]]:
+        received.append(handle)
+        decision = _make_decision(granted=True, capability_id="browser.screenshot")
+        content = Tainted(b"\x89PNGfakepixels", Provenance.external("t", Classification.SENSITIVE))
+        return decision, content
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_capture_screenshot",
+        fake_authorize_and_capture_screenshot,
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "screenshot",
+            *_HANDLE_FLAGS,
+            "--output",
+            str(output_path),
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [_FAKE_HANDLE]
+    assert output_path.read_bytes() == b"\x89PNGfakepixels"
+    assert f"saved to: {output_path}" in captured.out
+    assert exit_code == 0
+
+
+def test_browser_screenshot_subcommand_denied_writes_no_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output_path = tmp_path / "shot.png"
+
+    async def fake_authorize_and_capture_screenshot(
+        handle: PageHandle,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[bytes] | None]:
+        decision = _make_decision(granted=False, capability_id="browser.screenshot")
+        return decision, None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_capture_screenshot",
+        fake_authorize_and_capture_screenshot,
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "screenshot",
+            *_HANDLE_FLAGS,
+            "--output",
+            str(output_path),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert not output_path.exists()
+    assert exit_code == 1
+
+
+def test_browser_inspect_dom_subcommand_routes_selector_and_prints_html(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[PageHandle, str]] = []
+
+    async def fake_authorize_and_query_dom(
+        handle: PageHandle,
+        selector: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[str]]:
+        received.append((handle, selector))
+        decision = _make_decision(granted=True, capability_id="browser.inspect_dom")
+        return decision, Tainted(
+            "<h1>Hello</h1>", Provenance.external("t", Classification.SENSITIVE)
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_query_dom", fake_authorize_and_query_dom
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "inspect-dom",
+            *_HANDLE_FLAGS,
+            "--selector",
+            "h1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [(_FAKE_HANDLE, "h1")]
+    assert "<h1>Hello</h1>" in captured.out
+    assert exit_code == 0
+
+
+def test_browser_inspect_dom_subcommand_no_match_prints_no_html(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted query with no matching element returns None, not a crash or fake content."""
+
+    async def fake_authorize_and_query_dom(
+        handle: PageHandle,  # noqa: ARG001
+        selector: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, Tainted[str] | None]:
+        decision = _make_decision(granted=True, capability_id="browser.inspect_dom")
+        return decision, None
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_query_dom", fake_authorize_and_query_dom
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "inspect-dom",
+            *_HANDLE_FLAGS,
+            "--selector",
+            "h1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "browser inspect-dom: GRANTED" in captured.out
+    assert captured.out.strip() == (
+        "browser inspect-dom: GRANTED (tier=CONFIRM, reasons=DecisionReason.BASE_TIER)"
+    )
+    assert exit_code == 0
+
+
+def test_browser_inspect_dom_subcommand_requires_selector(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "browser",
+                "inspect-dom",
+                *_HANDLE_FLAGS,
+                "--chain-path",
+                str(tmp_path / "audit_chain.json"),
+            ]
+        )
+
+
+def test_browser_close_subcommand_routes_reconstructed_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[PageHandle] = []
+
+    async def fake_authorize_and_close_page(
+        handle: PageHandle,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> Decision:
+        received.append(handle)
+        return _make_decision(granted=True, capability_id="browser.close_page")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_close_page", fake_authorize_and_close_page
+    )
+
+    exit_code = main(
+        [
+            "browser",
+            "close",
+            *_HANDLE_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [_FAKE_HANDLE]
+    assert "browser close: GRANTED" in captured.out
+    assert exit_code == 0
+
+
+def test_browser_close_subcommand_requires_all_handle_flags(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "browser",
+                "close",
+                "--debug-port",
+                "9222",
+                "--chain-path",
+                str(tmp_path / "audit_chain.json"),
+            ]
+        )
+
+
+def test_browser_subcommand_requires_a_browser_command() -> None:
+    with pytest.raises(SystemExit):
+        main(["browser"])
+
+
 _TOP_LEVEL_COMMANDS = (
     "send-email",
     "create-calendar-event",
@@ -3720,6 +4047,7 @@ _MEMORY_SUBCOMMANDS = ("write", "retrieve", "forget", "pin", "backup", "restore"
 _PLANNING_SUBCOMMANDS = ("run",)
 _EMAIL_SUBCOMMANDS = ("list", "read")
 _JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
+_BROWSER_SUBCOMMANDS = ("open", "screenshot", "inspect-dom", "close")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -3774,6 +4102,15 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         )
         assert "WP-" not in captured.out, (
             f"job-application {subcommand} --help leaks a work-package reference"
+        )
+
+    for subcommand in _BROWSER_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["browser", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"browser {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, (
+            f"browser {subcommand} --help leaks a work-package reference"
         )
 
 
