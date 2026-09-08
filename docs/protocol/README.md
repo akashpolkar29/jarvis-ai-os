@@ -210,6 +210,20 @@ uses — voice never bypasses a capability's own floor.
 | `create event <summary> from <start> to <end> [with <attendees>]` | `communications.create_calendar_event` (needs `calendar_port` pre-configured) |
 | `plan <goal>` | `planning.run_plan` — every real plan step is still separately, individually authorized (ADR-0062); a granted "plan" only ever means the planner may run at all |
 | `search jobs <keywords> on linkedin`/`on indeed` | `job_search.open_results` |
+| `find files <pattern>` | `fs.find` (speaks back up to 3 results) |
+| `search files <query>` | `fs.search_content` (speaks back up to 3 results) |
+| `recent files` | `fs.recent` (speaks back up to 3 files; zero-argument, trailing words are unrecognized) |
+| `careers page <company>` | `job_search.find_careers_page` |
+
+**Real, deliberate voice-grammar omissions from this same pass, not
+oversights**: `browser open`/`screenshot`/`inspect-dom`/`close` and
+`calendar list-events` were all investigated and rejected — see
+`kernel/intent.py`'s own module docstring for the full reasoning
+(the three `browser.*` subcommands need a real `PageHandle`'s four
+explicit fields, unsuitable to speak aloud regardless of tier;
+`calendar list-events` needs a pre-configured `calendar_port` plus two
+spoken ISO-8601 timestamps, the same real reason
+`communications.list_email`/`read_email` already have no voice grammar).
 
 **Two real, named limitations, not oversights**: `create event`'s
 `<start>`/`<end>` are matched verbatim, not parsed from natural spoken

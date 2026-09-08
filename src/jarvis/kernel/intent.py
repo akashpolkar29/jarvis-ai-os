@@ -148,6 +148,33 @@ site?") instead of either guessing a default site (which
 ``job_search.open_results``'s own design explicitly rejects, per
 ``docs/architecture/job-search-scoping-notes.md``) or the generic "I
 didn't understand that."
+
+"find files <pattern>"/"search files <query>"/"recent files"/"careers
+page <company>" (this module's fourth through seventh two-word command
+keywords) resolve to
+``kernel.capabilities.FIND_FILES_CAPABILITY_ID``/``SEARCH_CONTENT_CAPABILITY_ID``/
+``RECENT_FILES_CAPABILITY_ID``/``JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID``
+-- all four real, already-registered static capabilities (ADR-0060's
+own reasoning for the first three; the fourth mirrors "search jobs"'s
+own job_search.* precedent exactly). Two-word prefixes chosen
+specifically to avoid a real collision: "find" alone would be
+ambiguous between filename search and the careers-page helper, so
+both commit to a second word ("files"/"careers page") before parsing
+any argument, the same disambiguation "send"/"create"/"search" already
+needed once two-word commands existed at all. **Not every real,
+CLI-reachable command from this pass got a voice counterpart --
+deliberately, not an oversight**: "browser open"/"screenshot"/
+"inspect-dom"/"close" and "calendar list-events" were all investigated
+and rejected. The three screenshot/inspect-dom/close browser
+subcommands each require a real PageHandle's four explicit fields
+(debug port, target id, process id, a real temp-directory path) as
+arguments -- reciting those aloud is not a real voice interface,
+regardless of tier; browser open was considered but a spoken URL is
+low-value and error-prone compared to the CLI. calendar list-events
+needs a real, pre-configured calendar_port plus two spoken ISO-8601
+timestamps -- the identical real reason
+communications.list_email/read_email already have no voice grammar
+today, not a new exception.
 """
 
 from __future__ import annotations
@@ -163,11 +190,15 @@ from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
+    FIND_FILES_CAPABILITY_ID,
+    JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
     JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     PLANNING_RUN_PLAN_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
+    RECENT_FILES_CAPABILITY_ID,
+    SEARCH_CONTENT_CAPABILITY_ID,
 )
 from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, MUSIC_COMMAND_NAMES
@@ -419,6 +450,43 @@ def _resolve_search_jobs(rest: str) -> ResolvedIntent | UnrecognizedIntent | Amb
     )
 
 
+def _resolve_find_files(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "find files <pattern>": everything after the two-word keyword is the glob pattern."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=FIND_FILES_CAPABILITY_ID,
+        arguments=Tainted({"pattern": rest}, Provenance.user()),
+    )
+
+
+def _resolve_search_files(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "search files <query>": everything after the two-word keyword is the search query."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=SEARCH_CONTENT_CAPABILITY_ID,
+        arguments=Tainted({"query": rest}, Provenance.user()),
+    )
+
+
+def _resolve_recent_files(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "recent files": a zero-argument two-word command -- trailing text is unrecognized."""
+    if rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(capability_id=RECENT_FILES_CAPABILITY_ID, arguments=_NO_ARGUMENTS)
+
+
+def _resolve_careers_page(rest: str) -> ResolvedIntent | UnrecognizedIntent:
+    """Resolve "careers page <company>": everything after the keyword is the company name."""
+    if not rest:
+        return _UNRECOGNIZED
+    return ResolvedIntent(
+        capability_id=JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
+        arguments=Tainted({"company": rest}, Provenance.user()),
+    )
+
+
 def _resolve_zero_argument_command(command: str) -> ResolvedIntent | UnrecognizedIntent:
     """Resolve a zero-argument command: "ping" or one of the four music commands."""
     if command == "ping":
@@ -450,10 +518,10 @@ def _split_two_word_command(text: str, command: str) -> str | None:
     return None
 
 
-def _resolve_two_word_command(
+def _resolve_two_word_command(  # noqa: PLR0911 -- one per two-word command keyword
     text: str,
 ) -> ResolvedIntent | UnrecognizedIntent | AmbiguousJobSearchSite | None:
-    """Try "send email"/"create event"/"search jobs" -- this module's two-word command keywords.
+    """Try this module's real, current two-word command keywords.
 
     Returns ``None`` (not ``UnrecognizedIntent``) when no two-word
     prefix matches at all, so :func:`resolve_intent` falls through to
@@ -468,6 +536,18 @@ def _resolve_two_word_command(
     rest = _split_two_word_command(text, "search jobs")
     if rest is not None:
         return _resolve_search_jobs(rest)
+    rest = _split_two_word_command(text, "find files")
+    if rest is not None:
+        return _resolve_find_files(rest)
+    rest = _split_two_word_command(text, "search files")
+    if rest is not None:
+        return _resolve_search_files(rest)
+    rest = _split_two_word_command(text, "recent files")
+    if rest is not None:
+        return _resolve_recent_files(rest)
+    rest = _split_two_word_command(text, "careers page")
+    if rest is not None:
+        return _resolve_careers_page(rest)
     return None
 
 
@@ -477,7 +557,8 @@ def resolve_intent(  # noqa: PLR0911 -- one return per command keyword, mirrors 
     """Resolve ``transcript``'s text to a known command, or ``UnrecognizedIntent`` if none matches.
 
     Matching is case-insensitive (on the command word(s) only) and
-    whitespace-trimmed. "send email"/"create event"/"search jobs" are
+    whitespace-trimmed. "send email"/"create event"/"search jobs"/
+    "find files"/"search files"/"recent files"/"careers page" are all
     matched as a fixed two-word prefix first (see
     :func:`_resolve_two_word_command`); every other command matches on
     its first word alone. For every single-word command except

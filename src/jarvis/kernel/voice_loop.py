@@ -176,25 +176,39 @@ from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
+    FIND_FILES_CAPABILITY_ID,
+    JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
     JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     PLANNING_RUN_PLAN_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
+    RECENT_FILES_CAPABILITY_ID,
+    SEARCH_CONTENT_CAPABILITY_ID,
 )
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
     authorize_and_send_email,
 )
-from jarvis.kernel.files import PathOutsideAllowedScopeError, authorize_and_read_file
+from jarvis.kernel.files import (
+    PathOutsideAllowedScopeError,
+    authorize_and_find_files,
+    authorize_and_list_recent_files,
+    authorize_and_read_file,
+    authorize_and_search_content,
+)
 from jarvis.kernel.intent import (
     AmbiguousJobSearchSite,
     ResolvedIntent,
     UnrecognizedIntent,
     resolve_intent,
 )
-from jarvis.kernel.job_search import JobSearchSite, authorize_and_open_job_search
+from jarvis.kernel.job_search import (
+    JobSearchSite,
+    authorize_and_find_careers_page,
+    authorize_and_open_job_search,
+)
 from jarvis.kernel.memory import authorize_and_recall, authorize_and_remember
 from jarvis.kernel.music import MUSIC_CAPABILITY_IDS, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
@@ -238,6 +252,13 @@ A real, deliberate bound, not arbitrary: RetrievalPort.retrieve()'s
 own ranking already returns records best-match-first, so the top three
 are the real, most relevant answer to speak -- more than a handful
 read aloud in one breath stops being a usable spoken answer at all."""
+
+_FS_SPOKEN_RESULT_LIMIT = 3
+"""How many results "find files"/"search files"/"recent files" speak back.
+Mirrors ``_RECALL_SPOKEN_LIMIT``'s own real reasoning exactly -- also
+used as the real ``limit`` argument to ``authorize_and_list_recent_files``
+itself for "recent files" (unlike find/search-content, which fetch
+every real match and only slice the spoken portion)."""
 
 _MUSIC_COMMAND_BY_CAPABILITY_ID: dict[CapabilityId, MusicCommand] = {
     capability_id: command for command, capability_id in MUSIC_CAPABILITY_IDS.items()
@@ -301,6 +322,17 @@ def _confirmation_prompt(resolved: ResolvedIntent) -> str:  # noqa: PLR0911 -- o
         keywords_text = resolved.arguments.value.get("keywords")
         site_text = resolved.arguments.value.get("site")
         return f"JARVIS wants to: search {site_text} for '{keywords_text}'. Approve?"
+    if resolved.capability_id == FIND_FILES_CAPABILITY_ID:
+        pattern_text = resolved.arguments.value.get("pattern")
+        return f"JARVIS wants to: find files matching '{pattern_text}'. Approve?"
+    if resolved.capability_id == SEARCH_CONTENT_CAPABILITY_ID:
+        query_text = resolved.arguments.value.get("query")
+        return f"JARVIS wants to: search file contents for '{query_text}'. Approve?"
+    if resolved.capability_id == RECENT_FILES_CAPABILITY_ID:
+        return "JARVIS wants to: list recently modified files. Approve?"
+    if resolved.capability_id == JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID:
+        company_text = resolved.arguments.value.get("company")
+        return f"JARVIS wants to: find the careers page for '{company_text}'. Approve?"
     return f"JARVIS wants to: {resolved.capability_id}. Approve?"
 
 
@@ -309,7 +341,7 @@ def _describe(decision: Decision) -> str:
     return "Done." if decision.granted else "Sorry, that wasn't approved."
 
 
-async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one param/branch per composition function dispatch
+async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912, PLR0915 -- one param/branch per composition function dispatch
     resolved: ResolvedIntent,
     *,
     approved: bool,
@@ -507,6 +539,70 @@ async def _authorize_and_execute(  # noqa: PLR0913, PLR0911, PLR0912 -- one para
             browser=browser,
         )
         return _describe(job_search_decision)
+
+    if resolved.capability_id == FIND_FILES_CAPABILITY_ID:
+        pattern_text = str(resolved.arguments.value["pattern"])
+        find_outcome = authorize_and_find_files(
+            pattern_text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            allowed_root=allowed_root,
+            file_system=file_system,
+        )
+        if not find_outcome.decision.granted:
+            return _describe(find_outcome.decision)
+        if not find_outcome.matches:
+            return "No matching files found."
+        names = "; ".join(str(match) for match in find_outcome.matches[:_FS_SPOKEN_RESULT_LIMIT])
+        return f"Found: {names}"
+
+    if resolved.capability_id == SEARCH_CONTENT_CAPABILITY_ID:
+        query_text = str(resolved.arguments.value["query"])
+        search_outcome = authorize_and_search_content(
+            query_text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            allowed_root=allowed_root,
+            file_system=file_system,
+        )
+        if not search_outcome.decision.granted:
+            return _describe(search_outcome.decision)
+        if not search_outcome.matches:
+            return "No matching content found."
+        hits = "; ".join(
+            f"{path.name} line {line_number}"
+            for path, line_number, _line in search_outcome.matches[:_FS_SPOKEN_RESULT_LIMIT]
+        )
+        return f"Found: {hits}"
+
+    if resolved.capability_id == RECENT_FILES_CAPABILITY_ID:
+        recent_outcome = authorize_and_list_recent_files(
+            limit=_FS_SPOKEN_RESULT_LIMIT,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            allowed_root=allowed_root,
+            file_system=file_system,
+        )
+        if not recent_outcome.decision.granted:
+            return _describe(recent_outcome.decision)
+        if not recent_outcome.files:
+            return "No recent files found."
+        names = "; ".join(str(recent_file.name) for recent_file in recent_outcome.files)
+        return f"Recent files: {names}"
+
+    if resolved.capability_id == JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID:
+        company_text = str(resolved.arguments.value["company"])
+        careers_decision = authorize_and_find_careers_page(
+            company_text,
+            physical_confirmation_available=approved,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+            browser=browser,
+        )
+        return _describe(careers_decision)
 
     music_command = _MUSIC_COMMAND_BY_CAPABILITY_ID[resolved.capability_id]
     decision = authorize_and_run_music_command(

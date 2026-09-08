@@ -1154,3 +1154,175 @@ async def test_the_confirmation_prompt_names_the_job_search_site_and_keywords(
     prompt_text, _timeout = confirmation.prompts[0]
     assert "indeed" in prompt_text
     assert "python developer" in prompt_text
+
+
+async def test_a_recognized_find_files_command_speaks_the_real_matches(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("a", encoding="utf-8")
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("find files *.py"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert len(tts.spoken) == 1
+    assert tts.spoken[0].startswith("Found:")
+    assert str(tmp_path / "a.py") in tts.spoken[0]
+
+
+async def test_find_files_is_granted_even_when_physical_confirmation_is_denied(
+    tmp_path: Path,
+) -> None:
+    """fs.find is Tier.ALLOW -- a denied confirmation answer still grants it, correctly.
+
+    Mirrors "recall"'s own established precedent for ALLOW-tier voice
+    commands: the confirmation prompt is still asked (this module's
+    own "always ask, never pre-inspect tier" design), but the answer
+    does not gate an ALLOW-tier capability's own real outcome.
+    """
+    (tmp_path / "a.py").write_text("a", encoding="utf-8")
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("find files *.py"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert len(tts.spoken) == 1
+    assert tts.spoken[0].startswith("Found:")
+    assert tts.spoken[0].startswith("Found:")
+
+
+async def test_find_files_with_no_matches_speaks_an_honest_empty_result(tmp_path: Path) -> None:
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("find files *.py"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert tts.spoken == ["No matching files found."]
+
+
+async def test_a_recognized_search_files_command_speaks_the_real_matches(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("hello world\n", encoding="utf-8")
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("search files world"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert len(tts.spoken) == 1
+    assert tts.spoken[0].startswith("Found:")
+    assert "a.txt line 1" in tts.spoken[0]
+
+
+async def test_a_recognized_recent_files_command_speaks_the_real_files(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    tts = _FakeTtsPort()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("recent files"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        allowed_root=tmp_path,
+    )
+
+    assert tts.spoken == ["Recent files: a.txt"]
+
+
+async def test_a_recognized_careers_page_command_is_granted_and_opens_the_real_url(
+    tmp_path: Path,
+) -> None:
+    tts = _FakeTtsPort()
+    browser = _FakeBrave()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=True),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("careers page Boston Dynamics"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        browser=browser,
+    )
+
+    assert tts.spoken == ["Done."]
+    assert browser.opened == ["https://duckduckgo.com/?q=Boston+Dynamics+careers"]
+
+
+async def test_a_denied_careers_page_command_never_opens_a_url(tmp_path: Path) -> None:
+    """job_search.find_careers_page is Tier.CONFIRM -- proving voice does not bypass it."""
+    tts = _FakeTtsPort()
+    browser = _FakeBrave()
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=_FakePhysicalConfirmationPort(approve=False),
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("careers page Boston Dynamics"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=tts,
+        play_fn=_no_playback,
+        browser=browser,
+    )
+
+    assert tts.spoken == ["Sorry, that wasn't approved."]
+    assert browser.opened == []
+
+
+async def test_the_confirmation_prompt_names_the_careers_page_company(tmp_path: Path) -> None:
+    confirmation = _FakePhysicalConfirmationPort(approve=False)
+
+    await run_voice_loop(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation=confirmation,
+        wake_word=_FakeWakeWordPort([_A_WAKE_EVENT]),
+        vad=_FakeVadPort([_SOME_SEGMENT]),
+        stt=_FakeSttPort("careers page Boston Dynamics"),
+        speaker_id=_FakeSpeakerIdPort(),
+        tts=_FakeTtsPort(),
+        play_fn=_no_playback,
+        browser=_FakeBrave(),
+    )
+
+    assert len(confirmation.prompts) == 1
+    prompt_text, _timeout = confirmation.prompts[0]
+    assert "Boston Dynamics" in prompt_text

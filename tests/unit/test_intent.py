@@ -10,6 +10,8 @@ from jarvis.application.memory.writer import MEMORY_WRITE_CAPABILITY_ID
 from jarvis.domain.transcript import Transcript
 from jarvis.kernel.capabilities import (
     CODING_RUN_TASK_CAPABILITY_ID,
+    FIND_FILES_CAPABILITY_ID,
+    JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     MUSIC_NEXT_CAPABILITY_ID,
     MUSIC_PAUSE_CAPABILITY_ID,
@@ -17,6 +19,8 @@ from jarvis.kernel.capabilities import (
     MUSIC_PREVIOUS_CAPABILITY_ID,
     PING_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
+    RECENT_FILES_CAPABILITY_ID,
+    SEARCH_CONTENT_CAPABILITY_ID,
 )
 from jarvis.kernel.intent import ResolvedIntent, UnrecognizedIntent, resolve_intent
 
@@ -391,3 +395,99 @@ def test_resolved_intent_arguments_are_tainted_as_user_provenance() -> None:
 
     assert isinstance(result, ResolvedIntent)
     assert result.arguments.provenance.trust.name == "USER_DIRECT"
+
+
+def test_find_files_with_pattern_resolves_to_fs_find_with_the_pattern_argument() -> None:
+    result = resolve_intent(Transcript(text="find files *.py"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == FIND_FILES_CAPABILITY_ID
+    assert result.arguments.value == {"pattern": "*.py"}
+
+
+def test_find_files_matching_is_case_insensitive() -> None:
+    result = resolve_intent(Transcript(text="FIND FILES *.py"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == FIND_FILES_CAPABILITY_ID
+
+
+def test_find_files_with_no_pattern_is_unrecognized() -> None:
+    result = resolve_intent(Transcript(text="find files"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_search_files_with_query_resolves_to_fs_search_content_with_the_query_argument() -> None:
+    result = resolve_intent(Transcript(text="search files TODO"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == SEARCH_CONTENT_CAPABILITY_ID
+    assert result.arguments.value == {"query": "TODO"}
+
+
+def test_search_files_with_no_query_is_unrecognized() -> None:
+    result = resolve_intent(Transcript(text="search files"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_search_files_and_search_jobs_do_not_collide() -> None:
+    """A real, deliberate check: both two-word commands share the "search" first word."""
+    files_result = resolve_intent(Transcript(text="search files TODO"))
+    jobs_result = resolve_intent(Transcript(text="search jobs python developer on linkedin"))
+
+    assert isinstance(files_result, ResolvedIntent)
+    assert files_result.capability_id == SEARCH_CONTENT_CAPABILITY_ID
+    assert isinstance(jobs_result, ResolvedIntent)
+    assert jobs_result.capability_id != SEARCH_CONTENT_CAPABILITY_ID
+
+
+def test_recent_files_resolves_to_fs_recent_with_no_arguments() -> None:
+    result = resolve_intent(Transcript(text="recent files"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == RECENT_FILES_CAPABILITY_ID
+    assert result.arguments.value == {}
+
+
+def test_recent_files_matching_is_case_insensitive() -> None:
+    result = resolve_intent(Transcript(text="RECENT FILES"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == RECENT_FILES_CAPABILITY_ID
+
+
+def test_recent_files_with_trailing_words_is_unrecognized() -> None:
+    """A real, zero-argument two-word command: trailing text does not silently resolve anyway."""
+    result = resolve_intent(Transcript(text="recent files please"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_careers_page_with_company_resolves_with_the_company_argument() -> None:
+    result = resolve_intent(Transcript(text="careers page Boston Dynamics"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID
+    assert result.arguments.value == {"company": "Boston Dynamics"}
+
+
+def test_careers_page_matching_is_case_insensitive() -> None:
+    result = resolve_intent(Transcript(text="CAREERS PAGE Boston Dynamics"))
+
+    assert isinstance(result, ResolvedIntent)
+    assert result.capability_id == JOB_SEARCH_FIND_CAREERS_PAGE_CAPABILITY_ID
+
+
+def test_careers_page_with_no_company_is_unrecognized() -> None:
+    result = resolve_intent(Transcript(text="careers page"))
+
+    assert isinstance(result, UnrecognizedIntent)
+
+
+def test_find_files_and_careers_page_do_not_collide_on_the_word_find() -> None:
+    """A real, deliberate design point: "find" alone is never a single-word command."""
+    result = resolve_intent(Transcript(text="find"))
+
+    assert isinstance(result, UnrecognizedIntent)
