@@ -345,3 +345,76 @@ headless `authorize_and_open_page` (which this task's own originating
 prompt had named as the reuse target, before this finding surfaced) —
 see `kernel/job_search.py`'s own module docstring for the full account
 of that deviation.
+
+## Addendum, 2026-09-08 — two more candidates investigated, neither added
+
+A later prompt asked whether 1-2 more assisted-browsing job sites
+could safely be added, naming Glassdoor and a company-agnostic
+aggregator (Google's own job-search page) as examples. Checked
+directly, live, the same way LinkedIn/Indeed were checked — neither
+one clears the bar this document's own original investigation set.
+
+### Glassdoor — rejected
+
+`https://www.glassdoor.com/robots.txt`, fetched live, disallows
+exactly the paths a job-search capability would need, for every
+user-agent, with no special allowance for any of them (not even the
+narrow AI/search-crawler exceptions Indeed's own robots.txt grants):
+
+```
+Disallow: /search/
+Disallow: /jobview/
+Disallow: /job-listing/*_IE*.htm
+Disallow: /job-listing/JV.htm?*
+Disallow: /Jobs/Glassdoor-Jobs-E100431.htm
+Disallow: /Jobs/*_P*.htm*
+```
+
+**A real, honest limitation of this specific check**: Glassdoor's own
+Terms of Use page (`glassdoor.com/legal/terms/` and
+`glassdoor.com/about/terms.htm`) returned `HTTP 403 Forbidden` on two
+separate live fetch attempts — the ToS text itself could not be
+independently read and quoted the way LinkedIn's/Indeed's was. Not
+glossed over: this means Glassdoor's finding rests on the robots.txt
+evidence alone, not on a matching robots.txt + ToS pair like the
+original two sites. That evidence is still real and, on its own
+terms, unambiguous: every job-search/job-view path is disallowed for
+every crawler, which is the same real signal that (independently
+corroborating a ToS clause) ruled out Indeed. **Rejected.**
+
+### Google's own job-search page (`google.com/search?...&ibp=htl;jobs`) — rejected
+
+`https://www.google.com/robots.txt`, fetched live, disallows `/search`
+broadly, with only two narrow carve-outs (`/search/about`,
+`/search/howsearchworks`) — nothing job-specific, no exception for
+the jobs vertical. Google's own Terms of Service
+(`https://policies.google.com/terms`), fetched live, contains this
+clause, quoted verbatim:
+
+> "using automated means to access content from any of our services
+> in violation of the machine-readable instructions on our web pages
+> (for example, robots.txt files that disallow crawling, training, or
+> other activities)"
+
+This clause is explicitly conditional on robots.txt — and robots.txt
+already disallows `/search`. `job_search.open_results`'s own real
+mechanism (a program launching an ordinary `brave-browser <url>`
+subprocess, not a human manually typing the address bar) is software-
+initiated navigation to a disallowed path, the same real category
+LinkedIn's/Indeed's own ToS clauses named regardless of whether a
+human reads the resulting page afterward. This is functionally the
+same finding that ruled out the original two sites, not a materially
+different, more permissive case. **Rejected.**
+
+### Net result
+
+Zero new sites added. `JobSearchSite` remains exactly `LINKEDIN` /
+`INDEED`. Per this document's own already-established standard
+(robots.txt disallowing the needed paths is treated as a real,
+sufficient signal on its own, and doubly so alongside a ToS clause
+that reaches software-driven navigation, not just content scraping),
+neither candidate clears the bar. This does not foreclose a future,
+different candidate — a genuinely open-terms aggregator, a government
+job board, or a site with an explicit personal-use carve-out — from
+being investigated and added later; it only means these two specific,
+named candidates were checked and did not qualify.
