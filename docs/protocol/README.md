@@ -27,9 +27,17 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 (later the same day) — this table now covers 46
-real subcommands, adding `browser open`/`browser screenshot`/`browser
-inspect-dom`/`browser close` (real entry points for four already-real,
+**Updated 2026-09-08 (later still the same day) — this table now
+covers 49 real subcommands, adding `fs find`/`fs search-content`/
+`fs recent` (real, recursive, bounded local-file search, scoped to
+`allowed_root` -- a real, third, deliberately-introduced CLI naming
+shape, `fs <verb>`, reported plainly in
+`_add_fs_search_parsers`'s own docstring rather than silently added;
+`fs search-content` prints a real "cap was reached" warning to stderr
+if its own file-count cap was hit, never a silent partial result).
+It previously covered 46, adding `browser open`/`browser screenshot`/
+`browser inspect-dom`/`browser close` (real entry points for four
+already-real,
 already-tested capabilities used internally but with no CLI of their
 own until now — a real, named gap from the dead-code sweep) and
 `find-careers-page` (a real "<company> careers" DuckDuckGo search,
@@ -104,6 +112,9 @@ not to duplicate the policy engine's own reasoning.
 | `browser screenshot` | `browser.screenshot` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required, from a prior `browser open`), `--output` (required) |
 | `browser inspect-dom` | `browser.inspect_dom` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required), `--selector` (required) |
 | `browser close` | `browser.close_page` | `--debug-port`, `--target-id`, `--process-id`, `--user-data-dir` (all required) |
+| `fs find <pattern>` | `fs.find` | `pattern` (a real glob pattern, e.g. `*.py`) |
+| `fs search-content <query>` | `fs.search_content` | `query` (a real, literal substring) |
+| `fs recent` | `fs.recent` | `--limit` (default 20) |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
 

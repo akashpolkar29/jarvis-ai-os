@@ -1,4 +1,33 @@
-"""The composition root for fs.*: read/list/move/delete real, scope-bounded local files.
+"""The composition root for fs.*: read/list/move/delete/find/search/recent, scope-bounded files.
+
+**Updated 2026-09-08**: :func:`authorize_and_find_files`,
+:func:`authorize_and_search_content`, and
+:func:`authorize_and_list_recent_files` join the four below -- real
+filename search (glob), bounded grep-style content search, and a
+real-mtime-sorted recent-files view, each recursive beneath
+``allowed_root``. All three reuse :func:`_resolve_within_scope`
+completely unmodified, and (per this addition's own explicit
+instruction) reuse ``fs.list_dir``'s/``fs.read_file``'s existing
+``Effect.EGRESS_LOCAL``/``Tier.ALLOW`` classification rather than
+inventing a new one -- no new ADR needed, this is the identical
+reasoning ADR-0060 already established, not a new decision.
+
+**A real, additional scope-safety step these three need that
+``read_file``/``list_dir``/``move_file``/``delete_file`` do not**:
+those four each take one (or two) *caller-given* paths, checked once,
+before the single real action they wrap. These three instead ask the
+real filesystem to enumerate an unbounded number of results
+(``FileSystemPort.find``/``search_content``/``recent``, all
+``Path.rglob``-based) -- and ``rglob`` can, via a pattern containing
+``..`` segments or a real symlink inside ``allowed_root`` pointing
+outside it, return a path that resolves outside the boundary even
+though the *starting* root did not. Each of these three composition
+functions therefore re-validates *every individual result* against
+:func:`_resolve_within_scope` before returning it, silently dropping
+(not erroring on) any result that fails -- a mixed, partially-escaping
+result set still returns its real, in-scope matches, exactly like a
+denylist-style filter would, but built from the existing allowlist
+check, not a new mechanism.
 
 **Updated 2026-09-04 (ADR-0060, Proposed)**: :func:`authorize_and_list_dir`,
 :func:`authorize_and_move_file`, and :func:`authorize_and_delete_file`
@@ -92,9 +121,12 @@ from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.capabilities import (
     DELETE_FILE_CAPABILITY_ID,
+    FIND_FILES_CAPABILITY_ID,
     LIST_DIR_CAPABILITY_ID,
     MOVE_FILE_CAPABILITY_ID,
     READ_FILE_CAPABILITY_ID,
+    RECENT_FILES_CAPABILITY_ID,
+    SEARCH_CONTENT_CAPABILITY_ID,
     build_default_registry,
 )
 
@@ -498,3 +530,275 @@ def authorize_and_delete_file(  # noqa: PLR0913 -- one more than music's 5, for 
         storage.save(chain)
 
     return decision
+
+
+def _in_scope_results(results: tuple[Path, ...], allowed_root: Path) -> tuple[Path, ...]:
+    """Re-validate every real result against the scope boundary, silently dropping any that fail.
+
+    See the module docstring's own "real, additional scope-safety
+    step" section for why this exists at all -- ``rglob``-based
+    results are not automatically guaranteed to stay within
+    ``allowed_root`` the way a single caller-given path already is.
+    """
+    in_scope = []
+    for candidate in results:
+        try:
+            in_scope.append(_resolve_within_scope(candidate, allowed_root))
+        except PathOutsideAllowedScopeError:
+            continue
+    return tuple(in_scope)
+
+
+@dataclass(frozen=True)
+class FileFindOutcome:
+    """The result of one authorize_and_find_files() call.
+
+    Attributes:
+        decision: The Decision for this search -- durably appended to
+            the chain regardless of outcome.
+        matches: Every real, in-scope matching path, if granted.
+            ``None`` if denied.
+    """
+
+    decision: Decision
+    matches: tuple[Path, ...] | None
+
+
+def authorize_and_find_files(  # noqa: PLR0913 -- one more than music's 5, for allowed_root/file_system
+    pattern: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> FileFindOutcome:
+    """Wire up the stack, authorize a real glob search, and search only if granted.
+
+    Args:
+        pattern: A real glob pattern (``pathlib``'s own syntax --
+            e.g. ``"*.py"``, ``"**/test_*.py"``), searched recursively
+            beneath ``allowed_root``.
+        physical_confirmation_available: As above -- threaded through
+            for consistency, though ``fs.find``'s ALLOW tier means it
+            does not affect the outcome.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary and search root. Defaults to
+            the real ``Path.home()``. Overridable for tests.
+        file_system: The port the search is performed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        A ``FileFindOutcome`` -- see its own docstring.
+    """
+    resolved_root = (allowed_root or Path.home()).expanduser().resolve()
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
+
+    decision = orchestrator.authorize_by_id(
+        FIND_FILES_CAPABILITY_ID,
+        Tainted({"pattern": pattern}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    matches: tuple[Path, ...] | None = None
+    try:
+        if decision.granted:
+            finder = file_system if file_system is not None else LocalFileSystemAdapter()
+            matches = _in_scope_results(finder.find(resolved_root, pattern), resolved_root)
+    finally:
+        storage.save(chain)
+
+    return FileFindOutcome(decision=decision, matches=matches)
+
+
+_MAX_CONTENT_SEARCH_FILE_BYTES = 1_000_000
+"""Files larger than this (1 MB) are skipped entirely by fs.search_content, never partially read."""
+
+_MAX_CONTENT_SEARCH_FILES_SCANNED = 5_000
+"""fs.search_content stops after this many real files -- see ContentSearchOutcome.capped."""
+
+
+@dataclass(frozen=True)
+class ContentSearchOutcome:
+    """The result of one authorize_and_search_content() call.
+
+    Attributes:
+        decision: The Decision for this search -- durably appended to
+            the chain regardless of outcome.
+        matches: Every real, in-scope ``(path, line_number, line)``
+            match, if granted. ``None`` if denied.
+        capped: Whether ``_MAX_CONTENT_SEARCH_FILES_SCANNED`` was
+            reached before the whole tree was covered -- a real,
+            honest signal, never rounded down to "complete." Always
+            ``False`` when ``matches`` is ``None``.
+    """
+
+    decision: Decision
+    matches: tuple[tuple[Path, int, str], ...] | None
+    capped: bool
+
+
+def authorize_and_search_content(  # noqa: PLR0913 -- one more than music's 5, for allowed_root/file_system
+    query: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> ContentSearchOutcome:
+    """Wire up the stack, authorize a real grep-style search, and search only if granted.
+
+    Bounded, real, and honest about it: see
+    ``_MAX_CONTENT_SEARCH_FILE_BYTES``/``_MAX_CONTENT_SEARCH_FILES_SCANNED``
+    and :class:`ContentSearchOutcome`'s own ``capped`` field.
+
+    Args:
+        query: A real, literal substring to search for, per line,
+            recursively beneath ``allowed_root``.
+        physical_confirmation_available: As above -- threaded through
+            for consistency, though ``fs.search_content``'s ALLOW tier
+            means it does not affect the outcome.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary and search root. Defaults to
+            the real ``Path.home()``. Overridable for tests.
+        file_system: The port the search is performed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        A ``ContentSearchOutcome`` -- see its own docstring.
+    """
+    resolved_root = (allowed_root or Path.home()).expanduser().resolve()
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
+
+    decision = orchestrator.authorize_by_id(
+        SEARCH_CONTENT_CAPABILITY_ID,
+        Tainted({"query": query}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    matches: tuple[tuple[Path, int, str], ...] | None = None
+    capped = False
+    try:
+        if decision.granted:
+            searcher = file_system if file_system is not None else LocalFileSystemAdapter()
+            raw_matches, capped = searcher.search_content(
+                resolved_root,
+                query,
+                max_file_bytes=_MAX_CONTENT_SEARCH_FILE_BYTES,
+                max_files_scanned=_MAX_CONTENT_SEARCH_FILES_SCANNED,
+            )
+            in_scope: list[tuple[Path, int, str]] = []
+            for path, line_number, line in raw_matches:
+                try:
+                    resolved = _resolve_within_scope(path, resolved_root)
+                except PathOutsideAllowedScopeError:
+                    continue
+                in_scope.append((resolved, line_number, line))
+            matches = tuple(in_scope)
+    finally:
+        storage.save(chain)
+
+    return ContentSearchOutcome(decision=decision, matches=matches, capped=capped)
+
+
+@dataclass(frozen=True)
+class RecentFilesOutcome:
+    """The result of one authorize_and_list_recent_files() call.
+
+    Attributes:
+        decision: The Decision for this listing -- durably appended to
+            the chain regardless of outcome.
+        files: The real, in-scope, most-recently-modified files, most
+            recent first, if granted. ``None`` if denied.
+    """
+
+    decision: Decision
+    files: tuple[Path, ...] | None
+
+
+def authorize_and_list_recent_files(  # noqa: PLR0913 -- one more than music's 5, for allowed_root/file_system
+    *,
+    limit: int,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    allowed_root: Path | None = None,
+    file_system: FileSystemPort | None = None,
+) -> RecentFilesOutcome:
+    """Wire up the stack, authorize a real recent-files listing, and list only if granted.
+
+    Args:
+        limit: The maximum number of real files to return.
+        physical_confirmation_available: As above -- threaded through
+            for consistency, though ``fs.recent``'s ALLOW tier means
+            it does not affect the outcome.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        allowed_root: The scope boundary and search root. Defaults to
+            the real ``Path.home()``. Overridable for tests.
+        file_system: The port the listing is performed through if
+            granted. Defaults to a real ``LocalFileSystemAdapter``.
+            Overridable for tests.
+
+    Returns:
+        A ``RecentFilesOutcome`` -- see its own docstring.
+    """
+    resolved_root = (allowed_root or Path.home()).expanduser().resolve()
+
+    registry = build_default_registry()
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+    )
+
+    decision = orchestrator.authorize_by_id(
+        RECENT_FILES_CAPABILITY_ID,
+        Tainted({"limit": limit}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    files: tuple[Path, ...] | None = None
+    try:
+        if decision.granted:
+            lister = file_system if file_system is not None else LocalFileSystemAdapter()
+            files = _in_scope_results(lister.recent(resolved_root, limit), resolved_root)
+    finally:
+        storage.save(chain)
+
+    return RecentFilesOutcome(decision=decision, files=files)

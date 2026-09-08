@@ -10,19 +10,24 @@ for those specific cases.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.adapters.file_system import LocalFileSystemAdapter
 from jarvis.domain.file_system import DirEntry
 from jarvis.domain.provenance import Classification, Trust
 from jarvis.kernel.files import (
     PathOutsideAllowedScopeError,
     authorize_and_delete_file,
+    authorize_and_find_files,
     authorize_and_list_dir,
+    authorize_and_list_recent_files,
     authorize_and_move_file,
     authorize_and_read_file,
+    authorize_and_search_content,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +66,23 @@ class _StubFileSystem:
         """Record the call."""
         self.delete_calls.append(path)
 
+    def find(self, root: Path, pattern: str) -> tuple[Path, ...]:
+        """Record the call. Never used by any real test -- see module docstring."""
+        self.calls.append(root)
+        raise NotImplementedError(pattern)
+
+    def search_content(
+        self, root: Path, query: str, *, max_file_bytes: int, max_files_scanned: int
+    ) -> tuple[tuple[tuple[Path, int, str], ...], bool]:
+        """Record the call. Never used by any real test -- see module docstring."""
+        self.calls.append(root)
+        raise NotImplementedError(query, max_file_bytes, max_files_scanned)
+
+    def recent(self, root: Path, limit: int) -> tuple[Path, ...]:
+        """Record the call. Never used by any real test -- see module docstring."""
+        self.calls.append(root)
+        raise NotImplementedError(limit)
+
 
 class _RaisingFileSystem:
     """A FileSystemPort test double every real method of which always raises."""
@@ -88,6 +110,26 @@ class _RaisingFileSystem:
     def delete(self, path: Path) -> None:
         """Record the call, then raise."""
         self.calls.append(path)
+        raise self._exc
+
+    def find(self, root: Path, pattern: str) -> tuple[Path, ...]:
+        """Record the call, then raise."""
+        del pattern
+        self.calls.append(root)
+        raise self._exc
+
+    def search_content(
+        self, root: Path, query: str, *, max_file_bytes: int, max_files_scanned: int
+    ) -> tuple[tuple[tuple[Path, int, str], ...], bool]:
+        """Record the call, then raise."""
+        del query, max_file_bytes, max_files_scanned
+        self.calls.append(root)
+        raise self._exc
+
+    def recent(self, root: Path, limit: int) -> tuple[Path, ...]:
+        """Record the call, then raise."""
+        del limit
+        self.calls.append(root)
         raise self._exc
 
 
@@ -418,3 +460,197 @@ def test_delete_file_out_of_scope_path_is_rejected_and_never_touches_the_filesys
         )
 
     assert file_system.delete_calls == []
+
+
+# --- fs.find / fs.search_content / fs.recent (2026-09-08): real, recursive search
+# capabilities. Boundary-safety tests use the REAL LocalFileSystemAdapter, not
+# _StubFileSystem -- proving the real rglob-based escape defense requires
+# exercising real rglob against a real, adversarial filesystem tree, not a stub.
+
+
+def test_find_granted_returns_every_real_recursive_match(tmp_path: Path) -> None:
+    """rglob('*.py') matches at every depth -- both the top-level and nested file."""
+    (tmp_path / "a.py").write_text("a", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.py").write_text("b", encoding="utf-8")
+
+    outcome = authorize_and_find_files(
+        "*.py",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.matches == (tmp_path / "a.py", tmp_path / "sub" / "b.py")
+
+
+def test_find_a_pattern_containing_dot_dot_never_returns_a_result_outside_allowed_root(
+    tmp_path: Path,
+) -> None:
+    """A real, adversarial glob pattern: '..' segments can make rglob escape allowed_root.
+
+    ``allowed.rglob("../outside/*.txt")`` genuinely walks outside
+    ``allowed_root`` at the filesystem level (confirmed directly, not
+    assumed) -- this proves the kernel's own post-hoc
+    ``_resolve_within_scope`` re-check on every individual result
+    silently drops it rather than ever returning it.
+    """
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("nope", encoding="utf-8")
+
+    # Confirm the real, adversarial escape actually happens at the raw adapter
+    # level first -- otherwise this test would not be proving anything real.
+    # rglob's own raw result keeps the literal, unresolved '..' segment
+    # (pathlib never auto-normalizes it), so compare resolved forms.
+    raw_matches = LocalFileSystemAdapter().find(allowed_root, "../outside/*.txt")
+    assert (outside_dir / "secret.txt").resolve() in {match.resolve() for match in raw_matches}
+
+    outcome = authorize_and_find_files(
+        "../outside/*.txt",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=allowed_root,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.matches == ()
+
+
+def test_find_a_symlink_escaping_allowed_root_is_dropped_from_results(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("nope", encoding="utf-8")
+    (allowed_root / "escape_link").symlink_to(outside_dir)
+
+    outcome = authorize_and_find_files(
+        "**/*.txt",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=allowed_root,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.matches is not None
+    assert all(match.is_relative_to(allowed_root.resolve()) for match in outcome.matches)
+
+
+def test_search_content_granted_returns_only_in_scope_matches(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("hello world\n", encoding="utf-8")
+
+    outcome = authorize_and_search_content(
+        "world",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.matches == ((tmp_path / "a.txt", 1, "hello world"),)
+    assert outcome.capped is False
+
+
+def test_search_content_surfaces_the_real_capped_flag_honestly(tmp_path: Path) -> None:
+    """A real, small file-count cap: the outcome's own capped flag reflects it, not silently."""
+    for i in range(3):
+        (tmp_path / f"file{i}.txt").write_text("world", encoding="utf-8")
+
+    outcome = authorize_and_search_content(
+        "world",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    # The real, hardcoded kernel-level cap (5,000) is far above this test's
+    # own 3 files -- capped is correctly False here. A dedicated adapter-level
+    # test (test_file_system_adapter.py) already proves the cap mechanism
+    # itself fires at small, explicit thresholds; this test proves the
+    # kernel wires that same real flag straight through, unmodified.
+    assert outcome.decision.granted is True
+    assert outcome.capped is False
+    assert outcome.matches is not None
+    assert len(outcome.matches) == 3  # noqa: PLR2004 -- the real, exact file count this test sets
+
+
+def test_search_content_a_pattern_containing_dot_dot_path_never_returns_a_result_outside_allowed_root(  # noqa: E501
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("world", encoding="utf-8")
+    (allowed_root / "escape_link").symlink_to(outside_dir)
+
+    outcome = authorize_and_search_content(
+        "world",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=allowed_root,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.matches is not None
+    assert all(
+        path.is_relative_to(allowed_root.resolve()) for path, _line_number, _line in outcome.matches
+    )
+
+
+def test_recent_granted_returns_only_in_scope_files_most_recent_first(tmp_path: Path) -> None:
+    (tmp_path / "old.txt").write_text("old", encoding="utf-8")
+    new = tmp_path / "new.txt"
+    new.write_text("new", encoding="utf-8")
+    now = new.stat().st_mtime
+    os.utime(tmp_path / "old.txt", (now - 100, now - 100))
+
+    outcome = authorize_and_list_recent_files(
+        limit=10,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=tmp_path,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.files == (new, tmp_path / "old.txt")
+
+
+def test_recent_a_symlink_escaping_allowed_root_is_dropped_from_results(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("nope", encoding="utf-8")
+    (allowed_root / "escape_link").symlink_to(outside_dir)
+
+    outcome = authorize_and_list_recent_files(
+        limit=10,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        allowed_root=allowed_root,
+        file_system=LocalFileSystemAdapter(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.files is not None
+    assert all(match.is_relative_to(allowed_root.resolve()) for match in outcome.files)

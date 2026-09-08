@@ -51,6 +51,9 @@ READ_FILE_CAPABILITY_ID = CapabilityId("fs.read_file")
 LIST_DIR_CAPABILITY_ID = CapabilityId("fs.list_dir")
 MOVE_FILE_CAPABILITY_ID = CapabilityId("fs.move_file")
 DELETE_FILE_CAPABILITY_ID = CapabilityId("fs.delete_file")
+FIND_FILES_CAPABILITY_ID = CapabilityId("fs.find")
+SEARCH_CONTENT_CAPABILITY_ID = CapabilityId("fs.search_content")
+RECENT_FILES_CAPABILITY_ID = CapabilityId("fs.recent")
 DESKTOP_BRAVE_OPEN_URL_CAPABILITY_ID = CapabilityId("desktop.brave_open_url")
 DESKTOP_VSCODE_OPEN_FILE_CAPABILITY_ID = CapabilityId("desktop.vscode_open_file")
 DESKTOP_CLAUDE_APP_SEND_TEXT_CAPABILITY_ID = CapabilityId("desktop.claude_app_send_text")
@@ -186,6 +189,43 @@ def build_default_registry() -> CapabilityRegistry:
                 "Permanently delete a single real local file, scoped to the allowed root. "
                 "No undo -- the same 'no built-in recovery' finality as git.force_push/"
                 "memory.forget -- always MANUAL_ONLY (ADR-0060)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=FIND_FILES_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "Search for real local files by glob pattern, scoped to the allowed root, "
+                "recursive. Same EGRESS_LOCAL/ALLOW floor as fs.list_dir -- listing "
+                "matching filenames is no more sensitive than an ordinary directory "
+                "listing (reuses ADR-0060's own classification, not a new decision)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=SEARCH_CONTENT_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "Grep-style search of real local file contents, scoped to the allowed "
+                "root, recursive, real file-size/file-count caps. Same EGRESS_LOCAL/ALLOW "
+                "floor as fs.read_file -- extracting matching lines out to the caller is "
+                "the same real egress fs.read_file's own docstring already reasons about, "
+                "just narrower (matched lines, not a whole file)."
+            ),
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=RECENT_FILES_CAPABILITY_ID,
+            effects=Effect.EGRESS_LOCAL,
+            description=(
+                "List the most recently modified real local files, scoped to the allowed "
+                "root, recursive. Same EGRESS_LOCAL/ALLOW floor as fs.list_dir -- listing "
+                "filenames (with their real mtimes) is no more sensitive than an ordinary "
+                "directory listing."
             ),
         )
     )

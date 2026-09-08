@@ -204,9 +204,12 @@ from jarvis.kernel.desktop import (
 from jarvis.kernel.files import (
     PathOutsideAllowedScopeError,
     authorize_and_delete_file,
+    authorize_and_find_files,
     authorize_and_list_dir,
+    authorize_and_list_recent_files,
     authorize_and_move_file,
     authorize_and_read_file,
+    authorize_and_search_content,
 )
 from jarvis.kernel.job_application import (
     VALID_JOB_APPLICATION_STATUSES,
@@ -721,6 +724,47 @@ def _add_file_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_common_flags(delete_file_parser)
 
 
+def _add_fs_search_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the fs find/search-content/recent subparsers -- real, recursive fs.* search commands.
+
+    A real, third, deliberately-introduced CLI naming shape, reported
+    plainly rather than silently added: `list-dir`/`move-file`/
+    `delete-file` are flat, and `memory`/`plan`/`job-application` are
+    nested groups whose CHILD names ARE their own verbs (`write`,
+    `run`, `record`). This adds a third, `fs <verb>`, grouping three
+    real, related, recursive search actions under one real namespace,
+    distinct from the already-decided-to-leave-as-is inconsistencies
+    `docs/OPEN_DECISIONS.md` item 4 already names (`memory`'s own
+    nested shape, `fs.read_file`'s own bare `read`) -- this is a new,
+    deliberate choice for this addition specifically, not a fix to
+    either of those.
+    """
+    fs_parser = subparsers.add_parser(
+        "fs", help="Recursive local-file search, scoped to allowed_root."
+    )
+    fs_subparsers = fs_parser.add_subparsers(dest="fs_command", required=True)
+
+    find_parser = fs_subparsers.add_parser(
+        "find", help="Search real filenames by glob pattern, recursively."
+    )
+    find_parser.add_argument("pattern", help="A real glob pattern, e.g. '*.py' or '**/test_*.py'.")
+    _add_common_flags(find_parser)
+
+    search_content_parser = fs_subparsers.add_parser(
+        "search-content", help="Grep-style real file-content search, recursively, bounded."
+    )
+    search_content_parser.add_argument("query", help="A real, literal substring to search for.")
+    _add_common_flags(search_content_parser)
+
+    recent_parser = fs_subparsers.add_parser(
+        "recent", help="List the most recently modified real files, recursively."
+    )
+    recent_parser.add_argument(
+        "--limit", type=int, default=20, help="Maximum files to return (default: 20)."
+    )
+    _add_common_flags(recent_parser)
+
+
 _CLAUDE_APP_LAUNCH_COMMAND = ("claude-desktop",)
 """The one real, confirmed launch command for the Claude desktop app.
 
@@ -921,6 +965,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_communications_parsers(subparsers)
     _add_reasoning_parsers(subparsers)
     _add_file_parsers(subparsers)
+    _add_fs_search_parsers(subparsers)
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
     _add_browser_parsers(subparsers)
@@ -1568,6 +1613,46 @@ def _run_file_subcommand(args: argparse.Namespace) -> tuple[Decision, tuple[DirE
     return decision, None
 
 
+def _run_fs_search_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch one ``fs`` subcommand (``find``/``search-content``/``recent``).
+
+    Split out from :func:`_dispatch_command` for the identical reason
+    :func:`_run_job_application_subcommand` is. All three real
+    ``kernel/files.py`` composition functions are plain sync calls, no
+    ``asyncio.run`` wrapping needed.
+    """
+    if args.fs_command == "find":
+        find_outcome = authorize_and_find_files(
+            args.pattern,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(find_outcome.decision, "fs find", fs_paths=find_outcome.matches)
+
+    if args.fs_command == "search-content":
+        search_outcome = authorize_and_search_content(
+            args.query,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            search_outcome.decision,
+            "fs search-content",
+            fs_content_matches=search_outcome.matches,
+            fs_search_capped=search_outcome.capped,
+        )
+
+    recent_outcome = authorize_and_list_recent_files(
+        limit=args.limit,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(recent_outcome.decision, "fs recent", fs_paths=recent_outcome.files)
+
+
 def _run_desktop_app_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     """Dispatch open-brave-url/open-vscode-file/send-claude-text/send-chatgpt-text.
 
@@ -1752,6 +1837,9 @@ class _CommandOutcome:
     browser_page_handle: PageHandle | None = None
     browser_screenshot_path: str | None = None
     browser_dom_html: str | None = None
+    fs_paths: tuple[Path, ...] | None = None
+    fs_content_matches: tuple[tuple[Path, int, str], ...] | None = None
+    fs_search_capped: bool = False
 
 
 def _run_basic_subcommand(
@@ -1859,6 +1947,8 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
     if args.command in ("list-dir", "move-file", "delete-file"):
         decision, dir_entries = _run_file_subcommand(args)
         return _CommandOutcome(decision, args.command, dir_entries=dir_entries)
+    if args.command == "fs":
+        return _run_fs_search_subcommand(args)
     if args.command in _ALL_DESKTOP_COMMANDS:
         return _run_desktop_subcommand(args)
 
@@ -1914,6 +2004,25 @@ def _print_browser_outcome(outcome: _CommandOutcome) -> None:
         print(outcome.browser_dom_html)
 
 
+def _print_fs_search_outcome(outcome: _CommandOutcome) -> None:
+    """Print a granted fs find/search-content/recent subcommand's own real payload.
+
+    Split out from :func:`_print_outcome` for the identical reason
+    `_print_browser_outcome` already is.
+    """
+    if outcome.fs_paths is not None:
+        for path in outcome.fs_paths:
+            print(str(path))
+    if outcome.fs_content_matches is not None:
+        for path, line_number, line in outcome.fs_content_matches:
+            print(f"{path}:{line_number}: {line}")
+        if outcome.fs_search_capped:
+            print(
+                "Warning: the file-count cap was reached -- this result may be incomplete.",
+                file=sys.stderr,
+            )
+
+
 def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload field
     outcome: _CommandOutcome,
 ) -> None:
@@ -1937,6 +2046,7 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
     if outcome.job_application_records is not None:
         _print_job_application_table(outcome.job_application_records)
     _print_browser_outcome(outcome)
+    _print_fs_search_outcome(outcome)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:

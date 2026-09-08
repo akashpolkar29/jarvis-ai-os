@@ -62,7 +62,14 @@ from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
 from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
-from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.files import (
+    ContentSearchOutcome,
+    DirListOutcome,
+    FileFindOutcome,
+    FileReadOutcome,
+    PathOutsideAllowedScopeError,
+    RecentFilesOutcome,
+)
 from jarvis.kernel.job_application import JobApplicationListOutcome
 from jarvis.kernel.job_assistance import (
     ApplicationFolderAlreadyExistsError,
@@ -2641,6 +2648,221 @@ def test_delete_file_subcommand_requires_path() -> None:
         main(["delete-file"])
 
 
+def test_fs_find_subcommand_routes_the_pattern(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_find_files(
+        pattern: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileFindOutcome:
+        received.append(pattern)
+        decision = _make_decision(granted=True, capability_id="fs.find")
+        return FileFindOutcome(decision=decision, matches=(tmp_path / "a.py",))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_find_files", fake_authorize_and_find_files
+    )
+
+    exit_code = main(["fs", "find", "*.py", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert received == ["*.py"]
+    assert exit_code == 0
+
+
+def test_fs_find_subcommand_prints_each_match(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_find_files(
+        pattern: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileFindOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.find")
+        return FileFindOutcome(decision=decision, matches=(tmp_path / "a.py", tmp_path / "b.py"))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_find_files", fake_authorize_and_find_files
+    )
+
+    exit_code = main(["fs", "find", "*.py", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "fs find: GRANTED" in captured.out
+    assert str(tmp_path / "a.py") in captured.out
+    assert str(tmp_path / "b.py") in captured.out
+    assert exit_code == 0
+
+
+def test_fs_find_subcommand_requires_pattern() -> None:
+    with pytest.raises(SystemExit):
+        main(["fs", "find"])
+
+
+def test_fs_search_content_subcommand_routes_the_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_search_content(
+        query: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> ContentSearchOutcome:
+        received.append(query)
+        decision = _make_decision(granted=True, capability_id="fs.search_content")
+        return ContentSearchOutcome(decision=decision, matches=(), capped=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_search_content",
+        fake_authorize_and_search_content,
+    )
+
+    exit_code = main(
+        ["fs", "search-content", "TODO", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == ["TODO"]
+    assert exit_code == 0
+
+
+def test_fs_search_content_subcommand_prints_matches_and_capped_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_search_content(
+        query: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> ContentSearchOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.search_content")
+        return ContentSearchOutcome(
+            decision=decision,
+            matches=((tmp_path / "a.txt", 3, "TODO: fix this"),),
+            capped=True,
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_search_content",
+        fake_authorize_and_search_content,
+    )
+
+    exit_code = main(
+        ["fs", "search-content", "TODO", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "fs search-content: GRANTED" in captured.out
+    assert f"{tmp_path / 'a.txt'}:3: TODO: fix this" in captured.out
+    assert "cap was reached" in captured.err
+    assert exit_code == 0
+
+
+def test_fs_search_content_subcommand_requires_query() -> None:
+    with pytest.raises(SystemExit):
+        main(["fs", "search-content"])
+
+
+def test_fs_recent_subcommand_routes_the_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[int] = []
+
+    def fake_authorize_and_list_recent_files(
+        *,
+        limit: int,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> RecentFilesOutcome:
+        received.append(limit)
+        decision = _make_decision(granted=True, capability_id="fs.recent")
+        return RecentFilesOutcome(decision=decision, files=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_recent_files",
+        fake_authorize_and_list_recent_files,
+    )
+
+    exit_code = main(
+        ["fs", "recent", "--limit", "5", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert received == [5]
+    assert exit_code == 0
+
+
+def test_fs_recent_subcommand_defaults_limit_to_twenty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    received: list[int] = []
+
+    def fake_authorize_and_list_recent_files(
+        *,
+        limit: int,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> RecentFilesOutcome:
+        received.append(limit)
+        decision = _make_decision(granted=True, capability_id="fs.recent")
+        return RecentFilesOutcome(decision=decision, files=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_recent_files",
+        fake_authorize_and_list_recent_files,
+    )
+
+    main(["fs", "recent", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert received == [20]
+
+
+def test_fs_recent_subcommand_prints_each_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_recent_files(
+        *,
+        limit: int,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> RecentFilesOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.recent")
+        return RecentFilesOutcome(decision=decision, files=(tmp_path / "new.txt",))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_recent_files",
+        fake_authorize_and_list_recent_files,
+    )
+
+    exit_code = main(["fs", "recent", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "fs recent: GRANTED" in captured.out
+    assert str(tmp_path / "new.txt") in captured.out
+    assert exit_code == 0
+
+
+def test_fs_subcommand_requires_a_real_fs_command() -> None:
+    with pytest.raises(SystemExit):
+        main(["fs"])
+
+
 _DESKTOP_CONFIRM_OR_ABOVE_INVOCATIONS: tuple[tuple[str, list[str]], ...] = (
     ("open-brave-url", ["open-brave-url", "https://example.com"]),
     ("open-vscode-file", ["open-vscode-file", "notes.txt"]),
@@ -4120,6 +4342,7 @@ _PLANNING_SUBCOMMANDS = ("run",)
 _EMAIL_SUBCOMMANDS = ("list", "read")
 _JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
 _BROWSER_SUBCOMMANDS = ("open", "screenshot", "inspect-dom", "close")
+_FS_SUBCOMMANDS = ("find", "search-content", "recent")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -4184,6 +4407,13 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "WP-" not in captured.out, (
             f"browser {subcommand} --help leaks a work-package reference"
         )
+
+    for subcommand in _FS_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["fs", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"fs {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, f"fs {subcommand} --help leaks a work-package reference"
 
 
 def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(

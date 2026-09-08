@@ -15,6 +15,18 @@ touch, or whether a real action is authorized at all -- that scoping/
 authorization decision belongs to ``jarvis.kernel.files``, which calls
 this adapter only after deciding a path is in bounds and the real
 action is granted.
+
+**Updated 2026-09-08**: ``find``/``search_content``/``recent`` use
+``Path.rglob("*")`` (or a caller-given glob pattern for ``find``) for
+real, recursive traversal -- the same stdlib-only mechanism
+``list_dir`` already uses one level deep, extended to the whole tree.
+Deliberately, this adapter does **not** itself re-check each result
+against a scope boundary (that check happens once, at the kernel
+layer, on every returned result -- see ``jarvis.kernel.files``): a
+glob pattern containing ``..`` segments, or a real symlink inside
+``root`` pointing outside it, can make ``rglob`` return a path outside
+``root``, and this adapter has no scope opinion of its own to catch
+that, matching every other method here.
 """
 
 from __future__ import annotations
@@ -47,3 +59,38 @@ class LocalFileSystemAdapter:
     def delete(self, path: Path) -> None:
         """Permanently delete the real file at ``path`` via Path.unlink -- files only."""
         path.unlink()
+
+    def find(self, root: Path, pattern: str) -> tuple[Path, ...]:
+        """Return every real path under ``root`` matching ``pattern``, via Path.rglob."""
+        return tuple(sorted(root.rglob(pattern)))
+
+    def search_content(
+        self, root: Path, query: str, *, max_file_bytes: int, max_files_scanned: int
+    ) -> tuple[tuple[tuple[Path, int, str], ...], bool]:
+        """Grep-style search via plain, line-by-line substring matching -- no regex, no new dependency."""  # noqa: E501
+        matches: list[tuple[Path, int, str]] = []
+        scanned = 0
+        capped = False
+        for candidate in sorted(root.rglob("*")):
+            if not candidate.is_file():
+                continue
+            if scanned >= max_files_scanned:
+                capped = True
+                break
+            scanned += 1
+            try:
+                if candidate.stat().st_size > max_file_bytes:
+                    continue
+                text = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if query in line:
+                    matches.append((candidate, line_number, line))
+        return tuple(matches), capped
+
+    def recent(self, root: Path, limit: int) -> tuple[Path, ...]:
+        """Return the ``limit`` most recently modified real files under ``root``, via Path.rglob."""
+        files = [candidate for candidate in root.rglob("*") if candidate.is_file()]
+        files.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+        return tuple(files[:limit])

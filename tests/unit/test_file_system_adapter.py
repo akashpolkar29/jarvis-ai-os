@@ -161,3 +161,131 @@ def test_delete_raises_is_a_directory_error_for_a_directory(tmp_path: Path) -> N
 
     with pytest.raises(IsADirectoryError):
         adapter.delete(tmp_path)
+
+
+def test_find_matches_recursively_by_glob_pattern(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("a", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.py").write_text("b", encoding="utf-8")
+    (tmp_path / "sub" / "c.txt").write_text("c", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches = adapter.find(tmp_path, "*.py")
+
+    assert matches == (tmp_path / "a.py", tmp_path / "sub" / "b.py")
+
+
+def test_find_returns_empty_tuple_for_no_matches(tmp_path: Path) -> None:
+    adapter = LocalFileSystemAdapter()
+
+    assert adapter.find(tmp_path, "*.py") == ()
+
+
+def test_search_content_finds_matching_lines_recursively(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("hello world\nsecond line\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_text("no match here\n", encoding="utf-8")
+    (tmp_path / "sub" / "c.txt").write_text("another world entry\n", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches, capped = adapter.search_content(
+        tmp_path, "world", max_file_bytes=1_000_000, max_files_scanned=1_000
+    )
+
+    assert set(matches) == {
+        (tmp_path / "a.txt", 1, "hello world"),
+        (tmp_path / "sub" / "c.txt", 1, "another world entry"),
+    }
+    assert capped is False
+
+
+def test_search_content_skips_files_larger_than_the_byte_cap(tmp_path: Path) -> None:
+    (tmp_path / "small.txt").write_text("world", encoding="utf-8")
+    (tmp_path / "big.txt").write_text("world " + "x" * 100, encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches, capped = adapter.search_content(
+        tmp_path, "world", max_file_bytes=10, max_files_scanned=1_000
+    )
+
+    assert [path for path, _, _ in matches] == [tmp_path / "small.txt"]
+    assert capped is False
+
+
+def test_search_content_stops_after_the_file_count_cap_and_reports_capped(tmp_path: Path) -> None:
+    for i in range(5):
+        (tmp_path / f"file{i}.txt").write_text("world", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches, capped = adapter.search_content(
+        tmp_path, "world", max_file_bytes=1_000_000, max_files_scanned=2
+    )
+
+    assert len(matches) == 2  # noqa: PLR2004 -- the real, exact cap this test sets
+    assert capped is True
+
+
+def test_search_content_does_not_report_capped_when_the_tree_exactly_fits(tmp_path: Path) -> None:
+    """capped is False when the whole tree was covered, even at exactly the cap's own count."""
+    for i in range(3):
+        (tmp_path / f"file{i}.txt").write_text("world", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches, capped = adapter.search_content(
+        tmp_path, "world", max_file_bytes=1_000_000, max_files_scanned=3
+    )
+
+    assert len(matches) == 3  # noqa: PLR2004 -- the real, exact file count this test sets
+    assert capped is False
+
+
+def test_search_content_skips_a_binary_file_without_crashing(tmp_path: Path) -> None:
+    (tmp_path / "binary.dat").write_bytes(b"\xff\xfe\x00\x01invalid utf-8 \xc3\x28")
+    (tmp_path / "text.txt").write_text("world", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    matches, capped = adapter.search_content(
+        tmp_path, "world", max_file_bytes=1_000_000, max_files_scanned=1_000
+    )
+
+    assert [path for path, _, _ in matches] == [tmp_path / "text.txt"]
+    assert capped is False
+
+
+def test_recent_sorts_by_real_modification_time_most_recent_first(tmp_path: Path) -> None:
+    old = tmp_path / "old.txt"
+    old.write_text("old", encoding="utf-8")
+    middle = tmp_path / "middle.txt"
+    middle.write_text("middle", encoding="utf-8")
+    new = tmp_path / "new.txt"
+    new.write_text("new", encoding="utf-8")
+
+    now = old.stat().st_mtime
+    os.utime(old, (now - 20, now - 20))
+    os.utime(middle, (now - 10, now - 10))
+    os.utime(new, (now, now))
+    adapter = LocalFileSystemAdapter()
+
+    files = adapter.recent(tmp_path, 10)
+
+    assert files == (new, middle, old)
+
+
+def test_recent_respects_the_limit(tmp_path: Path) -> None:
+    for i in range(5):
+        (tmp_path / f"file{i}.txt").write_text("x", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    files = adapter.recent(tmp_path, 2)
+
+    assert len(files) == 2  # noqa: PLR2004 -- the real, exact limit this test sets
+
+
+def test_recent_excludes_directories(tmp_path: Path) -> None:
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    adapter = LocalFileSystemAdapter()
+
+    files = adapter.recent(tmp_path, 10)
+
+    assert files == (tmp_path / "file.txt",)

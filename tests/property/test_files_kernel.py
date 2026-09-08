@@ -52,6 +52,17 @@ class _StubFileSystem:
     def delete(self, path: Path) -> None:
         del path
 
+    def find(self, root: Path, pattern: str) -> tuple[Path, ...]:
+        raise NotImplementedError
+
+    def search_content(
+        self, root: Path, query: str, *, max_file_bytes: int, max_files_scanned: int
+    ) -> tuple[tuple[tuple[Path, int, str], ...], bool]:
+        raise NotImplementedError
+
+    def recent(self, root: Path, limit: int) -> tuple[Path, ...]:
+        raise NotImplementedError
+
 
 @given(CONFIRMATION_FLAGS, CONFIRMATION_FLAGS)
 def test_delete_file_granted_tracks_physical_confirmation_alone(
