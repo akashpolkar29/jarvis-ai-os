@@ -80,6 +80,7 @@ from jarvis.kernel.job_assistance import (
 from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
+from jarvis.kernel.project import ProjectStartOutcome, ProjectStatusOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -2216,6 +2217,206 @@ def test_plan_run_subcommand_denied_attempts_no_plan_steps(
 def test_plan_run_subcommand_requires_goal() -> None:
     with pytest.raises(SystemExit):
         main(["plan", "run"])
+
+
+def test_project_start_subcommand_reports_a_completed_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    async def fake_authorize_and_start_project(
+        goal: str,
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        received.append(goal)
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        return ProjectStartOutcome(
+            decision=decision, state="completed", reason=None, record_identifier="mem:1"
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_start_project",
+        fake_authorize_and_start_project,
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "start",
+            "continue the LiDAR project",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["continue the LiDAR project"]
+    assert exit_code == 0
+    assert "project start: GRANTED" in captured.out
+    assert "state: completed" in captured.out
+    assert "recorded: mem:1" in captured.out
+
+
+def test_project_start_subcommand_reports_a_stuck_state_with_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_start_project(
+        goal: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        return ProjectStartOutcome(
+            decision=decision,
+            state="stuck",
+            reason="Plan step 'git.commit' was denied.",
+            record_identifier="mem:2",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_start_project",
+        fake_authorize_and_start_project,
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "start",
+            "a goal with a blocked step",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "state: stuck" in captured.out
+    assert "reason: Plan step 'git.commit' was denied." in captured.out
+
+
+def test_project_start_subcommand_denied_with_no_confirmation_flags(tmp_path: Path) -> None:
+    """CLI invocation alone denies planning.run_plan's own gate -- no confirmation flag at all."""
+    exit_code = main(
+        ["project", "start", "do something", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert exit_code == 1
+
+
+def test_project_status_subcommand_prints_a_found_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_get_project_status(
+        goal: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        received.append(goal)
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        record = MemoryRecord(
+            identifier="mem:3",
+            value=Tainted(
+                {
+                    "kind": "project_goal",
+                    "goal": goal,
+                    "state": "stuck",
+                    "reason": "Plan validation failed.",
+                    "recorded_at": "2026-09-08T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 8, tzinfo=UTC),
+            expires_at=None,
+        )
+        return ProjectStatusOutcome(decision=decision, record=record)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_get_project_status",
+        fake_authorize_and_get_project_status,
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "status",
+            "continue the LiDAR project",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["continue the LiDAR project"]
+    assert exit_code == 0
+    assert "goal: continue the LiDAR project" in captured.out
+    assert "state: stuck" in captured.out
+    assert "reason: Plan validation failed." in captured.out
+    assert "recorded_at: 2026-09-08T00:00:00+00:00" in captured.out
+
+
+def test_project_status_subcommand_reports_nothing_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_project_status(
+        goal: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return ProjectStatusOutcome(decision=decision, record=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_get_project_status",
+        fake_authorize_and_get_project_status,
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "status",
+            "a goal never started",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No project-goal record found for this goal." in captured.out
+
+
+def test_project_subcommand_requires_a_real_project_command() -> None:
+    with pytest.raises(SystemExit):
+        main(["project"])
+
+
+def test_project_start_subcommand_requires_goal() -> None:
+    with pytest.raises(SystemExit):
+        main(["project", "start"])
+
+
+def test_project_status_subcommand_requires_goal() -> None:
+    with pytest.raises(SystemExit):
+        main(["project", "status"])
 
 
 _EMAIL_COMMON_FLAGS = [
@@ -4464,6 +4665,7 @@ _CALENDAR_SUBCOMMANDS = ("list-events",)
 _JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
 _BROWSER_SUBCOMMANDS = ("open", "screenshot", "inspect-dom", "close")
 _FS_SUBCOMMANDS = ("find", "search-content", "recent")
+_PROJECT_SUBCOMMANDS = ("start", "status")
 
 
 def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
@@ -4544,6 +4746,15 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         captured = capsys.readouterr()
         assert "ADR-" not in captured.out, f"fs {subcommand} --help leaks an ADR reference"
         assert "WP-" not in captured.out, f"fs {subcommand} --help leaks a work-package reference"
+
+    for subcommand in _PROJECT_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["project", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"project {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, (
+            f"project {subcommand} --help leaks a work-package reference"
+        )
 
 
 def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(

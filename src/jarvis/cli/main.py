@@ -240,6 +240,7 @@ from jarvis.kernel.memory import (
 from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_command
 from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.planning import authorize_and_run_plan
+from jarvis.kernel.project import authorize_and_get_project_status, authorize_and_start_project
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
@@ -640,6 +641,36 @@ def _add_planning_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     _add_common_flags(plan_run_parser)
 
 
+def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add project start/status -- a typed-goal workflow atop planning.run_plan, nested.
+
+    Mirrors ``job-application``'s own nested-subcommand shape exactly.
+    Omits a cloud-provider override flag, on purpose, the identical
+    reasoning ``_add_planning_parsers``'s own docstring already gives:
+    real vendor-family cloud configuration is out of this CLI's own
+    scope. Omitting ``provider`` reaches
+    ``authorize_and_start_project``'s own real, local-only default via
+    ``authorize_and_run_plan`` unmodified, including that default's own
+    real, honest reliability warning.
+    """
+    project_parser = subparsers.add_parser("project", help="Typed project-goal workflow commands.")
+    project_subparsers = project_parser.add_subparsers(dest="project_command", required=True)
+
+    start_parser = project_subparsers.add_parser(
+        "start", help="Start a real, multi-step plan for a typed project goal."
+    )
+    start_parser.add_argument("goal", help="The real, natural-language project goal.")
+    _add_common_flags(start_parser)
+
+    status_parser = project_subparsers.add_parser(
+        "status", help="Retrieve the most recent real status recorded for a project goal."
+    )
+    status_parser.add_argument(
+        "goal", help="The exact goal string previously passed to 'project start'."
+    )
+    _add_common_flags(status_parser)
+
+
 def _add_browser_handle_flags(parser: argparse.ArgumentParser) -> None:
     """Add the four real PageHandle fields as required flags.
 
@@ -1011,6 +1042,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_fs_search_parsers(subparsers)
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
+    _add_project_parsers(subparsers)
     _add_browser_parsers(subparsers)
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
@@ -1536,6 +1568,58 @@ def _run_planning_subcommand(
     return decision, step_records
 
 
+def _run_project_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch ``project start``/``project status``, returning a full _CommandOutcome directly.
+
+    Split out from :func:`_dispatch_command` for the identical reason
+    :func:`_run_prepare_application_subcommand` is: this command's own
+    payload (a state/reason/record-identifier triple, or a single
+    looked-up record) doesn't fit the simpler ``(Decision, payload)``
+    tuple shape most other ``_run_*_subcommand`` helpers return.
+    ``authorize_and_start_project`` is ``async``, so ``start`` wraps
+    its own call in ``asyncio.run``, the same shape
+    ``_run_planning_subcommand`` already uses;
+    ``authorize_and_get_project_status`` is sync, no wrapping needed,
+    matching ``authorize_and_list_job_applications``'s own identical
+    shape. Omits ``provider`` entirely on ``start``, the same real,
+    deliberate scope limit ``_add_project_parsers``'s own docstring
+    already states. A real ``PlanningError``/``PlanValidationError``
+    from ``start`` is not caught here -- it propagates to ``main()``'s
+    own existing broad except tuple, exactly like ``plan run`` already
+    does; ``authorize_and_start_project`` has already durably recorded
+    the real stuck reason to memory before it re-raises (see
+    ``kernel/project.py``'s own module docstring).
+    """
+    if args.project_command == "start":
+        start_outcome = asyncio.run(
+            authorize_and_start_project(
+                args.goal,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        return _CommandOutcome(
+            start_outcome.decision,
+            "project start",
+            project_state=start_outcome.state,
+            project_reason=start_outcome.reason,
+            project_record_identifier=start_outcome.record_identifier,
+        )
+
+    status_outcome = authorize_and_get_project_status(
+        args.goal,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(
+        status_outcome.decision,
+        "project status",
+        project_status_record=status_outcome.record,
+    )
+
+
 def _handle_from_args(args: argparse.Namespace) -> PageHandle:
     """Reconstruct a real PageHandle from a prior 'browser open' call's own printed fields."""
     return PageHandle(
@@ -1915,6 +1999,10 @@ class _CommandOutcome:
     fs_paths: tuple[Path, ...] | None = None
     fs_content_matches: tuple[tuple[Path, int, str], ...] | None = None
     fs_search_capped: bool = False
+    project_state: str | None = None
+    project_reason: str | None = None
+    project_record_identifier: str | None = None
+    project_status_record: MemoryRecord | None = None
 
 
 def _run_basic_subcommand(
@@ -1994,6 +2082,8 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
         return _CommandOutcome(
             decision, f"plan {args.plan_command}", plan_step_records=plan_step_records
         )
+    if args.command == "project":
+        return _run_project_subcommand(args)
     if args.command == "email":
         decision, email_summaries, email_message = _run_email_subcommand(args)
         return _CommandOutcome(
@@ -2039,6 +2129,39 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
         chain_path=args.chain_path,
     )
     return _CommandOutcome(decision, args.command)
+
+
+def _print_project_outcome(outcome: _CommandOutcome) -> None:
+    """Print a project start/status subcommand's own real payload.
+
+    Split out from :func:`_print_outcome` purely to keep its own
+    statement count under ruff's `PLR0915` threshold, the same reason
+    `_print_job_application_table`/`_print_browser_outcome` already
+    exist. Checking `outcome.command_label` for the "nothing found"
+    message (rather than relying on field presence alone, the pattern
+    every other branch here uses) is deliberate: unlike a list, a
+    single, possibly-absent record can't otherwise be told apart from
+    "this wasn't a project command at all" -- both leave
+    `project_status_record` at its own default `None`.
+    """
+    if outcome.project_state is not None:
+        print(f"state: {outcome.project_state}")
+        if outcome.project_reason is not None:
+            print(f"reason: {outcome.project_reason}")
+        if outcome.project_record_identifier is not None:
+            print(f"recorded: {outcome.project_record_identifier}")
+    if outcome.project_status_record is not None:
+        data = outcome.project_status_record.value.value
+        if isinstance(data, dict):
+            print(f"goal: {data.get('goal')}")
+            print(f"state: {data.get('state')}")
+            if data.get("reason") is not None:
+                print(f"reason: {data.get('reason')}")
+            print(f"recorded_at: {data.get('recorded_at')}")
+        else:
+            print(f"{outcome.project_status_record.identifier}: {data!r}")
+    elif outcome.command_label == "project status":
+        print("No project-goal record found for this goal.")
 
 
 def _print_job_application_table(records: tuple[MemoryRecord, ...]) -> None:
@@ -2127,6 +2250,7 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
         _print_job_application_table(outcome.job_application_records)
     _print_browser_outcome(outcome)
     _print_fs_search_outcome(outcome)
+    _print_project_outcome(outcome)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:
