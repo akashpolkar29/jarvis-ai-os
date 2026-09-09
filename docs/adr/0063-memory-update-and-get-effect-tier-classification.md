@@ -2,11 +2,22 @@
 
 ## Status
 
-**Proposed.** Built and classified directly, following ADR-0060's/
-ADR-0061's own established "build the real thing, classify it
-honestly, flag for review" sequence for a work package with no
-interactive back-and-forth available at the time it was built. Not
-yet reviewed by the user against this document's own full text.
+**Accepted (2026-09-09, directly by the user, in conversation, after
+direct review of this ADR's own full, verbatim text).**
+
+Built and classified directly, following ADR-0060's/ADR-0061's own
+established "build the real thing, classify it honestly, flag for
+review" sequence for a work package with no interactive back-and-forth
+available at the time it was built. Surfaced in full afterward --
+read fresh off disk in conversation, not from memory or a summary --
+and the user accepted it as written, no changes requested. The
+classification stands exactly as written below: `memory.update` is a
+dynamic-effect capability, its own distinct capability id from
+`memory.write`; `memory.get` is a static `Effect.READ_LOCAL`/
+`Tier.ALLOW` capability, mirroring `memory.retrieve`'s own precedent.
+This satisfies the same "reviewed the document, not merely relayed a
+decision" bar ADR-0057/ADR-0058/ADR-0059/ADR-0060/ADR-0061 each
+already met.
 
 ## Date
 
