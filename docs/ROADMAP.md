@@ -251,9 +251,13 @@ it.
   `task run` are deliberately separate verbs so a future
   background-execution UI layer can return a real task id before a
   plan finishes running. See `docs/OPEN_DECISIONS.md` item 16 for the
-  full account, including the one real, stated vocabulary seam this
-  fold leaves open (`project.py`'s own `"stuck"` vs `tasks.py`'s own
-  `"failed"` for the identical real situation).
+  full account. **Updated 2026-09-09 (WP-109)**: the one real
+  vocabulary seam item 16 left open (`project.py`'s own `"stuck"` vs
+  `tasks.py`'s own `"failed"` for the identical real situation) is
+  closed — the canonical, stored status is `"failed"` everywhere;
+  `project.py`'s own public `state` value and `jarvis project
+  status`'s own printed text still say `"stuck"`, translated only at
+  that module's own boundary. See `docs/OPEN_DECISIONS.md` item 17.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

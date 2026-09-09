@@ -36,10 +36,12 @@ projects" gap at the workflow level, `Tier.ALLOW`-only bounded by
 ADR-0062's own already-accepted v1 ceiling; and a real, persistent
 Task/TaskStore (`jarvis task create/run/status/list`, item 16,
 2026-09-09), which `project.py` is now folded into, sharing storage,
-keeping its own exact public contract unchanged. All items 1-4 and
-6-16 below are resolved, decided, or built; only item 5 (one of the
-audit chain's four real structural gaps -- the cross-process race)
-remains genuinely open.
+keeping its own exact public contract unchanged; and the
+`"stuck"`/`"failed"` task-status terminology unification (item 17,
+2026-09-09), closing the one real vocabulary seam item 16 left open.
+All items 1-4 and 6-17 below are resolved, decided, or built; only
+item 5 (one of the audit chain's four real structural gaps -- the
+cross-process race) remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -541,15 +543,25 @@ outer gate, never the task-record write's; same `"completed"`/
 `"stuck"` vocabulary; same "denied outer gate writes nothing" rule) --
 but now delegate their own real writes to `tasks.py`'s shared helpers,
 sharing the same `"kind": "task"` storage marker rather than a
-separate `"project_goal"` one. **One real, stated vocabulary seam left
-open, not hidden**: `tasks.py`'s own two-phase functions write
+separate `"project_goal"` one. ~~**One real, stated vocabulary seam
+left open, not hidden**: `tasks.py`'s own two-phase functions write
 `"failed"` for the identical real situation `project.py` still writes
-`"stuck"` for (preserving its own unchanged public contract) -- so
-`jarvis task list` will show a mix of both words for what is,
-underneath, the same real outcome, depending on which entry point
-created the task. Not unified here, since doing so would mean
-changing `project.py`'s own public `state` value, exactly the breaking
-change the fold was constrained not to make.
+`"stuck"` for -- so `jarvis task list` will show a mix of both words
+for the same real outcome, depending on which entry point created the
+task.~~ **CLOSED, WP-109, 2026-09-09** (direct user decision: "resolve
+the stuck vs failed terminology inconsistency before WP-104"): the
+canonical, stored status is now `"failed"` everywhere, unconditionally
+-- `project.py` no longer writes `"stuck"` to storage at all, and its
+own former, near-duplicate derivation copy was deleted in favor of
+directly importing `tasks.derive_result_status` (now the one, real,
+public, canonical copy). `project.py`'s own public `state`
+return value and `jarvis project status`'s own printed text still say
+`"stuck"`, translated only at that module's own return/print boundary
+-- the real ambiguity `jarvis task list` would otherwise keep showing
+is closed; see item 17 below for the full account, including the one
+real, explained exception this leaves (`ProjectStatusOutcome.record`'s
+own raw stored value is `"failed"`, not translated, since this module
+will not fabricate a record claiming something different was stored).
 
 **Real, named states not yet reachable, stated honestly**:
 `"waiting_approval"` and `"cancelled"` exist in `VALID_TASK_STATUSES`
@@ -558,6 +570,52 @@ for a future planner extension/cancel verb, neither built yet -- see
 running "who else needs `memory.get`/`memory.update`" question: no
 other existing capability's own classification needed to change; both
 are additive.
+
+## 17. ~~`"stuck"` vs `"failed"` task-status terminology~~ -- RESOLVED/BUILT 2026-09-09
+
+**Resolved/built, WP-109, a real, direct user decision ("resolve the
+stuck vs failed terminology inconsistency before WP-104")**. Required
+investigation performed first, not assumed: every real use of
+`"stuck"`/`"failed"`/`VALID_TASK_STATUSES`/status serialization across
+`kernel/project.py`, `kernel/tasks.py`, `cli/main.py`, and their own
+tests was mapped before any change. Finding: of the three real
+status-producing branches, two (`PlanningError`/`PlanValidationError`;
+the currently-unreachable `aborted=True` case) were genuine
+duplicates -- identical trigger, identical reason text, two separate
+string literals and two near-duplicate private derivation functions.
+A third (`tasks.authorize_and_run_task`'s own "outer gate denied after
+the task record already existed" branch) has no `project.py`
+equivalent at all -- a real, new condition the two-phase
+create-then-run design introduced, not a naming question, left
+untouched.
+
+**The real fix**: the canonical, stored status for "the planner did
+not complete successfully" is now `"failed"`, everywhere, for every
+real caller -- `project.py`'s own, former, near-duplicate
+`_state_for_result` copy was deleted; it now imports `tasks.py`'s own
+(renamed, now-public) `derive_result_status` directly. `project.py`'s
+own public `ProjectStartOutcome.state` and `jarvis project status`'s
+own printed CLI text still say `"stuck"` -- one real, narrow
+translation (`_CANONICAL_TO_PROJECT_STATE`) applied only at that
+module's own return/print boundary, preserving its already-shipped,
+already-tested, already-live-verified contract exactly, per the
+user's own explicit instruction. **One real, explained exception, not
+hidden**: `ProjectStatusOutcome.record` -- the raw `MemoryRecord`
+`authorize_and_get_project_status` returns -- now genuinely contains
+`status: "failed"` for a project-created failure, not `"stuck"`.
+Translating that too would mean this function fabricating a record
+claiming `"stuck"` was literally persisted when it was not; the CLI's
+own printed text is translated instead, exactly where a human actually
+reads the word.
+
+**Live-verified, not just unit-tested**: a real `jarvis project
+start` → `jarvis project status` round trip against a genuine local
+Ollama hallucination printed `state: stuck`; `jarvis task list`
+reading the identical, same underlying stored record printed
+`status=failed` -- the real ambiguity is closed, the CLI's own
+existing user-facing text for `project status` is unchanged. No new
+ADR -- a pure internal-representation/presentation fix, no new
+capability, no authorization-semantics change.
 
 ## Maintaining this index
 
