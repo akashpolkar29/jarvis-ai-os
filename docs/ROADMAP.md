@@ -292,6 +292,17 @@ it.
   Always binds `127.0.0.1` only, no `--host` flag exists. See
   `docs/architecture/wp108-ui-foundation.md` and
   `docs/OPEN_DECISIONS.md` item 19.
+  **Updated 2026-09-09 (WP-110)**: a real, frontend-focused follow-up
+  turning `jarvis ui` into a genuinely reliable typed conversation —
+  fixed one real message-ordering hazard (concurrent requests from a
+  missing re-entry guard), added distinct rendering per real response
+  type (task-created, authorization-required, plain response), and
+  one small, additive backend field (`task_status`). No new router, no
+  new authorization path. Renumbered from the originating prompt's own
+  "WP-109" — that number already belongs to a different, real,
+  already-merged work package (item 17) — to WP-110, the next real,
+  available number. See `docs/architecture/wp110-ui-conversation.md`
+  and `docs/OPEN_DECISIONS.md` item 20.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

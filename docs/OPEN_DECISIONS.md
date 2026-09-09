@@ -46,8 +46,13 @@ reasoning only when that fails, never executing a capability outside
 the existing, small, pre-wired execution boundary; and a real, minimal
 local web UI foundation (`jarvis ui`, item 19, 2026-09-09, WP-108), a
 client of that same router, never a second execution system, always
-local-only and single-threaded by deliberate design. All items 1-4 and
-6-19 below are resolved, decided, or built; only item 5 (one of the
+local-only and single-threaded by deliberate design; and a real
+follow-up turning that UI into a genuinely reliable typed conversation
+(item 20, 2026-09-09, WP-110 — renumbered from the originating
+prompt's own "WP-109," which a different, real, already-merged work
+package already owns), fixing one real message-ordering hazard with
+no new router and no new authorization path. All items 1-4 and 6-20
+below are resolved, decided, or built; only item 5 (one of the
 audit chain's four real structural gaps -- the cross-process race)
 remains genuinely open.
 
@@ -750,6 +755,70 @@ integration tests proving the HTTP boundary genuinely uses the real
 router) plus 5 new CLI-wiring tests. See
 `docs/architecture/wp108-ui-foundation.md` for the full design and
 `docs/protocol/README.md`'s own updated subcommand table.
+
+## 20. ~~UI conversation + typed input end-to-end~~ -- RESOLVED/BUILT 2026-09-09
+
+**Resolved/built, WP-110, a real, direct user decision**. A real,
+frontend-focused follow-up to WP-108, turning the existing `jarvis ui`
+into a genuinely reliable typed conversation experience.
+
+**A real naming collision, found before writing any code**: the
+originating prompt called this "WP-109" -- a real, different,
+already-merged work package (task-status terminology unification,
+item 17) already owns that number in this repository's own git
+history. Labeled WP-110 instead, the next real, sequential, available
+number -- the same "real git state wins over a prompt's own requested
+label" resolution this project already established for the
+`v0.3.0`/`v0.7.1` tag-numbering collisions.
+
+**The one real, load-bearing bug found and fixed**: the old `send()`
+only disabled the Send button, not the text input, and its `keydown`
+handler had no re-entry guard at all -- two rapid Enters (or typing a
+second message before the first response arrived) could fire two
+concurrent requests whose responses could resolve out of order,
+visually reordering the conversation. Fixed with a real `isSending`
+flag checked synchronously at the top of `send()`.
+
+**Everything else was additive, not a rebuild**: a real, removable
+"Thinking..." bubble replaces the old separate status line;
+`renderResponse()` now distinguishes every real backend `type`
+(`task_created` gets a "Task created"/`Task ID:`/`Status:` block,
+`denied` gets an "Authorization required" heading, the rest render as
+clear plain text); one small, additive backend field
+(`task_status`, always `"created"` for a granted task-creation route
+-- a real, always-true fact about `authorize_and_create_task`, WP-107,
+never invented). Confirmed by direct inspection before writing
+anything: empty/whitespace-input rejection and stuck-loading-state
+recovery were **already correct** in WP-108's own original code
+(`.finally()` already unconditionally re-enabled the UI on any
+outcome) -- neither was rebuilt.
+
+**One router only, unchanged**: no `ui_router.py`/`frontend_router.py`/
+`browser_intent.py` of any kind exists; the frontend still only calls
+`POST /api/command`, which still only calls the exact same,
+unmodified `kernel.router.authorize_and_route` (WP-104). Security
+(localhost-only, single-threaded), authorization (ADR-0058, ADR-0062,
+no localhost-as-physical-confirmation inference), and Conversation/
+Task/Memory separation are all unchanged from WP-108.
+
+**Testing**: 3 new backend tests (`tests/unit/test_ui_server.py`) for
+the `task_status` field, including a real HTTP round trip. **A real,
+stated limitation, not hidden**: this repository has no JS test
+framework and no browser-automation dependency capable of simulating
+keystrokes/clicks (`ports/browser_automation.py`'s own real port only
+reads pages, never drives one). The actual, shipped, unmodified
+`<script>` was instead executed live against a minimal, hand-rolled
+DOM stub and the real, running server (Node's own built-in `fetch`,
+no mocking) -- 16 real checks, all passing, proving the re-entry
+guard, the pending-bubble lifecycle, disabled/re-enabled input states,
+empty-input rejection, and real-network-failure recovery all work
+against the real production code. This verification genuinely
+happened but is not part of the repeatable, committed gate suite --
+matching this project's own established precedent for GUI-adjacent
+code with no automated coverage (`ui/confirm/dialog.py`'s own "needs a
+real display" note), stated plainly as a real, standing gap.
+
+See `docs/architecture/wp110-ui-conversation.md` for the full account.
 
 ## Maintaining this index
 

@@ -23,8 +23,19 @@ replacement for either.
   deliberate design to avoid a new, concurrent-request version of the
   audit chain's already-documented cross-process race. See
   `docs/architecture/wp108-ui-foundation.md`.
+- WP-110: turned `jarvis ui` into a genuinely reliable typed
+  conversation -- distinct rendering per real response type
+  (task-created, authorization-required, plain response) and a
+  small, additive `task_status` field. See
+  `docs/architecture/wp110-ui-conversation.md`.
 
 ### Fixed
+
+- WP-110: a real message-ordering hazard in `jarvis ui` -- two rapid
+  Enter presses (or typing a second message before the first response
+  arrived) could fire two concurrent requests whose responses could
+  resolve out of order, visually reordering the conversation. Fixed
+  with a real re-entry guard.
 
 - `pyproject.toml`'s `version` field, stale at `0.6.0` since four real
   tags ago -- `jarvis --version` was reporting a materially wrong

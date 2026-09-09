@@ -154,9 +154,17 @@ submission capability for any route to ever reach, wired or not.
   "route_kind": "deterministic_command" | "complex_goal" | "unknown" | null,
   "capability_id": "memory.retrieve" | null,
   "task_id": "..." | null,
+  "task_status": "created" | null,
   "granted": true | false | null
 }
 ```
+
+**Updated 2026-09-09 (WP-110)**: `task_status` was added, always
+`"created"` for a granted `task_created` response and `null`
+otherwise -- a real, always-true fact (`authorize_and_create_task`
+never produces any other status for a brand-new task), not invented,
+and additive to every field this section already documented. See
+`docs/architecture/wp110-ui-conversation.md`.
 
 `granted` is `null` exactly when `outcome.decision is None` (nothing
 was authorized at all) -- never fabricated as `true`/`false` for a
