@@ -12,7 +12,7 @@ below is decided, update its own source doc first, then remove or
 mark it resolved here -- this file should never be the place a
 decision is first recorded.
 
-## Honest status snapshot, 2026-09-08
+## Honest status snapshot, 2026-09-09
 
 Not a new task list -- a real, single-glance picture of where things
 actually stand right now, for future reference. Kept current at each
@@ -30,13 +30,16 @@ voice grammar expansion and a real end-to-end scenario test, tagged
 `v0.9.0`, 2026-09-08; and WP-101 (2026-09-08), which closed the audit
 chain's non-atomic-writes gap (temp-file-then-`Path.replace`, real
 tests proving a simulated mid-save crash leaves the original file
-untouched); and a real, typed project-goal workflow (`jarvis project
+untouched); a real, typed project-goal workflow (`jarvis project
 start`/`status`, item 15), closing the original charter's "remember my
 projects" gap at the workflow level, `Tier.ALLOW`-only bounded by
-ADR-0062's own already-accepted v1 ceiling. All items 1-4 and 6-15
-below are resolved, decided, or built; only item 5 (one of the audit
-chain's four real structural gaps -- the cross-process race) remains
-genuinely open.
+ADR-0062's own already-accepted v1 ceiling; and a real, persistent
+Task/TaskStore (`jarvis task create/run/status/list`, item 16,
+2026-09-09), which `project.py` is now folded into, sharing storage,
+keeping its own exact public contract unchanged. All items 1-4 and
+6-16 below are resolved, decided, or built; only item 5 (one of the
+audit chain's four real structural gaps -- the cross-process race)
+remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -499,6 +502,62 @@ decision. No retry or replan was added either, matching the
 already-accepted 2026-09-07 decision
 (`docs/architecture/planning-retry-replan-scoping-notes.md`) not to
 build either mechanism yet.
+
+## 16. ~~Persistent Task/TaskStore (`jarvis task create/run/status/list`)~~ -- RESOLVED/BUILT 2026-09-09
+
+**Resolved/built, WP-107, a real, direct user decision (2026-09-09,
+"Fold project.py into tasks.py, start WP-107")**: a real, general Task
+system, `jarvis.kernel.tasks`, built on two new real memory
+primitives -- `MemoryWritePort.update_value()` (mutate an existing
+record's value in place) and `RetrievalPort.get_by_identifier()` (a
+real, exact, O(1) lookup by key, not the broad-recall-then-filter
+approximation `job-application list`/`project status` both still use
+for a *list*). Investigated before building: `SqliteMemoryAdapter.pin()`
+already ran a real `UPDATE ... WHERE identifier = ?`, so the storage
+engine already supported in-place mutation -- only the public
+port/composition surface for updating a record's own *value* was
+missing, no new storage engine, no schema break.
+
+**Deliberately split into `authorize_and_create_task`/
+`authorize_and_run_task`, not one combined function**: not because
+today's synchronous CLI needs the split, but so a later
+background-execution UI layer (already scoped in a separate UI
+architecture proposal) can return a real task id before a plan
+finishes running, without a breaking rework of this module's own
+public shape. `authorize_and_get_task`/`authorize_and_list_tasks`
+round out the lifecycle. Manually smoke-tested end to end against a
+real local Ollama server, which genuinely hallucinated an invalid
+capability id mid-test -- a live `PlanningError`, correctly caught,
+correctly transitioned the task to `"failed"` with the real reason,
+correctly re-raised, correctly retrieved afterward by both `jarvis
+task status` and `jarvis task list`.
+
+**`jarvis.kernel.project` folded in, per the user's own explicit
+choice (Option B from a prior design pass, not decided unilaterally)**:
+`jarvis project start`/`jarvis project status` keep their own exact,
+already-tested, already-live-verified public contract byte-for-byte
+unchanged (same `Decision` semantics -- `planning.run_plan`'s own
+outer gate, never the task-record write's; same `"completed"`/
+`"stuck"` vocabulary; same "denied outer gate writes nothing" rule) --
+but now delegate their own real writes to `tasks.py`'s shared helpers,
+sharing the same `"kind": "task"` storage marker rather than a
+separate `"project_goal"` one. **One real, stated vocabulary seam left
+open, not hidden**: `tasks.py`'s own two-phase functions write
+`"failed"` for the identical real situation `project.py` still writes
+`"stuck"` for (preserving its own unchanged public contract) -- so
+`jarvis task list` will show a mix of both words for what is,
+underneath, the same real outcome, depending on which entry point
+created the task. Not unified here, since doing so would mean
+changing `project.py`'s own public `state` value, exactly the breaking
+change the fold was constrained not to make.
+
+**Real, named states not yet reachable, stated honestly**:
+`"waiting_approval"` and `"cancelled"` exist in `VALID_TASK_STATUSES`
+for a future planner extension/cancel verb, neither built yet -- see
+`kernel/tasks.py`'s own module docstring. A cross-check with the
+running "who else needs `memory.get`/`memory.update`" question: no
+other existing capability's own classification needed to change; both
+are additive.
 
 ## Maintaining this index
 

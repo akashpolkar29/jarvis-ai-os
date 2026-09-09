@@ -27,8 +27,24 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
-**Updated 2026-09-08 (a typed-goal-workflow pass, later still) — this
-table now covers 52 real subcommands, adding `project start`/`project
+**Updated 2026-09-09 (WP-107, a real, persistent Task/TaskStore) — this
+table now covers 56 real subcommands, adding `task create`/`task
+run`/`task status`/`task list` (`jarvis.kernel.tasks` -- the real,
+general Task system `jarvis project start`/`status` are now folded
+into, by a real, direct user decision; `project start`/`project
+status` keep their own exact, unchanged public behavior, sharing the
+same underlying storage). Two new real memory primitives make this
+possible: `memory.update` (a dynamic-effect capability, mirrors
+`memory.write`'s own classification exactly -- updates an existing
+record's value in place, closing a real gap `memory.pin`/`memory.forget`
+never needed to close) and `memory.get` (a new, static, `Tier.ALLOW`
+capability -- a real, exact, O(1)-by-identifier lookup, not the
+broad-recall-then-filter approximation `job-application list`/`project
+status` both still use). `task run` is deliberately a separate verb
+from `task create` -- not because today's synchronous CLI needs the
+split, but so a later background-execution UI layer can return a real
+task id before a plan finishes running, without a breaking rework of
+this module's own shape. It previously covered 52, adding `project start`/`project
 status` (`jarvis.kernel.project` — a thin, typed-goal workflow atop the
 already-real, already-Accepted `planning.run_plan`, `Effect.EXECUTE`/
 `Tier.CONFIRM` reused exactly, no new capability of its own; a granted,
@@ -132,8 +148,12 @@ not to duplicate the policy engine's own reasoning.
 | `git-push <repo-dir> <remote> <branch>` | `git.push` | `repo-dir`, `remote`, `branch` |
 | `git-force-push <repo-dir> <remote> <branch>` | `git.force_push` | `repo-dir`, `remote`, `branch` |
 | `plan run <goal>` | `planning.run_plan` (ADR-0062 — outer gate only; every proposed step is separately, individually authorized, never in bulk) | `goal` |
-| `project start <goal>` | `planning.run_plan` (reused unmodified, no new capability — a real, additive `memory.write` status record also lands on a granted, attempted plan) | `goal` |
+| `project start <goal>` | `planning.run_plan` (reused unmodified, no new capability — a real, additive task record also lands on a granted, attempted plan, shared storage with `task *` below) | `goal` |
 | `project status <goal>` | `memory.retrieve` (reused unmodified, no new capability) | `goal` (must exactly match a prior `project start` call's own goal string) |
+| `task create <goal>` | `memory.write` (reused unmodified, no new capability) | `goal` |
+| `task run <task-id> <goal>` | `planning.run_plan` (reused unmodified, no new capability — updates the task's own status in place via `memory.update`, WP-107) | `task-id`, `goal` (must match the id/goal from a prior `task create`) |
+| `task status <task-id>` | `memory.get` (WP-107 — a real, exact, O(1)-by-identifier lookup, not an approximate query) | `task-id` |
+| `task list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, one of `created`/`running`/`waiting_approval`/`completed`/`failed`/`cancelled`) |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `calendar list-events` | `communications.list_calendar_events` | `--start`, `--end` (both required, ISO-8601), `--caldav-url`, `--username`, `--password-reference` |

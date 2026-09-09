@@ -239,6 +239,21 @@ it.
   real for any plan needing a `Tier.CONFIRM`-or-above step, by the same
   already-accepted v1 ceiling — see `docs/OPEN_DECISIONS.md` item 15
   for the full account.
+  **Updated 2026-09-09 (WP-107)**: a real, persistent Task/TaskStore,
+  `jarvis.kernel.tasks` — `jarvis task create`/`run`/`status`/`list` —
+  built on two new real memory primitives, `memory.update` (mutate an
+  existing record in place, a dynamic-effect capability mirroring
+  `memory.write`'s own classification) and `memory.get` (a real, exact,
+  O(1) by-identifier lookup, `Tier.ALLOW`). `jarvis.kernel.project` is
+  now folded into this module by the user's own direct decision —
+  `jarvis project start`/`status` keep their own exact, unchanged
+  public contract, sharing the same underlying storage. `task create`/
+  `task run` are deliberately separate verbs so a future
+  background-execution UI layer can return a real task id before a
+  plan finishes running. See `docs/OPEN_DECISIONS.md` item 16 for the
+  full account, including the one real, stated vocabulary seam this
+  fold leaves open (`project.py`'s own `"stuck"` vs `tasks.py`'s own
+  `"failed"` for the identical real situation).
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
