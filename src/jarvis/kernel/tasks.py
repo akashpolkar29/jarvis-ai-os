@@ -8,10 +8,25 @@ verified public contract (``ProjectStartOutcome``/``ProjectStatusOutcome``,
 unchanged) -- ``project.py`` becomes a thin wrapper delegating its own
 real writes to this module's shared helpers, sharing the same
 underlying ``"kind": "task"`` storage marker rather than its own,
-separate ``"project_goal"`` one. See ``project.py``'s own module
-docstring for the one real, deliberate vocabulary seam this fold
-leaves open (project.py's own public ``state`` stays ``"stuck"``, not
-``"failed"`` -- a real, stated choice, not an oversight).
+separate ``"project_goal"`` one.
+
+**WP-109 (2026-09-09) closed the real vocabulary seam WP-107 first left
+open**: the stored, canonical status for "the planner did not complete
+successfully" is ``"failed"`` everywhere, for every real caller,
+unconditionally -- ``project.py`` no longer writes its own, separate
+``"stuck"`` literal to storage. :func:`derive_result_status` (this
+module's own, single, now-shared copy -- ``project.py``'s former,
+near-duplicate private copy was deleted) is the one real place this
+derivation happens. ``project.py``'s own public ``ProjectStartOutcome.state``
+and ``jarvis project status``'s own printed CLI text still say
+``"stuck"`` -- a real, narrow, deliberate translation at that module's
+own public boundary, preserving its already-shipped, already-tested
+contract, not a second source of truth for what's actually stored. See
+``project.py``'s own module docstring for the full account, including
+the one real, explained exception this leaves: a raw
+``ProjectStatusOutcome.record`` now faithfully shows ``"failed"``,
+since this module will not fabricate a record claiming ``"stuck"`` was
+literally persisted when it was not.
 
 **Not a new planning/execution engine**, matching ``project.py``'s own
 founding constraint exactly: ``authorize_and_run_task`` wraps the
@@ -112,13 +127,17 @@ implies for authorize_and_list_tasks. Does not apply to authorize_and_get_task,
 which looks up by exact identifier, not by this broad recall."""
 
 
-def _state_for_result(result: PlanExecutionResult) -> tuple[str, str | None]:
+def derive_result_status(result: PlanExecutionResult) -> tuple[str, str | None]:
     """Derive (status, reason) from a granted, attempted plan's own real result.
 
     A pure function, deliberately: exercised directly by a unit test
     against a hand-constructed ``PlanExecutionResult``, with no real
-    registry/orchestrator involved -- mirrors ``project.py``'s own,
-    now-removed identical helper, kept here as the one real copy.
+    registry/orchestrator involved. **The one, real, canonical copy
+    (WP-109)** -- ``project.py`` no longer keeps its own, separate,
+    near-duplicate private copy; it imports this function directly and
+    translates its canonical ``"completed"``/``"failed"`` result to its
+    own public ``"completed"``/``"stuck"`` vocabulary only at its own
+    return boundary, never by re-deriving the status a second way.
     """
     if not result.aborted:
         return "completed", None
@@ -420,7 +439,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         # given the identical confirmation inputs threaded through both
         # calls, one cannot grant while the other denies. Handled anyway,
         # the same "don't ignore a real field" reasoning project.py's own
-        # _state_for_result docstring already gives for its own
+        # derive_result_status docstring already gives for its own
         # aborted=True branch.
         reason = f"planning.run_plan denied (reasons={plan_decision.reasons!r})."
         update_task_status(
@@ -438,7 +457,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         )
         return TaskRunOutcome(decision=plan_decision, status="failed", reason=reason)
 
-    status, reason = _state_for_result(result)
+    status, reason = derive_result_status(result)
     update_task_status(
         task_id,
         goal,

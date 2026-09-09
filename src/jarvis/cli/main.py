@@ -2287,7 +2287,14 @@ def _print_project_outcome(outcome: _CommandOutcome) -> None:
         data = outcome.project_status_record.value.value
         if isinstance(data, dict):
             print(f"goal: {data.get('goal')}")
-            print(f"state: {data.get('status')}")
+            # WP-109: the real, stored status is the canonical "failed" --
+            # translated to "stuck" only here, for display, matching
+            # `jarvis project status`'s own, unchanged printed-text
+            # contract. A pre-WP-109 record already stored as "stuck"
+            # passes through unchanged (not "failed", so untouched).
+            stored_status = data.get("status")
+            displayed_status = "stuck" if stored_status == "failed" else stored_status
+            print(f"state: {displayed_status}")
             if data.get("reason") is not None:
                 print(f"reason: {data.get('reason')}")
             print(f"updated_at: {data.get('updated_at')}")

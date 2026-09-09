@@ -28,11 +28,11 @@ from jarvis.kernel.memory import authorize_and_remember
 from jarvis.kernel.tasks import (
     TASK_KIND,
     VALID_TASK_STATUSES,
-    _state_for_result,
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
     authorize_and_run_task,
+    derive_result_status,
 )
 
 if TYPE_CHECKING:
@@ -296,12 +296,12 @@ async def test_list_filters_by_status_and_ignores_ordinary_memories(tmp_path: Pa
     assert completed_only.records[0].identifier == completed.task_id
 
 
-def test_state_for_result_reports_completed_when_not_aborted() -> None:
+def test_derive_result_status_reports_completed_when_not_aborted() -> None:
     result = PlanExecutionResult(step_records=(), aborted=False)
-    assert _state_for_result(result) == ("completed", None)
+    assert derive_result_status(result) == ("completed", None)
 
 
-def test_state_for_result_reports_failed_with_reason_when_aborted() -> None:
+def test_derive_result_status_reports_failed_with_reason_when_aborted() -> None:
     """A pure, direct test of the aborted=True branch -- not reachable through the real registry.
 
     Every real ``PLAN_STEP_EXECUTORS`` entry is ``Tier.ALLOW``, which
@@ -326,7 +326,7 @@ def test_state_for_result_reports_failed_with_reason_when_aborted() -> None:
     record = PlanStepRecord(step=step, decision=denied_decision, result=None)
     result = PlanExecutionResult(step_records=(record,), aborted=True)
 
-    status, reason = _state_for_result(result)
+    status, reason = derive_result_status(result)
 
     assert status == "failed"
     assert reason is not None

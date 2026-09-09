@@ -26,12 +26,12 @@ from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import PLANNING_RUN_PLAN_CAPABILITY_ID
 from jarvis.kernel.project import (
+    _CANONICAL_TO_PROJECT_STATE,
     VALID_PROJECT_STATES,
-    _state_for_result,
     authorize_and_get_project_status,
     authorize_and_start_project,
 )
-from jarvis.kernel.tasks import write_task_record
+from jarvis.kernel.tasks import derive_result_status, write_task_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -149,8 +149,15 @@ async def test_a_granted_zero_step_plan_completes_and_is_recorded(tmp_path: Path
     }
 
 
-async def test_a_malformed_plan_raises_and_still_records_a_stuck_status(tmp_path: Path) -> None:
-    """PlanningError propagates (matching plan run), but a real stuck record lands first."""
+async def test_a_malformed_plan_raises_and_still_records_a_failed_status(tmp_path: Path) -> None:
+    """PlanningError propagates (matching plan run), but a real failed record lands first.
+
+    WP-109: the raw, stored record's own ``status`` is the real,
+    canonical ``"failed"`` -- not this module's own public ``"stuck"``
+    word, which only ``ProjectStartOutcome.state``/the CLI's own
+    printed text use (see module docstring). This proves the raw write
+    path directly, not the translated return value.
+    """
     try:
         await _start(tmp_path, "an impossible goal", "not valid json")
     except PlanningError:
@@ -164,12 +171,12 @@ async def test_a_malformed_plan_raises_and_still_records_a_stuck_status(tmp_path
     data = status.record.value.value
     assert isinstance(data, dict)
     assert data["kind"] == "task"
-    assert data["status"] == "stuck"
+    assert data["status"] == "failed"
     assert "PlanningError" in data["reason"]
     assert "not valid JSON" in data["reason"]
 
 
-async def test_a_plan_naming_an_unregistered_capability_raises_and_records_stuck(
+async def test_a_plan_naming_an_unregistered_capability_raises_and_records_failed(
     tmp_path: Path,
 ) -> None:
     """PlanningError for an unregistered capability id -- a second real trigger."""
@@ -187,7 +194,7 @@ async def test_a_plan_naming_an_unregistered_capability_raises_and_records_stuck
     assert status.record is not None
     data = status.record.value.value
     assert isinstance(data, dict)
-    assert data["status"] == "stuck"
+    assert data["status"] == "failed"
 
 
 def test_status_for_an_unknown_goal_finds_nothing(tmp_path: Path) -> None:
@@ -200,7 +207,7 @@ def test_status_returns_the_most_recent_record_for_a_repeated_goal(tmp_path: Pat
     id_port = _SequentialIdPort()
     write_task_record(
         "a repeated goal",
-        "stuck",
+        "failed",
         "first attempt failed",
         physical_confirmation_available=True,
         remote_confirmation_available=False,
@@ -243,19 +250,24 @@ def test_valid_states_are_exactly_completed_and_stuck() -> None:
     assert VALID_PROJECT_STATES == ("completed", "stuck")
 
 
-def test_state_for_result_reports_completed_when_not_aborted() -> None:
-    result = PlanExecutionResult(step_records=(), aborted=False)
-    assert _state_for_result(result) == ("completed", None)
+def test_canonical_to_project_state_maps_failed_to_stuck_and_completed_to_itself() -> None:
+    """The one, real WP-109 translation point, tested directly against its own literal mapping."""
+    assert _CANONICAL_TO_PROJECT_STATE == {"completed": "completed", "failed": "stuck"}
 
 
-def test_state_for_result_reports_stuck_with_reason_when_aborted() -> None:
-    """A pure, direct test of the aborted=True branch -- not reachable through the real registry.
+def test_an_aborted_plan_result_composes_into_the_public_stuck_state() -> None:
+    """The full, composed pipeline: tasks.derive_result_status -> project's own translation.
 
-    Every real ``PLAN_STEP_EXECUTORS`` entry is ``Tier.ALLOW``, which
-    always grants, so this constructs the dataclasses directly rather
-    than trying to force it through ``authorize_and_start_project``.
-    See ``kernel/project.py``'s own module docstring for the full
-    reasoning.
+    A pure, direct test of the ``aborted=True`` branch -- not
+    reachable through the real registry today (every real
+    ``PLAN_STEP_EXECUTORS`` entry is ``Tier.ALLOW``, which always
+    grants), so this constructs the dataclasses directly, mirroring
+    ``test_tasks_kernel.py``'s own identical-shaped test for
+    ``derive_result_status`` alone. This test's own real point is one
+    level up: proving this module's own translation step, composed
+    with tasks.py's canonical derivation, produces exactly ``"stuck"``
+    -- the real, end-to-end guarantee WP-109 exists to prove, not just
+    assert about the dictionary in isolation.
     """
     descriptor = CapabilityDescriptor(
         id=CapabilityId("some.capability"),
@@ -273,9 +285,11 @@ def test_state_for_result_reports_stuck_with_reason_when_aborted() -> None:
     record = PlanStepRecord(step=step, decision=denied_decision, result=None)
     result = PlanExecutionResult(step_records=(record,), aborted=True)
 
-    state, reason = _state_for_result(result)
+    canonical_status, reason = derive_result_status(result)
+    project_state = _CANONICAL_TO_PROJECT_STATE[canonical_status]
 
-    assert state == "stuck"
+    assert canonical_status == "failed"
+    assert project_state == "stuck"
     assert reason is not None
     assert "some.capability" in reason
     assert "NO_PHYSICAL_CONFIRMATION" in reason

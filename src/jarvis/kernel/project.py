@@ -21,23 +21,45 @@ these would be a real, user-facing breaking change to a capability
 that shipped and was live-smoke-tested against a real local model only
 days before this fold.
 
-**One real, stated vocabulary seam this fold leaves open, not hidden**:
-``tasks.py``'s own ``authorize_and_create_task``/``authorize_and_run_task``
-write ``"failed"`` for the identical real situation this module's own
-``authorize_and_start_project`` still writes ``"stuck"`` for -- both
-land in the same ``"kind": "task"`` storage, so ``jarvis task list``
-will show a mix of the two words for what is, underneath, the same
-real outcome, depending on which entry point created the task. Not
-unified here: doing so would mean changing this module's own public
-``state`` value, the exact breaking change the paragraph above rules
-out. Left as a real, visible, explained inconsistency rather than
-silently smoothed over -- a future pass may revisit ``project.py``'s
-own vocabulary directly, with the user's own sign-off, the same way
-this fold itself was.
+**WP-109 (2026-09-09) closed the real vocabulary seam named above, by
+a real, direct user decision ("resolve the stuck vs failed terminology
+inconsistency before WP-104")**: investigated first, not assumed --
+two of the three real status-producing branches
+(`PlanningError`/`PlanValidationError`, and the currently-unreachable
+`aborted=True` case) were genuine duplicates of `tasks.py`'s own
+identical logic, just spelled differently; a third
+(`tasks.authorize_and_run_task`'s own "the outer gate denied after the
+task record already existed" branch) has no equivalent here at all,
+since this module never writes anything before checking the outer
+gate -- that one was left alone, it was never a naming question.
 
-See ``jarvis.kernel.tasks``'s own module docstring for the real
-"stuck" investigation this module's docstring used to carry in full --
-preserved there now, not duplicated here.
+**The real fix**: this module no longer writes its own `"stuck"`
+literal to storage at all. It now writes the identical,
+canonical `"completed"`/`"failed"` value `tasks.py` itself writes
+(`tasks.derive_result_status`, imported directly -- this module's own,
+former, near-duplicate `_state_for_result` copy is gone), so
+`jarvis task list`/`authorize_and_list_tasks` show one real,
+consistent status for this condition regardless of which entry point
+created the task -- the real ambiguity is closed.
+
+**What stays `"stuck"`, and why, stated precisely**: this module's own
+public `ProjectStartOutcome.state` return value, and `jarvis project
+status`'s own printed CLI text, both still say `"stuck"` -- a real,
+narrow translation applied only at this module's own return/print
+boundary (`_CANONICAL_TO_PROJECT_STATE` below), preserving the exact,
+already-shipped, already-tested public contract WP-102 established,
+per the user's own explicit instruction not to change
+`jarvis project start`/`status`'s semantics unless absolutely
+necessary. The one real, explained exception this does *not* paper
+over: `ProjectStatusOutcome.record` -- the raw `MemoryRecord` this
+module's own `authorize_and_get_project_status` returns -- will now
+genuinely contain `status: "failed"` for a project-created failure,
+not `"stuck"`. Translating *that* too would mean this module
+fabricating a record claiming `"stuck"` was literally persisted when
+it was not -- a real, worse problem (an inaccurate record) than the
+one being fixed. The CLI's own printed text is translated instead,
+exactly where a human actually reads the word, not the raw data
+structure a future caller might inspect directly.
 """
 
 from __future__ import annotations
@@ -49,12 +71,11 @@ from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
 from jarvis.kernel.memory import authorize_and_recall
 from jarvis.kernel.planning import authorize_and_run_plan
-from jarvis.kernel.tasks import TASK_KIND, write_task_record
+from jarvis.kernel.tasks import TASK_KIND, derive_result_status, write_task_record
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from jarvis.application.planning.executor import PlanExecutionResult
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
     from jarvis.ports.clock import ClockPort
@@ -63,33 +84,25 @@ if TYPE_CHECKING:
     from jarvis.ports.reasoning import ReasoningPort
 
 VALID_PROJECT_STATES = ("completed", "stuck")
-"""Unchanged by the fold -- this module's own public vocabulary, distinct
-from tasks.py's own "completed"/"failed" (see module docstring)."""
+"""This module's own, unchanged public vocabulary -- WP-109 (2026-09-09)
+translates tasks.py's canonical "completed"/"failed" to this vocabulary
+only at this module's own return boundary (see _CANONICAL_TO_PROJECT_STATE);
+the stored, canonical value is tasks.py's own, not a second copy of this."""
 
-_LIST_QUERY = "project goal state reason plan status stuck completed"
-"""Unchanged by the fold."""
+_LIST_QUERY = "project goal state reason plan status failed completed"
+"""WP-109: "failed", not the former "stuck" -- matches the real, canonical
+word this module's own writes now actually embed, since a fixed query
+string scores against the real stored JSON's own real words."""
 
 _RECALL_LIST_LIMIT = 1000
 """Unchanged by the fold."""
 
-
-def _state_for_result(result: PlanExecutionResult) -> tuple[str, str | None]:
-    """Derive (state, reason) from a granted, attempted plan's own real result.
-
-    This module's own, narrower mapping -- "stuck", not tasks.py's
-    "failed" -- preserving the exact public vocabulary
-    ``authorize_and_start_project`` has always used. A pure function,
-    exercised directly by a unit test against a hand-constructed
-    ``PlanExecutionResult``, no real registry/orchestrator involved.
-    """
-    if not result.aborted:
-        return "completed", None
-    last = result.step_records[-1]
-    reason = (
-        f"Plan step {last.step.capability_id.value!r} was denied "
-        f"(reasons={last.decision.reasons!r})."
-    )
-    return "stuck", reason
+_CANONICAL_TO_PROJECT_STATE = {"completed": "completed", "failed": "stuck"}
+"""WP-109's own, one real translation point: tasks.py's canonical,
+stored status -> this module's own, unchanged public ``state`` vocabulary.
+Applied only when constructing this module's own return value -- never
+when reading a record back (see ``authorize_and_get_project_status``'s
+own docstring for why the raw, stored record is never translated)."""
 
 
 @dataclass(frozen=True)
@@ -102,7 +115,10 @@ class ProjectStartOutcome:
             is meaningful -- the planner never ran at all.
         state: ``"completed"`` or ``"stuck"`` if the outer gate was
             granted and the planner was attempted and returned
-            normally; ``None`` if the outer gate was denied.
+            normally; ``None`` if the outer gate was denied. WP-109:
+            this is this module's own, unchanged public word for what
+            is stored, canonically, as ``"failed"`` -- see module
+            docstring.
         reason: The real, human-readable reason the plan is stuck, if
             ``state == "stuck"``; ``None`` otherwise.
         record_identifier: The real task record's own identifier
@@ -141,7 +157,11 @@ async def authorize_and_start_project(  # noqa: PLR0913 -- one per composition-f
     Raises:
         jarvis.application.planning.planner.PlanningError: If the
             provider's proposed plan fails real, structural validation.
-            A real "stuck" status record is written first.
+            A real, canonical ``"failed"`` status record is written
+            first (WP-109 -- the same word ``tasks.py`` itself writes
+            for this condition; this module's own public ``"stuck"``
+            vocabulary is a translation applied only to this
+            function's own return value, never to what's stored).
         jarvis.application.planning.executor.PlanValidationError: As
             above.
     """
@@ -156,7 +176,7 @@ async def authorize_and_start_project(  # noqa: PLR0913 -- one per composition-f
     except (PlanningError, PlanValidationError) as exc:
         write_task_record(
             goal,
-            "stuck",
+            "failed",
             f"{type(exc).__name__}: {exc}",
             physical_confirmation_available=physical_confirmation_available,
             remote_confirmation_available=remote_confirmation_available,
@@ -173,10 +193,11 @@ async def authorize_and_start_project(  # noqa: PLR0913 -- one per composition-f
             decision=decision, state=None, reason=None, record_identifier=None
         )
 
-    state, reason = _state_for_result(result)
+    canonical_status, reason = derive_result_status(result)
+    state = _CANONICAL_TO_PROJECT_STATE[canonical_status]
     _write_decision, record_identifier = write_task_record(
         goal,
-        state,
+        canonical_status,
         reason,
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
@@ -225,6 +246,14 @@ def authorize_and_get_project_status(  # noqa: PLR0913 -- one per composition-fu
     see module docstring for the real, honest broad-recall-then-filter
     approximation this shares with ``job_application.list``/
     ``tasks.authorize_and_list_tasks``, unchanged by the fold.
+
+    **WP-109: the returned record is the real, raw, stored
+    ``MemoryRecord``, never translated.** A failed plan's own
+    ``record.value.value["status"]`` is the real, canonical
+    ``"failed"`` -- not this module's own public ``"stuck"`` word. Only
+    the CLI's own printed text (``cli/main.py``) translates it for
+    display; this function will not fabricate a record claiming a
+    different value was stored than what actually was.
     """
     recall_outcome = authorize_and_recall(
         _LIST_QUERY,

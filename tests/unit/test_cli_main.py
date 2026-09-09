@@ -2318,6 +2318,7 @@ def test_project_start_subcommand_denied_with_no_confirmation_flags(tmp_path: Pa
 def test_project_status_subcommand_prints_a_found_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A pre-WP-109, legacy-stored "stuck" record still displays correctly -- pass-through."""
     received: list[str] = []
 
     def fake_authorize_and_get_project_status(
@@ -2370,6 +2371,59 @@ def test_project_status_subcommand_prints_a_found_record(
     assert "state: stuck" in captured.out
     assert "reason: Plan validation failed." in captured.out
     assert "updated_at: 2026-09-08T00:00:00+00:00" in captured.out
+
+
+def test_project_status_subcommand_translates_canonical_failed_to_stuck_for_display(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-109: a real, canonically-stored "failed" record still prints "state: stuck"."""
+
+    def fake_authorize_and_get_project_status(
+        goal: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> object:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        record = MemoryRecord(
+            identifier="mem:4",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "continue the LiDAR project",
+                    "status": "failed",
+                    "reason": "PlanningError: not valid JSON",
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return ProjectStatusOutcome(decision=decision, record=record)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_get_project_status",
+        fake_authorize_and_get_project_status,
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "status",
+            "continue the LiDAR project",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "state: stuck" in captured.out
+    assert "state: failed" not in captured.out
 
 
 def test_project_status_subcommand_reports_nothing_found(
