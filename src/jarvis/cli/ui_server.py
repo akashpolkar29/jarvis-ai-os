@@ -235,15 +235,16 @@ def build_response_payload(outcome: RouteOutcome) -> dict[str, object]:
         A JSON-serializable dict with `type` (`"not_routed"` |
         `"unwired_capability"` | `"denied"` | `"task_created"` |
         `"response"`), a human-readable `message`, and the same real
-        `route_kind`/`capability_id`/`task_id`/`granted` fields
-        regardless of `type`, so a client never has to guess which
-        fields exist for which type.
+        `route_kind`/`capability_id`/`task_id`/`task_status`/`granted`
+        fields regardless of `type`, so a client never has to guess
+        which fields exist for which type.
     """
     route = outcome.route
     payload: dict[str, object] = {
         "route_kind": route.kind.value,
         "capability_id": route.capability_id.value if route.capability_id is not None else None,
         "task_id": outcome.task_id,
+        "task_status": None,
         "granted": outcome.decision.granted if outcome.decision is not None else None,
     }
 
@@ -274,6 +275,11 @@ def build_response_payload(outcome: RouteOutcome) -> dict[str, object]:
     if route.kind == RouteKind.COMPLEX_GOAL:
         payload["type"] = "task_created"
         payload["message"] = f"Created a task for: {route.goal}"
+        # A real, always-true fact, not invented: authorize_and_create_task (WP-107)
+        # always writes a brand-new task's status as "created" -- never anything
+        # else -- so this is safe to state directly, with no extra real I/O (a
+        # follow-up authorize_and_get_task call) needed to confirm it.
+        payload["task_status"] = "created"
         return payload
 
     payload["type"] = "response"

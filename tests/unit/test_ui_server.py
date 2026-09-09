@@ -277,6 +277,37 @@ def test_post_command_reports_a_handled_kernel_error_cleanly(
     assert "out of scope" in str(data["message"])
 
 
+def test_post_command_full_round_trip_for_a_task_created_response(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """A real HTTP round trip through a granted COMPLEX_GOAL route reports task_created."""
+    base_url, _server = running_server
+    route = RouteResult(
+        kind=RouteKind.COMPLEX_GOAL,
+        original_input="find good internships",
+        confidence=0.5,
+        source="reasoning",
+        goal="find good internships",
+    )
+    outcome = RouteOutcome(
+        route=route,
+        decision=_make_decision(granted=True),
+        execution_result=None,
+        task_id="mem:123",
+    )
+
+    async def fake_authorize_and_route(*_args: object, **_kwargs: object) -> RouteOutcome:
+        return outcome
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_route", fake_authorize_and_route):
+        status, data = _post(base_url, json.dumps({"text": "find good internships"}).encode())
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "task_created"
+    assert data["task_id"] == "mem:123"
+    assert data["task_status"] == "created"
+
+
 # ---------------------------------------------------------------------------
 # build_response_payload -- pure, hand-constructed RouteOutcome tests
 # ---------------------------------------------------------------------------
@@ -336,7 +367,23 @@ def test_build_response_payload_for_a_granted_task_creation() -> None:
 
     assert payload["type"] == "task_created"
     assert payload["task_id"] == "mem:123"
+    assert payload["task_status"] == "created"
     assert "find good internships" in str(payload["message"])
+
+
+def test_build_response_payload_task_status_is_none_for_non_task_routes() -> None:
+    route = RouteResult(
+        kind=RouteKind.UNKNOWN,
+        original_input="asdf",
+        confidence=0.0,
+        source="deterministic",
+        detail="No known deterministic command matched this request.",
+    )
+    outcome = RouteOutcome(route=route, decision=None, execution_result=None, task_id=None)
+
+    payload = build_response_payload(outcome)
+
+    assert payload["task_status"] is None
 
 
 def test_build_response_payload_for_a_recognized_but_unwired_capability() -> None:
