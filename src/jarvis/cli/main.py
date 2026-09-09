@@ -241,6 +241,13 @@ from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_com
 from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.project import authorize_and_get_project_status, authorize_and_start_project
+from jarvis.kernel.tasks import (
+    VALID_TASK_STATUSES,
+    authorize_and_create_task,
+    authorize_and_get_task,
+    authorize_and_list_tasks,
+    authorize_and_run_task,
+)
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
@@ -671,6 +678,52 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     _add_common_flags(status_parser)
 
 
+def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add task create/run/status/list -- the real, general Task/TaskStore (WP-107), nested.
+
+    Mirrors ``project``'s own nested-subcommand shape. Deliberately
+    two separate verbs, ``create`` and ``run``, rather than one
+    combined command -- see ``kernel/tasks.py``'s own module docstring
+    for why a later background-execution layer needs a real task id
+    returned before a plan finishes running, which a single,
+    monolithic command cannot support. ``jarvis project start``
+    remains the one-shot convenience command for callers that don't
+    need the split.
+    """
+    task_parser = subparsers.add_parser("task", help="Persistent task commands.")
+    task_subparsers = task_parser.add_subparsers(dest="task_command", required=True)
+
+    create_parser = task_subparsers.add_parser(
+        "create", help="Create a new real task, status 'created'. Does not run any plan."
+    )
+    create_parser.add_argument("goal", help="The real, natural-language task goal.")
+    _add_common_flags(create_parser)
+
+    run_parser = task_subparsers.add_parser(
+        "run", help="Run planning.run_plan for an already-created task."
+    )
+    run_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    run_parser.add_argument("goal", help="The same real goal that task was created for.")
+    _add_common_flags(run_parser)
+
+    status_parser = task_subparsers.add_parser(
+        "status", help="Look up one real task by its own identifier."
+    )
+    status_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    _add_common_flags(status_parser)
+
+    list_parser = task_subparsers.add_parser(
+        "list", help="List real tasks, optionally filtered by status."
+    )
+    list_parser.add_argument(
+        "--status",
+        default=None,
+        choices=VALID_TASK_STATUSES,
+        help="Only show tasks with this exact status.",
+    )
+    _add_common_flags(list_parser)
+
+
 def _add_browser_handle_flags(parser: argparse.ArgumentParser) -> None:
     """Add the four real PageHandle fields as required flags.
 
@@ -1043,6 +1096,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_desktop_parsers(subparsers)
     _add_planning_parsers(subparsers)
     _add_project_parsers(subparsers)
+    _add_task_parsers(subparsers)
     _add_browser_parsers(subparsers)
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
@@ -1620,6 +1674,78 @@ def _run_project_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     )
 
 
+def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch ``task create``/``run``/``status``/``list``, returning a full _CommandOutcome.
+
+    Split out from :func:`_dispatch_command` for the identical reason
+    :func:`_run_project_subcommand` is. ``authorize_and_run_task`` is
+    ``async``, so ``run`` wraps its own call in ``asyncio.run``;
+    ``authorize_and_create_task``/``authorize_and_get_task``/
+    ``authorize_and_list_tasks`` are sync, no wrapping needed. Omits
+    ``provider`` entirely on ``run``, the same real, deliberate scope
+    limit ``_add_task_parsers``'s own docstring already states. A real
+    ``PlanningError``/``PlanValidationError`` from ``run`` is not
+    caught here -- it propagates to ``main()``'s own existing broad
+    except tuple, exactly like ``plan run``/``project start`` already
+    do; ``authorize_and_run_task`` has already durably updated the
+    task's own status before it re-raises.
+    """
+    if args.task_command == "create":
+        create_outcome = authorize_and_create_task(
+            args.goal,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            create_outcome.decision,
+            "task create",
+            task_id=create_outcome.task_id,
+        )
+
+    if args.task_command == "run":
+        run_outcome = asyncio.run(
+            authorize_and_run_task(
+                args.task_id,
+                args.goal,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        return _CommandOutcome(
+            run_outcome.decision,
+            "task run",
+            task_status=run_outcome.status,
+            task_reason=run_outcome.reason,
+        )
+
+    if args.task_command == "status":
+        get_outcome = authorize_and_get_task(
+            args.task_id,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            get_outcome.decision,
+            "task status",
+            task_record=get_outcome.record,
+        )
+
+    list_outcome = authorize_and_list_tasks(
+        status=args.status,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    return _CommandOutcome(
+        list_outcome.decision,
+        "task list",
+        task_records=list_outcome.records,
+    )
+
+
 def _handle_from_args(args: argparse.Namespace) -> PageHandle:
     """Reconstruct a real PageHandle from a prior 'browser open' call's own printed fields."""
     return PageHandle(
@@ -2003,6 +2129,11 @@ class _CommandOutcome:
     project_reason: str | None = None
     project_record_identifier: str | None = None
     project_status_record: MemoryRecord | None = None
+    task_id: str | None = None
+    task_status: str | None = None
+    task_reason: str | None = None
+    task_record: MemoryRecord | None = None
+    task_records: tuple[MemoryRecord, ...] | None = None
 
 
 def _run_basic_subcommand(
@@ -2084,6 +2215,8 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
         )
     if args.command == "project":
         return _run_project_subcommand(args)
+    if args.command == "task":
+        return _run_task_subcommand(args)
     if args.command == "email":
         decision, email_summaries, email_message = _run_email_subcommand(args)
         return _CommandOutcome(
@@ -2154,14 +2287,46 @@ def _print_project_outcome(outcome: _CommandOutcome) -> None:
         data = outcome.project_status_record.value.value
         if isinstance(data, dict):
             print(f"goal: {data.get('goal')}")
-            print(f"state: {data.get('state')}")
+            print(f"state: {data.get('status')}")
             if data.get("reason") is not None:
                 print(f"reason: {data.get('reason')}")
-            print(f"recorded_at: {data.get('recorded_at')}")
+            print(f"updated_at: {data.get('updated_at')}")
         else:
             print(f"{outcome.project_status_record.identifier}: {data!r}")
     elif outcome.command_label == "project status":
         print("No project-goal record found for this goal.")
+
+
+def _print_one_task_record(record: MemoryRecord) -> None:
+    """Print one real task record's own fields -- shared by `task status` and `task list`."""
+    data = record.value.value
+    if not isinstance(data, dict):
+        print(f"{record.identifier}: {data!r}")
+        return
+    print(f"{record.identifier}: goal={data.get('goal')!r} status={data.get('status')}")
+    if data.get("reason") is not None:
+        print(f"    reason: {data.get('reason')}")
+
+
+def _print_task_outcome(outcome: _CommandOutcome) -> None:
+    """Print a task create/run/status/list subcommand's own real payload.
+
+    Split out from :func:`_print_outcome` for the identical reason
+    `_print_project_outcome` already is.
+    """
+    if outcome.task_id is not None:
+        print(f"task_id: {outcome.task_id}")
+    if outcome.task_status is not None:
+        print(f"status: {outcome.task_status}")
+        if outcome.task_reason is not None:
+            print(f"reason: {outcome.task_reason}")
+    if outcome.task_record is not None:
+        _print_one_task_record(outcome.task_record)
+    elif outcome.command_label == "task status":
+        print("No task found for this identifier.")
+    if outcome.task_records is not None:
+        for record in outcome.task_records:
+            _print_one_task_record(record)
 
 
 def _print_job_application_table(records: tuple[MemoryRecord, ...]) -> None:
@@ -2251,6 +2416,7 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
     _print_browser_outcome(outcome)
     _print_fs_search_outcome(outcome)
     _print_project_outcome(outcome)
+    _print_task_outcome(outcome)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:

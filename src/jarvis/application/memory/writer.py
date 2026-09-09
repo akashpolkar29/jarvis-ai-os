@@ -26,6 +26,11 @@ if TYPE_CHECKING:
     from jarvis.domain.provenance import Tainted
 
 MEMORY_WRITE_CAPABILITY_ID = CapabilityId("memory.write")
+MEMORY_UPDATE_CAPABILITY_ID = CapabilityId("memory.update")
+"""A distinct id from memory.write (WP-107), not folded into it: the audit
+chain should be able to tell "a new record was created" apart from "an
+existing one was mutated in place" when read back later, the same
+reason pin/forget each got their own id rather than reusing write's."""
 
 
 class MemoryWriteAuthorizer:
@@ -74,4 +79,42 @@ class MemoryWriteAuthorizer:
             description="Write a value to memory.",
         )
         invocation = CapabilityInvocation(descriptor, value.map(lambda content: {"value": content}))
+        return self._orchestrator.authorize(invocation, context)
+
+    def authorize_update[T](
+        self, identifier: str, value: Tainted[T], context: PolicyContext
+    ) -> Decision:
+        """Authorize updating the record at ``identifier`` to ``value`` (WP-107).
+
+        Mirrors :meth:`authorize_write` exactly -- the correct
+        ``Effect`` is resolved from the *new* value's own real
+        classification, the identical reasoning ADR-0049 already
+        applies to a fresh write: updating an existing record to
+        SECRET content is exactly as real a risk as creating one with
+        SECRET content in the first place, and must floor identically.
+
+        Args:
+            identifier: The real, existing record's identifier being
+                updated -- carried in the invocation only for the
+                audit trail; it is not itself classifiable content.
+            value: The new value a caller wants to store at
+                ``identifier``, with its own real provenance.
+            context: Facts about the environment this decision is made
+                in.
+
+        Returns:
+            The real ``Decision`` -- already durably appended to the
+            injected ``AuditChain``. The real update to
+            ``MemoryWritePort`` itself is the caller's own
+            responsibility, only if ``granted``.
+        """
+        effect = memory_effect_for(value.provenance.classification)
+        descriptor = CapabilityDescriptor(
+            id=MEMORY_UPDATE_CAPABILITY_ID,
+            effects=effect,
+            description="Update an existing memory record's value.",
+        )
+        invocation = CapabilityInvocation(
+            descriptor, value.map(lambda content: {"identifier": identifier, "value": content})
+        )
         return self._orchestrator.authorize(invocation, context)

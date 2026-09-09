@@ -18,10 +18,12 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.kernel.memory import (
     authorize_and_backup_memory,
     authorize_and_forget,
+    authorize_and_get,
     authorize_and_pin,
     authorize_and_recall,
     authorize_and_remember,
     authorize_and_restore_memory,
+    authorize_and_update,
     authorize_and_wipe_memory,
 )
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
@@ -171,6 +173,137 @@ def test_recall_is_always_granted_regardless_of_confirmation(tmp_path: Path) -> 
 
     assert recall.decision.granted is True
     assert recall.records == ()
+
+
+def test_granted_update_replaces_the_value_in_place(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        "status: created",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    update_decision = authorize_and_update(
+        write_outcome.identifier,
+        "status: completed",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert update_decision.granted is True
+
+    get_outcome = authorize_and_get(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert get_outcome.record is not None
+    assert get_outcome.record.identifier == write_outcome.identifier
+    assert get_outcome.record.value.value == "status: completed"
+
+
+def test_denied_update_never_reaches_the_store(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        "status: created",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    update_decision = authorize_and_update(
+        write_outcome.identifier,
+        "status: completed",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert update_decision.granted is False
+
+    get_outcome = authorize_and_get(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value == "status: created"
+
+
+def test_granted_update_of_an_unknown_identifier_raises(tmp_path: Path) -> None:
+    with pytest.raises(MemoryRecordNotFoundError):
+        authorize_and_update(
+            "no-such-identifier",
+            "anything",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+        )
+
+
+def test_get_of_an_unknown_identifier_returns_none(tmp_path: Path) -> None:
+    get_outcome = authorize_and_get(
+        "no-such-identifier",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert get_outcome.decision.granted is True
+    assert get_outcome.record is None
+
+
+def test_get_is_always_granted_regardless_of_confirmation(tmp_path: Path) -> None:
+    get_outcome = authorize_and_get(
+        "anything",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert get_outcome.decision.granted is True
 
 
 def test_a_granted_write_sweeps_a_previously_expired_record_from_real_storage(

@@ -27,11 +27,11 @@ from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import PLANNING_RUN_PLAN_CAPABILITY_ID
 from jarvis.kernel.project import (
     VALID_PROJECT_STATES,
-    _record_project_goal_state,
     _state_for_result,
     authorize_and_get_project_status,
     authorize_and_start_project,
 )
+from jarvis.kernel.tasks import write_task_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -140,11 +140,12 @@ async def test_a_granted_zero_step_plan_completes_and_is_recorded(tmp_path: Path
     assert status.record is not None
     data = status.record.value.value
     assert data == {
-        "kind": "project_goal",
+        "kind": "task",
         "goal": "a goal with nothing to do",
-        "state": "completed",
+        "status": "completed",
         "reason": None,
-        "recorded_at": _NOW.isoformat(),
+        "created_at": _NOW.isoformat(),
+        "updated_at": _NOW.isoformat(),
     }
 
 
@@ -162,8 +163,8 @@ async def test_a_malformed_plan_raises_and_still_records_a_stuck_status(tmp_path
     assert status.record is not None
     data = status.record.value.value
     assert isinstance(data, dict)
-    assert data["kind"] == "project_goal"
-    assert data["state"] == "stuck"
+    assert data["kind"] == "task"
+    assert data["status"] == "stuck"
     assert "PlanningError" in data["reason"]
     assert "not valid JSON" in data["reason"]
 
@@ -186,7 +187,7 @@ async def test_a_plan_naming_an_unregistered_capability_raises_and_records_stuck
     assert status.record is not None
     data = status.record.value.value
     assert isinstance(data, dict)
-    assert data["state"] == "stuck"
+    assert data["status"] == "stuck"
 
 
 def test_status_for_an_unknown_goal_finds_nothing(tmp_path: Path) -> None:
@@ -197,7 +198,7 @@ def test_status_for_an_unknown_goal_finds_nothing(tmp_path: Path) -> None:
 
 def test_status_returns_the_most_recent_record_for_a_repeated_goal(tmp_path: Path) -> None:
     id_port = _SequentialIdPort()
-    _record_project_goal_state(
+    write_task_record(
         "a repeated goal",
         "stuck",
         "first attempt failed",
@@ -209,7 +210,7 @@ def test_status_returns_the_most_recent_record_for_a_repeated_goal(tmp_path: Pat
         clock=_FakeClock(datetime(2026, 9, 8, 10, tzinfo=UTC)),
         id_port=id_port,
     )
-    _record_project_goal_state(
+    write_task_record(
         "a repeated goal",
         "completed",
         None,
@@ -226,7 +227,7 @@ def test_status_returns_the_most_recent_record_for_a_repeated_goal(tmp_path: Pat
     assert status.record is not None
     data = status.record.value.value
     assert isinstance(data, dict)
-    assert data["state"] == "completed"
+    assert data["status"] == "completed"
 
 
 async def test_start_reuses_planning_run_plan_effect_and_tier_exactly(tmp_path: Path) -> None:

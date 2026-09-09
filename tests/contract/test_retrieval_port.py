@@ -29,6 +29,9 @@ class _FakeRetrievalAdapter:
     def retrieve(self, query: str, *, limit: int) -> tuple[MemoryRecord, ...]:  # noqa: ARG002
         return ()
 
+    def get_by_identifier(self, identifier: str) -> MemoryRecord | None:  # noqa: ARG002
+        return None
+
 
 class _FakeEmbeddingPort:
     def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:

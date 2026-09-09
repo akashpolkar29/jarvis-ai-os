@@ -193,6 +193,52 @@ class SqliteMemoryAdapter:
         self._connection.commit()
         return identifier
 
+    def update_value(self, identifier: str, value: Tainted[object]) -> None:
+        """Replace the value at ``identifier`` in place, re-deriving text/embedding (WP-107).
+
+        Mirrors :meth:`pin`'s own "UPDATE ... WHERE identifier = ?,
+        check rowcount" shape exactly, but updates the value columns
+        (``text``/``value_json``/``embedding``/``trust``/
+        ``classification``/``sources``) rather than ``expires_at`` --
+        ``written_at``/``expires_at`` themselves are left untouched,
+        matching this method's own real contract (an update, not a
+        fresh write with a new retention window).
+
+        Raises:
+            UnsupportedMemoryValueError: If ``value.value`` is not
+                JSON-serializable (see module docstring).
+            MemoryRecordNotFoundError: If ``identifier`` matches no
+                real, currently-stored record.
+        """
+        try:
+            value_json = json.dumps(value.value)
+        except TypeError as exc:
+            msg = (
+                "SqliteMemoryAdapter only persists JSON-serializable memories "
+                "(str, int, float, bool, None, list, dict); "
+                f"got {type(value.value).__name__}."
+            )
+            raise UnsupportedMemoryValueError(msg) from exc
+        text = value.value if isinstance(value.value, str) else value_json
+        (embedding,) = self._embedding_port.embed((text,))
+        cursor = self._connection.execute(
+            "UPDATE memory_records SET text = ?, value_json = ?, embedding = ?, trust = ?, "
+            "classification = ?, sources = ? WHERE identifier = ?",
+            (
+                text,
+                value_json,
+                json.dumps(embedding),
+                int(value.provenance.trust),
+                int(value.provenance.classification),
+                json.dumps(sorted(value.provenance.sources)),
+                identifier,
+            ),
+        )
+        self._connection.commit()
+        if cursor.rowcount == 0:
+            msg = f"No memory record found with identifier {identifier!r}."
+            raise MemoryRecordNotFoundError(msg)
+
     def pin(self, identifier: str) -> None:
         """Set the record at ``identifier``'s ``expires_at`` to ``NULL`` (never expires).
 
@@ -317,6 +363,31 @@ class SqliteMemoryAdapter:
             ),
         )
         return tuple(ranked[:limit])
+
+    def get_by_identifier(self, identifier: str) -> MemoryRecord | None:
+        """Return the one real record at ``identifier``, or ``None`` if not found (WP-107).
+
+        A direct ``SELECT ... WHERE identifier = ?`` -- no ranking, no
+        embedding call, no full-table scan, the real, O(1)-by-key
+        counterpart to :meth:`retrieve`'s similarity search. Applies
+        the same two real guarantees :meth:`retrieve` applies, via the
+        same adapter-independent functions.
+
+        Raises:
+            MemoryIntegrityViolationError: If the record at
+                ``identifier`` is ``Classification.SECRET``.
+        """
+        row = self._connection.execute(
+            "SELECT identifier, text, value_json, embedding, trust, classification, sources, "
+            "written_at, expires_at FROM memory_records WHERE identifier = ?",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        record, _embedding = self._row_to_record_and_embedding(row)
+        (record,) = exclude_secret_records((record,))
+        records = exclude_expired_records((record,), self._clock.now())
+        return records[0] if records else None
 
     @staticmethod
     def _row_to_record_and_embedding(

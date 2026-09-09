@@ -81,6 +81,7 @@ from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.kernel.project import ProjectStartOutcome, ProjectStatusOutcome
+from jarvis.kernel.tasks import TaskCreateOutcome, TaskGetOutcome, TaskListOutcome, TaskRunOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -2332,11 +2333,12 @@ def test_project_status_subcommand_prints_a_found_record(
             identifier="mem:3",
             value=Tainted(
                 {
-                    "kind": "project_goal",
+                    "kind": "task",
                     "goal": goal,
-                    "state": "stuck",
+                    "status": "stuck",
                     "reason": "Plan validation failed.",
-                    "recorded_at": "2026-09-08T00:00:00+00:00",
+                    "created_at": "2026-09-08T00:00:00+00:00",
+                    "updated_at": "2026-09-08T00:00:00+00:00",
                 },
                 Provenance.user(),
             ),
@@ -2367,7 +2369,7 @@ def test_project_status_subcommand_prints_a_found_record(
     assert "goal: continue the LiDAR project" in captured.out
     assert "state: stuck" in captured.out
     assert "reason: Plan validation failed." in captured.out
-    assert "recorded_at: 2026-09-08T00:00:00+00:00" in captured.out
+    assert "updated_at: 2026-09-08T00:00:00+00:00" in captured.out
 
 
 def test_project_status_subcommand_reports_nothing_found(
@@ -2417,6 +2419,234 @@ def test_project_start_subcommand_requires_goal() -> None:
 def test_project_status_subcommand_requires_goal() -> None:
     with pytest.raises(SystemExit):
         main(["project", "status"])
+
+
+def test_task_create_subcommand_reports_a_real_task_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_create_task(
+        goal: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskCreateOutcome:
+        received.append(goal)
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return TaskCreateOutcome(decision=decision, task_id="task:1")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_task",
+        fake_authorize_and_create_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "create",
+            "continue the LiDAR project",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["continue the LiDAR project"]
+    assert exit_code == 0
+    assert "task create: GRANTED" in captured.out
+    assert "task_id: task:1" in captured.out
+
+
+def test_task_run_subcommand_reports_status_and_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[str, str]] = []
+
+    async def fake_authorize_and_run_task(  # noqa: PLR0913 -- mirrors the real signature
+        task_id: str,
+        goal: str,
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRunOutcome:
+        received.append((task_id, goal))
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        return TaskRunOutcome(decision=decision, status="failed", reason="a real, stated reason")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_task", fake_authorize_and_run_task
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "run",
+            "task:1",
+            "continue the LiDAR project",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [("task:1", "continue the LiDAR project")]
+    assert exit_code == 0
+    assert "status: failed" in captured.out
+    assert "reason: a real, stated reason" in captured.out
+
+
+def test_task_status_subcommand_prints_a_found_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_get_task(
+        task_id: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        received.append(task_id)
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier=task_id,
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "continue the LiDAR project",
+                    "status": "completed",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:05:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["task:1"]
+    assert exit_code == 0
+    assert "task:1: goal='continue the LiDAR project' status=completed" in captured.out
+
+
+def test_task_status_subcommand_reports_nothing_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskGetOutcome(decision=decision, record=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "no-such-id", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No task found for this identifier." in captured.out
+
+
+def test_task_list_subcommand_prints_each_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str | None] = []
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        received.append(status)
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "completed",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskListOutcome(decision=decision, records=(record,))
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "list",
+            "--status",
+            "completed",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["completed"]
+    assert exit_code == 0
+    assert "task:1: goal='a goal' status=completed" in captured.out
+
+
+def test_task_subcommand_requires_a_real_task_command() -> None:
+    with pytest.raises(SystemExit):
+        main(["task"])
+
+
+def test_task_create_subcommand_requires_goal() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "create"])
+
+
+def test_task_run_subcommand_requires_task_id_and_goal() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "run"])
+    with pytest.raises(SystemExit):
+        main(["task", "run", "task:1"])
+
+
+def test_task_status_subcommand_requires_task_id() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "status"])
 
 
 _EMAIL_COMMON_FLAGS = [
@@ -4666,9 +4896,10 @@ _JOB_APPLICATION_SUBCOMMANDS = ("record", "list")
 _BROWSER_SUBCOMMANDS = ("open", "screenshot", "inspect-dom", "close")
 _FS_SUBCOMMANDS = ("find", "search-content", "recent")
 _PROJECT_SUBCOMMANDS = ("start", "status")
+_TASK_SUBCOMMANDS = ("create", "run", "status", "list")
 
 
-def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
+def test_no_help_text_leaks_an_internal_adr_or_wp_reference(  # noqa: PLR0915
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Real regression guard (Phase 8, CLI UX audit): --help is for real users, not reviewers.
@@ -4755,6 +4986,13 @@ def test_no_help_text_leaks_an_internal_adr_or_wp_reference(
         assert "WP-" not in captured.out, (
             f"project {subcommand} --help leaks a work-package reference"
         )
+
+    for subcommand in _TASK_SUBCOMMANDS:
+        with pytest.raises(SystemExit):
+            main(["task", subcommand, "--help"])
+        captured = capsys.readouterr()
+        assert "ADR-" not in captured.out, f"task {subcommand} --help leaks an ADR reference"
+        assert "WP-" not in captured.out, f"task {subcommand} --help leaks a work-package reference"
 
 
 def test_doctor_subcommand_always_returns_zero_and_prints_real_checks(

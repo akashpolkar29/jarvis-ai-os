@@ -97,6 +97,39 @@ class MemoryWritePort(Protocol):
         """
         ...
 
+    def update_value(self, identifier: str, value: Tainted[object]) -> None:
+        """Replace the value at ``identifier`` in place -- an update, not a new record (WP-107).
+
+        The one real gap ``write()``/``pin()``/``forget()`` left open:
+        every existing write path only ever inserts a new row (a fresh
+        identifier) or acts on an identifier's own metadata
+        (``expires_at``, deletion) -- nothing could mutate a record's
+        own stored *value* without discarding its identity. A real
+        ``Task``'s own status needs exactly this: the same task id,
+        repeatedly updated in place, not a new record per status
+        transition. ``identifier`` itself, ``written_at``, and
+        ``expires_at`` are all left untouched -- only the value (and
+        its own re-derived text/embedding) changes.
+
+        No authorization happens inside this method, matching
+        :meth:`write`'s own identical contract -- a composition root
+        resolves the real ``Effect``/``Decision`` before ever calling
+        this.
+
+        Args:
+            identifier: The real, existing record's identifier to update.
+            value: The real, new value to persist at that identifier,
+                with its own real provenance -- never re-using the
+                original record's stale provenance automatically; a
+                caller updating a task's status supplies a fresh,
+                correctly-classified value each time.
+
+        Raises:
+            MemoryRecordNotFoundError: If ``identifier`` does not
+                match a real, currently-stored record.
+        """
+        ...
+
     def forget(self, identifier: str) -> None:
         """Permanently delete the record at ``identifier`` from the real store.
 

@@ -29,6 +29,9 @@ class _FakeMemoryWriteAdapter:
     def write(self, value: Tainted[object]) -> str:  # noqa: ARG002
         return "mem:1"
 
+    def update_value(self, identifier: str, value: Tainted[object]) -> None:
+        pass
+
     def pin(self, identifier: str) -> None:
         pass
 

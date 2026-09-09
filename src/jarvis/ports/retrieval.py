@@ -62,3 +62,37 @@ class RetrievalPort(Protocol):
                 record was found and excluded during this query.
         """
         ...
+
+    def get_by_identifier(self, identifier: str) -> MemoryRecord | None:
+        """Return the one real record at ``identifier``, or ``None`` if no such record exists.
+
+        The real, direct, O(1)-by-key counterpart to :meth:`retrieve`'s
+        similarity search (WP-107) -- for a caller that already knows
+        exactly which record it wants (a ``Task``'s own id), a broad
+        semantic query-then-filter is the wrong tool: it is only ever
+        an approximation (a store large enough can rank the wanted
+        record below the query's own ``limit``, a real, already-named
+        limitation ``job_application.list``/``project.py`` both
+        inherited). This method has no such limitation -- a lookup by
+        the real, unique primary key either finds the record or it
+        does not.
+
+        Applies the same two real, required retrieval-time guarantees
+        :meth:`retrieve` applies, for the identical reasons: a
+        ``Classification.SECRET`` record is never returned (ADR-0050's
+        own amendment), and an expired, unpinned record is treated as
+        not found, not returned stale (ADR-0051).
+
+        Args:
+            identifier: The real identifier to look up.
+
+        Returns:
+            The matching ``MemoryRecord``, or ``None`` if no record
+            exists at ``identifier``, or if it exists but is expired
+            and unpinned.
+
+        Raises:
+            MemoryIntegrityViolationError: If the record at
+                ``identifier`` is ``Classification.SECRET``.
+        """
+        ...

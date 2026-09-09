@@ -33,6 +33,7 @@ from jarvis.kernel.capabilities import (
     LIST_DIR_CAPABILITY_ID,
     MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
+    MEMORY_GET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
@@ -51,7 +52,7 @@ from jarvis.kernel.capabilities import (
     build_default_registry,
 )
 
-_EXPECTED_CAPABILITY_COUNT = 44
+_EXPECTED_CAPABILITY_COUNT = 45
 
 
 def test_build_default_registry_does_not_raise() -> None:
@@ -99,6 +100,7 @@ def test_build_default_registry_registers_exactly_the_expected_ids() -> None:
         GIT_PUSH_CAPABILITY_ID,
         GIT_FORCE_PUSH_CAPABILITY_ID,
         MEMORY_RETRIEVE_CAPABILITY_ID,
+        MEMORY_GET_CAPABILITY_ID,
         MEMORY_PIN_CAPABILITY_ID,
         MEMORY_FORGET_CAPABILITY_ID,
         MEMORY_BACKUP_CAPABILITY_ID,
@@ -308,6 +310,20 @@ def test_memory_retrieve_has_read_local_effects() -> None:
     registry = build_default_registry()
 
     descriptor = registry.get(MEMORY_RETRIEVE_CAPABILITY_ID)
+    assert descriptor.effects == Effect.READ_LOCAL
+    assert descriptor.required_tier == Tier.ALLOW
+
+
+def test_memory_get_has_read_local_effects() -> None:
+    """memory.get (WP-107) is registered with Effect.READ_LOCAL -- always Tier.ALLOW.
+
+    The bare act of a by-identifier lookup carries no classifiable
+    content of its own, the identical reasoning memory.retrieve's own
+    registration already rests on.
+    """
+    registry = build_default_registry()
+
+    descriptor = registry.get(MEMORY_GET_CAPABILITY_ID)
     assert descriptor.effects == Effect.READ_LOCAL
     assert descriptor.required_tier == Tier.ALLOW
 

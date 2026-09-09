@@ -69,6 +69,11 @@ GIT_COMMIT_CAPABILITY_ID = CapabilityId("git.commit")
 GIT_PUSH_CAPABILITY_ID = CapabilityId("git.push")
 GIT_FORCE_PUSH_CAPABILITY_ID = CapabilityId("git.force_push")
 MEMORY_RETRIEVE_CAPABILITY_ID = CapabilityId("memory.retrieve")
+MEMORY_GET_CAPABILITY_ID = CapabilityId("memory.get")
+"""A direct, by-identifier lookup (WP-107) -- the real act of reading
+one already-known record carries no classifiable content of its own,
+the same reasoning memory.retrieve's own static registration already
+rests on, so this is likewise ALLOW, not a dynamic-effect capability."""
 MEMORY_PIN_CAPABILITY_ID = CapabilityId("memory.pin")
 MEMORY_FORGET_CAPABILITY_ID = CapabilityId("memory.forget")
 MEMORY_BACKUP_CAPABILITY_ID = CapabilityId("memory.backup")
@@ -364,6 +369,13 @@ def build_default_registry() -> CapabilityRegistry:
             id=MEMORY_RETRIEVE_CAPABILITY_ID,
             effects=Effect.READ_LOCAL,
             description="Search previously-memorized content. The bare act of querying only.",
+        )
+    )
+    registry.register(
+        CapabilityDescriptor(
+            id=MEMORY_GET_CAPABILITY_ID,
+            effects=Effect.READ_LOCAL,
+            description="Look up one previously-memorized record by its own real identifier.",
         )
     )
     registry.register(

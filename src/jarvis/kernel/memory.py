@@ -82,6 +82,7 @@ from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import (
     MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
+    MEMORY_GET_CAPABILITY_ID,
     MEMORY_PIN_CAPABILITY_ID,
     MEMORY_RESTORE_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
@@ -224,6 +225,178 @@ def authorize_and_remember(  # noqa: PLR0913 -- one per composition-function pas
         storage.save(chain)
 
     return MemoryWriteOutcome(decision=decision, identifier=identifier)
+
+
+def authorize_and_update(  # noqa: PLR0913 -- one per composition-function pass-through
+    identifier: str,
+    value: object,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> Decision:
+    """Wire up the stack, authorize updating ``identifier`` to ``value``, update only if granted.
+
+    ``memory.update`` (WP-107) is a dynamic-effect capability,
+    deliberately not registered in ``build_default_registry()`` --
+    the identical reason ``memory.write`` is not: the correct
+    ``Effect`` depends on ``value``'s own real classification
+    (ADR-0049), which no static ``CapabilityDescriptor`` can express.
+    Routes through :class:`~jarvis.application.memory.writer.MemoryWriteAuthorizer.authorize_update`
+    rather than ``authorize_by_id()``, mirroring
+    :func:`authorize_and_remember`'s own identical shape.
+
+    Args:
+        identifier: The real, existing record's identifier to update.
+        value: The real, new value to store at ``identifier`` --
+            wrapped as ``Tainted(value, Provenance.user())``, the same
+            convention :func:`authorize_and_remember` already uses. A
+            caller updating a task's own status supplies a fresh value
+            each call; the prior value's own provenance is never
+            reused automatically.
+        physical_confirmation_available: Whether a human is physically
+            present.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Overridable
+            for tests.
+        embedding_port: Overridable for tests -- important to
+            override: a granted update with no override triggers a
+            real model download on first use, the same as a write.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by an
+            update -- ``identifier`` is already known, threaded through
+            only so ``_memory_adapter`` stays one shared helper.
+
+    Returns:
+        The real ``Decision`` for this update call, already durably
+        appended to the chain at ``chain_path`` by the time this
+        returns.
+
+    Raises:
+        jarvis.ports.memory_write.MemoryRecordNotFoundError: If
+            ``identifier`` does not match a real, currently-stored
+            record and the update was granted. Never raised for a
+            denied update -- the store is never touched.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+    tainted_value: Tainted[object] = Tainted(value, Provenance.user())
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, build_default_registry(), confirmation=confirmation, clock=resolved_clock
+    )
+    authorizer = MemoryWriteAuthorizer(orchestrator)
+
+    decision = authorizer.authorize_update(
+        identifier, tainted_value, orchestrator.get_current_context()
+    )
+
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            adapter.update_value(identifier, tainted_value)
+    finally:
+        storage.save(chain)
+
+    return decision
+
+
+@dataclass(frozen=True)
+class MemoryGetOutcome:
+    """The result of one authorize_and_get() call.
+
+    Attributes:
+        decision: The Decision for the bare act of looking up by
+            identifier -- always granted (``memory.get`` is
+            ``Tier.ALLOW``), still durably appended to the chain.
+        record: The matching record, if granted and found. ``None`` if
+            denied (never happens today), or if no record exists at
+            ``identifier``, or if it exists but is expired and unpinned.
+    """
+
+    decision: Decision
+    record: MemoryRecord | None
+
+
+def authorize_and_get(  # noqa: PLR0913 -- one per composition-function pass-through
+    identifier: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> MemoryGetOutcome:
+    """Wire up the stack, authorize the bare act of a by-id lookup, and fetch if granted.
+
+    ``memory.get`` (WP-107) is a static, fixed-effect capability, the
+    same shape as ``memory.retrieve`` -- reading one already-known
+    record by its own identifier carries no classifiable content of
+    its own. See ``ports/retrieval.py::RetrievalPort.get_by_identifier``'s
+    own docstring for why this exists alongside ``retrieve()`` rather
+    than being expressed as a one-result query: a query is always an
+    approximation; a lookup by primary key is exact.
+
+    Args:
+        identifier: The real identifier to look up.
+        physical_confirmation_available: As above -- threaded through
+            for consistency, though ``memory.get``'s ``ALLOW`` tier
+            means it does not affect the outcome.
+        remote_confirmation_available: As above.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Overridable
+            for tests.
+        embedding_port: Overridable for tests.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter`` -- unused by a
+            read, threaded through only so ``_memory_adapter`` stays
+            one shared helper.
+
+    Returns:
+        A ``MemoryGetOutcome`` -- see its own docstring.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+
+    registry = build_default_registry()
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, registry, confirmation=confirmation, clock=resolved_clock
+    )
+
+    decision = orchestrator.authorize_by_id(
+        MEMORY_GET_CAPABILITY_ID,
+        Tainted({"identifier": identifier}, Provenance.user()),
+        orchestrator.get_current_context(),
+    )
+
+    record: MemoryRecord | None = None
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            record = adapter.get_by_identifier(identifier)
+    finally:
+        storage.save(chain)
+
+    return MemoryGetOutcome(decision=decision, record=record)
 
 
 @dataclass(frozen=True)

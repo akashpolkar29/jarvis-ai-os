@@ -84,6 +84,7 @@ _EXPECTED_TIER_BY_CAPABILITY: dict[str, Tier] = {
     "job_search.open_results": Tier.CONFIRM,
     "memory.backup": Tier.CONFIRM,
     "memory.forget": Tier.MANUAL_ONLY,
+    "memory.get": Tier.ALLOW,
     "memory.pin": Tier.CONFIRM,
     "memory.restore": Tier.MANUAL_ONLY,
     "memory.retrieve": Tier.ALLOW,
