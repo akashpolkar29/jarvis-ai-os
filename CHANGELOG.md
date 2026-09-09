@@ -15,6 +15,15 @@ replacement for either.
 
 ## [Unreleased]
 
+### Added
+
+- `jarvis ui` (WP-108) -- a real, minimal, local-only (`127.0.0.1`)
+  web chat interface, a client of the existing `jarvis do` router
+  (WP-104) never a second execution system. Single-threaded by
+  deliberate design to avoid a new, concurrent-request version of the
+  audit chain's already-documented cross-process race. See
+  `docs/architecture/wp108-ui-foundation.md`.
+
 ### Fixed
 
 - `pyproject.toml`'s `version` field, stale at `0.6.0` since four real

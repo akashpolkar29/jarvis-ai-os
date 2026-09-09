@@ -27,8 +27,20 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
+**Updated 2026-09-09 (WP-108, a real, minimal local web UI) — this
+table now covers 58 real subcommands, adding `ui` (`jarvis.cli.ui_server`
+— no capability of its own, mirroring `listen`/`doctor`'s own existing
+"not itself authorized" shape; serves a real, `127.0.0.1`-only HTTP
+server, foreground, until interrupted). Every real request the server
+handles reaches `POST /api/command`, which calls the exact same,
+unmodified `authorize_and_route` (WP-104) the CLI's own `do` already
+uses — the UI is a client of the existing router, never a second
+routing/execution path. See `docs/architecture/wp108-ui-foundation.md`
+for the full design, including why this server is deliberately
+single-threaded and why `jarvis.ipc` was investigated and not used.
+
 **Updated 2026-09-09 (WP-104, a typed freeform command router) — this
-table now covers 57 real subcommands, adding `do "<text>"`
+table previously covered 57 real subcommands, adding `do "<text>"`
 (`jarvis.kernel.router` — no new capability of its own; a typed,
 natural-language request is first matched deterministically against
 `kernel/intent.py`'s own existing `resolve_intent()` grammar, unchanged
@@ -186,6 +198,7 @@ not to duplicate the policy engine's own reasoning.
 | `fs recent` | `fs.recent` | `--limit` (default 20) |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
+| `ui` | (serves the UI foundation continuously; no single capability of its own -- every real `POST /api/command` request reaches `authorize_and_route`, the same as `do`) | `--port` (default 8765), `--physical-confirmation-available`/`--remote-confirmation-available` (applied uniformly to every request for the server's lifetime, not per-request) |
 
 **Two real, deliberate naming inconsistencies, not yet resolved** (see
 `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md` for

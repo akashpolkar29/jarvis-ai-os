@@ -43,8 +43,11 @@ and a real typed freeform command router (`jarvis do "<text>"`, item
 18, 2026-09-09, WP-104), routing deterministically via
 `kernel/intent.py`'s own existing grammar first, falling back to
 reasoning only when that fails, never executing a capability outside
-the existing, small, pre-wired execution boundary. All items 1-4 and
-6-18 below are resolved, decided, or built; only item 5 (one of the
+the existing, small, pre-wired execution boundary; and a real, minimal
+local web UI foundation (`jarvis ui`, item 19, 2026-09-09, WP-108), a
+client of that same router, never a second execution system, always
+local-only and single-threaded by deliberate design. All items 1-4 and
+6-19 below are resolved, decided, or built; only item 5 (one of the
 audit chain's four real structural gaps -- the cross-process race)
 remains genuinely open.
 
@@ -676,6 +679,77 @@ reasoning call at all.
 canonical typed freeform entry point named in the prompt, no
 aliases added. See `docs/protocol/README.md`'s own updated subcommand
 table.
+
+## 19. ~~UI foundation + local application boundary (`jarvis ui`)~~ -- RESOLVED/BUILT 2026-09-09
+
+**Resolved/built, WP-108, a real, direct user decision**. A real,
+minimal local web UI foundation -- a client of the existing
+application layer, never a second execution system. Every real
+`POST /api/command` request reaches `kernel.router.authorize_and_route`
+(WP-104) completely unmodified.
+
+**A real, investigated documentation finding, not silently routed
+around**: `jarvis.ipc`'s own docstring claims it "may depend on
+... `jarvis.kernel`," the natural-sounding home for a UI-to-kernel
+boundary. Checking the real, enforced C1 layered-architecture contract
+(`pyproject.toml`) found the opposite is true: layers are ordered
+`cli, kernel, ipc, adapters, application, ports, domain, ui`, and
+import-linter's own `layers` contract only permits an earlier layer to
+import a later one -- `kernel` sits *before* `ipc`, so `ipc`
+structurally cannot import it. `git log -- src/jarvis/ipc/` confirms
+the package has never had any real content beyond that one stale,
+aspirational docstring. Not fixed here (a real, separate decision --
+widen C1, or correct the docstring); the server lives in `jarvis.cli`
+instead, which already may import `kernel` and is already the
+established home for a continuous, foreground process (`_run_listen`'s
+own `Gtk4PhysicalConfirmationAdapter`/serve-until-interrupted
+precedent).
+
+**Single-threaded by deliberate design**: `http.server.HTTPServer`, not
+`ThreadingHTTPServer`. Every real `authorize_and_*` composition
+function (including `authorize_and_route`) does its own `chain_path`
+load-append-save per call -- safe for the CLI's "one process, one
+request" shape, but concurrent HTTP requests inside one long-running
+server process racing to load-append-save the same file would
+reproduce the already-documented, still-open cross-process race (item
+5), now reachable from a single local process. Serializing all request
+handling removes that new exposure entirely -- an acceptable trade for
+a genuinely single-user, local chat interface.
+
+**Local-only, by construction**: always binds `127.0.0.1`; no
+`--host`/bind-address flag exists anywhere, on purpose, proven by a
+real test.
+
+**Authorization, unchanged**: a `DETERMINISTIC_COMMAND` route only
+actually executes if wired in `PLAN_STEP_EXECUTORS`; a real,
+registered-but-unwired capability (e.g. `git.force_push`) is reported
+back as `"unwired_capability"`, never invoked. A `COMPLEX_GOAL` route
+creates, never runs, a task via `authorize_and_create_task`.
+`UiServerConfig.physical_confirmation_available`/
+`remote_confirmation_available` apply uniformly to every request for
+the server's whole lifetime, set once at launch, defaulting `False`
+like every other subcommand -- a real, deliberate choice not to treat
+"the request came from localhost" as an implicit confirmation signal,
+which would have been a real, silent reinterpretation of ADR-0013's
+own physical-presence guarantee.
+
+**Conversation/Task/Memory kept genuinely separate**: no conversation
+history is persisted server-side anywhere; the browser's own JS keeps
+the visible message list in memory only. No UI message is ever
+auto-written to memory; no history lives in `TaskStore`.
+
+**Voice**: the mic button is a real, disabled placeholder only -- no
+microphone/wake-word/voice code of any kind was added or touched.
+
+New files: `src/jarvis/cli/ui_server.py`, `src/jarvis/cli/ui_static/index.html`.
+New CLI entry point: `jarvis ui [--port] [--chain-path] [--database-path]
+[--physical-confirmation-available] [--remote-confirmation-available]`.
+No new `CapabilityId`/`Effect`/`Tier`, no ADR. 100% branch coverage on
+`ui_server.py`; 27 new server tests (including two real, unmocked
+integration tests proving the HTTP boundary genuinely uses the real
+router) plus 5 new CLI-wiring tests. See
+`docs/architecture/wp108-ui-foundation.md` for the full design and
+`docs/protocol/README.md`'s own updated subcommand table.
 
 ## Maintaining this index
 

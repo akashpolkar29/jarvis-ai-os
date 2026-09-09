@@ -59,6 +59,13 @@ them (a real `Gtk4PhysicalConfirmationAdapter` backs `jarvis listen`
 specifically; every other subcommand's flags are still a direct,
 unverified CLI argument).
 
+Or type a request instead of learning subcommands: `jarvis do "recall
+my notes"` routes a typed, natural-language request deterministically
+first, falling back to reasoning only when needed (WP-104). `jarvis
+ui` serves the same router behind a minimal, local-only (`127.0.0.1`)
+web chat interface (WP-108) — see
+`docs/architecture/wp108-ui-foundation.md`.
+
 ## Job-application workflow
 
 Search, draft, and track job applications end to end. **Actual

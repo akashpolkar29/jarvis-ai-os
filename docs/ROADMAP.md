@@ -276,6 +276,22 @@ it.
   `authorize_and_create_task`. No new capability, no new `CapabilityId`
   — every real action still passes through the existing authorization
   choke point unmodified. See `docs/OPEN_DECISIONS.md` item 18.
+  **Updated 2026-09-09 (WP-108)**: a real, minimal local web UI
+  foundation, `jarvis ui` (`jarvis.cli.ui_server`) — a client of the
+  existing application layer, never a second execution system. Every
+  real `POST /api/command` request reaches the exact same, unmodified
+  `authorize_and_route` the CLI's own `do` already uses. Investigated
+  and deliberately did not use `jarvis.ipc` (its own docstring claims
+  it may depend on `kernel`, but the real, enforced C1 contract orders
+  `kernel` before `ipc`, making that structurally impossible — a real,
+  stale-docs finding, flagged, not fixed here); lives in `jarvis.cli`
+  instead, mirroring `listen`'s own established "continuous foreground
+  process" precedent. Deliberately single-threaded
+  (`http.server.HTTPServer`) to avoid a new, concurrent-request version
+  of the audit chain's already-documented cross-process race (item 5).
+  Always binds `127.0.0.1` only, no `--host` flag exists. See
+  `docs/architecture/wp108-ui-foundation.md` and
+  `docs/OPEN_DECISIONS.md` item 19.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
