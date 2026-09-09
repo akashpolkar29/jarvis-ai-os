@@ -95,6 +95,7 @@ from jarvis.ports.secret import SecretNotFoundError
 from jarvis.ports.vscode import EditorLaunchFailedError
 
 if TYPE_CHECKING:
+    from jarvis.cli.ui_server import UiServerConfig
     from jarvis.ports.physical_confirmation import PhysicalConfirmationPort
 
 
@@ -589,6 +590,109 @@ def test_listen_verbose_emits_the_wake_word_score_diagnostic_line(
         main(["listen", "--verbose", "--chain-path", str(tmp_path / "audit_chain.json")])
 
     assert "score=0.7965" in caplog.text
+
+
+class _FakeBoundServer:
+    """A minimal stand-in for a real JarvisUiServer -- only `server_address` is ever read."""
+
+    def __init__(self, port: int) -> None:
+        self.server_address = ("127.0.0.1", port)
+
+
+_TEST_UI_PORT = 9999
+_REBOUND_UI_PORT = 54321
+_EXPECTED_DEFAULT_UI_PORT = 8765  # mirrors jarvis.cli.main's own _DEFAULT_UI_PORT
+
+
+def test_ui_starts_a_real_server_with_the_given_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`jarvis ui` builds a real UiServerConfig from its own flags and serves it."""
+    received: list[tuple[int, UiServerConfig]] = []
+
+    def fake_create_server(port: int, config: UiServerConfig) -> object:
+        received.append((port, config))
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    chain_path = tmp_path / "audit_chain.json"
+    exit_code = main(
+        [
+            "ui",
+            "--port",
+            str(_TEST_UI_PORT),
+            "--chain-path",
+            str(chain_path),
+            "--physical-confirmation-available",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(received) == 1
+    port, config = received[0]
+    assert port == _TEST_UI_PORT
+    assert config.chain_path == chain_path
+    assert config.physical_confirmation_available is True
+    assert config.remote_confirmation_available is False
+
+
+def test_ui_default_port_is_8765(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    received: list[int] = []
+
+    def fake_create_server(port: int, _config: object) -> object:
+        received.append(port)
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(["ui", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert received == [_EXPECTED_DEFAULT_UI_PORT]
+
+
+def test_ui_stops_cleanly_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_create_server(port: int, _config: object) -> object:
+        return _FakeBoundServer(port)
+
+    def fake_run_ui_server(_server: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", fake_run_ui_server)
+
+    exit_code = main(["ui", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Stopped" in captured.out
+
+
+def test_ui_prints_the_real_bound_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The printed URL reflects the real, bound port -- not blindly the requested one."""
+
+    def fake_create_server(_port: int, _config: object) -> object:
+        return _FakeBoundServer(_REBOUND_UI_PORT)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(["ui", "--port", "0", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert f"http://127.0.0.1:{_REBOUND_UI_PORT}" in captured.out
+
+
+def test_ui_has_no_host_flag() -> None:
+    """No --host/bind-address flag exists at all, on purpose -- see ui_server's own docstring."""
+    with pytest.raises(SystemExit):
+        main(["ui", "--host", "0.0.0.0"])
 
 
 def _make_memory_record(identifier: str = "mem:1", text: str = "prefers tabs") -> MemoryRecord:

@@ -173,6 +173,7 @@ from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind, RouteResult
+from jarvis.cli.ui_server import UiServerConfig, create_server, run_ui_server
 from jarvis.domain.browser import PageHandle
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.audit import authorize_and_view_audit_history
@@ -275,6 +276,7 @@ if TYPE_CHECKING:
     from jarvis.domain.provenance import Tainted
 
 _DEFAULT_CHAIN_PATH = Path("audit_chain.json")
+_DEFAULT_UI_PORT = 8765
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -1149,6 +1151,48 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
         ),
     )
 
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help=(
+            "Serve the JARVIS UI foundation (WP-108) on 127.0.0.1, until interrupted. "
+            "No --host flag exists, on purpose -- see jarvis.cli.ui_server's own module "
+            "docstring."
+        ),
+    )
+    ui_parser.add_argument(
+        "--port",
+        type=int,
+        default=_DEFAULT_UI_PORT,
+        help=f"Which localhost port to serve on (default: {_DEFAULT_UI_PORT}).",
+    )
+    ui_parser.add_argument(
+        "--chain-path",
+        type=Path,
+        default=_DEFAULT_CHAIN_PATH,
+        help=f"Where the audit chain is persisted (default: {_DEFAULT_CHAIN_PATH}).",
+    )
+    ui_parser.add_argument(
+        "--database-path",
+        type=Path,
+        default=None,
+        help="Where the real memory store lives (default: the same as every other subcommand's).",
+    )
+    ui_parser.add_argument(
+        "--physical-confirmation-available",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Applied to every request this server handles for as long as it runs "
+            "(default: false) -- not per-request. See UiServerConfig's own docstring."
+        ),
+    )
+    ui_parser.add_argument(
+        "--remote-confirmation-available",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="As --physical-confirmation-available, applied uniformly for the server's lifetime.",
+    )
+
     return parser
 
 
@@ -1276,6 +1320,34 @@ def _run_listen(chain_path: Path, *, verbose: bool) -> int:
                 physical_confirmation=Gtk4PhysicalConfirmationAdapter(),
             )
         )
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    return 0
+
+
+def _run_ui(args: argparse.Namespace) -> int:
+    """Serve the JARVIS UI foundation (WP-108) in the foreground until interrupted.
+
+    Mirrors :func:`_run_listen`'s own "continuous, foreground process,
+    Ctrl+C to stop" shape exactly, including no ``--physical-``/
+    ``--remote-confirmation-available`` per-call reinterpretation --
+    unlike ``listen``, this command *does* take those two flags, since
+    ``jarvis.cli.ui_server.UiServerConfig`` applies them uniformly to
+    every request for the server's own lifetime (see that module's own
+    docstring for why this is a real, deliberate choice, not an
+    oversight).
+    """
+    config = UiServerConfig(
+        chain_path=args.chain_path,
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        database_path=args.database_path,
+    )
+    server = create_server(args.port, config)
+    bound_port = server.server_address[1]
+    print(f"Serving JARVIS UI at http://127.0.0.1:{bound_port} -- press Ctrl+C to stop.")
+    try:
+        run_ui_server(server)
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0
@@ -2605,6 +2677,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_listen(args.chain_path, verbose=args.verbose)
     if args.command == "doctor":
         return _run_doctor()
+    if args.command == "ui":
+        return _run_ui(args)
 
     try:
         outcome = _dispatch_command(args)

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --border: #262c36;
+    --text: #e6e9ef;
+    --text-dim: #8b93a1;
+    --accent: #4fa8ff;
+    --user-bubble: #1f2833;
+    --jarvis-bubble: #12283a;
+    --error-bubble: #3a1414;
+    --error-text: #ff8a8a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  #conversation {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .message {
+    max-width: 70%;
+    padding: 10px 14px;
+    border-radius: 10px;
+    line-height: 1.45;
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .message.user {
+    align-self: flex-end;
+    background: var(--user-bubble);
+    border: 1px solid var(--border);
+  }
+  .message.jarvis {
+    align-self: flex-start;
+    background: var(--jarvis-bubble);
+    border: 1px solid #1c3a52;
+  }
+  .message.error {
+    align-self: flex-start;
+    background: var(--error-bubble);
+    color: var(--error-text);
+    border: 1px solid #5a2323;
+  }
+  .message .meta {
+    display: block;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .message.error .meta { color: var(--error-text); opacity: 0.8; }
+  #input-row {
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #text-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 14px;
+    outline: none;
+  }
+  #text-input:focus { border-color: var(--accent); }
+  button {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 0 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #send-button {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #051018;
+    font-weight: 600;
+  }
+  #send-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  #mic-button {
+    color: var(--text-dim);
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  #status-line {
+    padding: 0 20px 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    min-height: 14px;
+  }
+</style>
+</head>
+<body>
+<header>JARVIS</header>
+<div id="conversation"></div>
+<div id="status-line"></div>
+<div id="input-row">
+  <input id="text-input" type="text" placeholder="Type a request..." autocomplete="off" />
+  <button id="mic-button" type="button" title="Voice input coming soon" disabled>&#127908;</button>
+  <button id="send-button" type="button">Send</button>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var conversation = document.getElementById("conversation");
+  var statusLine = document.getElementById("status-line");
+  var textInput = document.getElementById("text-input");
+  var sendButton = document.getElementById("send-button");
+
+  function addMessage(role, text, metaText) {
+    var el = document.createElement("div");
+    el.className = "message " + role;
+    var textNode = document.createTextNode(text);
+    el.appendChild(textNode);
+    if (metaText) {
+      var meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = metaText;
+      el.appendChild(meta);
+    }
+    conversation.appendChild(el);
+    conversation.scrollTop = conversation.scrollHeight;
+  }
+
+  function metaFor(data) {
+    var parts = [];
+    if (data.route_kind) { parts.push("route: " + data.route_kind); }
+    if (data.capability_id) { parts.push("capability: " + data.capability_id); }
+    if (data.task_id) { parts.push("task_id: " + data.task_id); }
+    if (typeof data.granted === "boolean") { parts.push(data.granted ? "granted" : "denied"); }
+    return parts.join(" · ");
+  }
+
+  function send() {
+    var text = textInput.value.trim();
+    if (!text) { return; }
+    addMessage("user", text, null);
+    textInput.value = "";
+    sendButton.disabled = true;
+    statusLine.textContent = "Thinking...";
+
+    fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text })
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        var data = result.data;
+        var role = data.type === "error" ? "error" : "jarvis";
+        addMessage(role, data.message || "(no response)", metaFor(data));
+      })
+      .catch(function () {
+        addMessage("error", "Could not reach the JARVIS backend. Is it still running?", null);
+      })
+      .finally(function () {
+        sendButton.disabled = false;
+        statusLine.textContent = "";
+        textInput.focus();
+      });
+  }
+
+  sendButton.addEventListener("click", send);
+  textInput.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") { send(); }
+  });
+
+  addMessage("jarvis", "JARVIS UI foundation (WP-108). Type a request below.", null);
+  textInput.focus();
+})();
+</script>
+</body>
+</html>
