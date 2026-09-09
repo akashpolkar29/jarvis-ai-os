@@ -27,8 +27,25 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
+**Updated 2026-09-09 (WP-104, a typed freeform command router) — this
+table now covers 57 real subcommands, adding `do "<text>"`
+(`jarvis.kernel.router` — no new capability of its own; a typed,
+natural-language request is first matched deterministically against
+`kernel/intent.py`'s own existing `resolve_intent()` grammar, unchanged
+and unduplicated, and only falls back to a real `ReasoningPort`
+provider when that match fails). `do` never executes a capability
+directly as a structural property, not just a policy one: a
+recognized, resolvable command is only ever actually run if its
+capability id is one of the (currently four) entries already wired in
+`kernel/capability_dispatch.py`'s own `PLAN_STEP_EXECUTORS` table — a
+real, registered capability the reasoning fallback names but that has
+no wired executor (e.g. `git.force_push`) is reported back, never
+invoked. A request classified as a real, complex goal instead creates
+(never runs) a new task via WP-107's own `authorize_and_create_task`.
+See `docs/OPEN_DECISIONS.md` item 18 for the full account.
+
 **Updated 2026-09-09 (WP-107, a real, persistent Task/TaskStore) — this
-table now covers 56 real subcommands, adding `task create`/`task
+table previously covered 56 real subcommands, adding `task create`/`task
 run`/`task status`/`task list` (`jarvis.kernel.tasks` -- the real,
 general Task system `jarvis project start`/`status` are now folded
 into, by a real, direct user decision; `project start`/`project
@@ -154,6 +171,7 @@ not to duplicate the policy engine's own reasoning.
 | `task run <task-id> <goal>` | `planning.run_plan` (reused unmodified, no new capability — updates the task's own status in place via `memory.update`, WP-107) | `task-id`, `goal` (must match the id/goal from a prior `task create`) |
 | `task status <task-id>` | `memory.get` (WP-107 — a real, exact, O(1)-by-identifier lookup, not an approximate query) | `task-id` |
 | `task list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, one of `created`/`running`/`waiting_approval`/`completed`/`failed`/`cancelled`) |
+| `do "<text>"` | Deterministic: whichever real capability `resolve_intent()` resolves to and is wired in `PLAN_STEP_EXECUTORS` (currently `fs.read_file`/`fs.list_dir`/`git.status`/`memory.retrieve`, all `Tier.ALLOW`). Complex-goal: `memory.write` (via `authorize_and_create_task`, same as `task create`). A recognized-but-unwired or ambiguous/unknown request authorizes nothing at all (WP-104) | `text` |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `calendar list-events` | `communications.list_calendar_events` | `--start`, `--end` (both required, ISO-8601), `--caldav-url`, `--username`, `--password-reference` |

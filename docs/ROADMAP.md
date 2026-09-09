@@ -258,6 +258,24 @@ it.
   `project.py`'s own public `state` value and `jarvis project
   status`'s own printed text still say `"stuck"`, translated only at
   that module's own boundary. See `docs/OPEN_DECISIONS.md` item 17.
+  **Updated 2026-09-09 (WP-104)**: a real typed freeform command
+  router, `jarvis do "<text>"` (`jarvis.kernel.router`). Deterministic
+  routing reuses `kernel/intent.py`'s own existing `resolve_intent()`
+  directly, behind a small, bounded filler-word normalizer — no
+  duplicated grammar. A reasoning fallback
+  (`jarvis.application.routing.router`) only runs when that fails,
+  mirrors `application/planning/planner.py`'s own structured-output-
+  validation shape, and never lets a model-supplied confidence value
+  influence execution (the schema sent to the model has no such field
+  at all). The router never executes a capability directly, as a
+  structural property: a `DETERMINISTIC_COMMAND` route only actually
+  runs if its capability id is one of the four entries already wired
+  in `PLAN_STEP_EXECUTORS`; a real, registered-but-unwired capability
+  (e.g. `git.force_push`) is reported, never invoked. A `COMPLEX_GOAL`
+  route creates, never runs, a new task via WP-107's own
+  `authorize_and_create_task`. No new capability, no new `CapabilityId`
+  — every real action still passes through the existing authorization
+  choke point unmodified. See `docs/OPEN_DECISIONS.md` item 18.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

@@ -38,10 +38,15 @@ Task/TaskStore (`jarvis task create/run/status/list`, item 16,
 2026-09-09), which `project.py` is now folded into, sharing storage,
 keeping its own exact public contract unchanged; and the
 `"stuck"`/`"failed"` task-status terminology unification (item 17,
-2026-09-09), closing the one real vocabulary seam item 16 left open.
-All items 1-4 and 6-17 below are resolved, decided, or built; only
-item 5 (one of the audit chain's four real structural gaps -- the
-cross-process race) remains genuinely open.
+2026-09-09), closing the one real vocabulary seam item 16 left open;
+and a real typed freeform command router (`jarvis do "<text>"`, item
+18, 2026-09-09, WP-104), routing deterministically via
+`kernel/intent.py`'s own existing grammar first, falling back to
+reasoning only when that fails, never executing a capability outside
+the existing, small, pre-wired execution boundary. All items 1-4 and
+6-18 below are resolved, decided, or built; only item 5 (one of the
+audit chain's four real structural gaps -- the cross-process race)
+remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -616,6 +621,61 @@ reading the identical, same underlying stored record printed
 existing user-facing text for `project status` is unchanged. No new
 ADR -- a pure internal-representation/presentation fix, no new
 capability, no authorization-semantics change.
+
+## 18. ~~Typed freeform command router (`jarvis do "<text>"`)~~ -- RESOLVED/BUILT 2026-09-09
+
+**Resolved/built, WP-104, a real, direct user decision**. A router,
+not an autonomous agent, per the prompt's own explicit instruction --
+it identifies what a typed request is and where it should go; it
+never solves a goal itself.
+
+**Stage A (deterministic)** reuses `kernel/intent.py`'s own,
+already-existing `resolve_intent()` directly, unmodified -- the
+prompt's own explicit instruction not to duplicate command
+definitions when an existing source of truth can be safely reused. A
+small, bounded normalizer strips a fixed set of filler words ("please"/
+"can you"/trailing "?") before calling it; no new command grammar was
+invented.
+
+**Stage B (reasoning fallback)**, `application/routing/router.py`,
+mirrors `application/planning/planner.py`'s own `generate_plan` shape
+exactly: a strict JSON schema out, validated structurally, a named
+capability id checked against the real, live `CapabilityRegistry`
+before it can be trusted. **Confidence is never model-supplied, as a
+structural property, not a policy one**: the schema sent to the model
+has no `confidence` field at all, so there is nothing for a model to
+inflate to force execution -- `RouteResult.confidence` is a fixed,
+real, informational-only constant assigned in code.
+
+**The router never executes a capability directly, at any stage, as a
+structural property**: `kernel/router.py`'s `authorize_and_route` only
+ever executes a `DETERMINISTIC_COMMAND` route whose capability id is
+already one of the (currently four) entries in the existing,
+already-wired `PLAN_STEP_EXECUTORS` table, or creates (never runs) a
+new task for a `COMPLEX_GOAL` route via WP-107's own
+`authorize_and_create_task`. A real, registered capability the
+reasoning fallback names but that has no wired executor (e.g.
+`git.force_push`) is reported back, never executed -- proven directly
+by a real test. No new `CapabilityId` was invented; every real action
+this router can ever cause still passes through the existing
+authorization choke point unmodified.
+
+**A real, deliberate design correction made during implementation,
+not a silent omission**: `resolve_intent()` can report
+`AmbiguousJobSearchSite` (a job-search command recognized, but missing
+its site clause) as well as genuine `UnrecognizedIntent`. The first
+draft escalated both to Stage B uniformly -- caught live, while writing
+this work package's own tests, as a real quality regression: Stage A
+already has a more precise answer (which exact clause is missing) than
+a reasoning call could supply with less information. Fixed so only a
+genuine `UnrecognizedIntent` escalates; an `AmbiguousJobSearchSite`
+returns its own specific clarifying detail directly, spending no
+reasoning call at all.
+
+**New CLI entry point**: `jarvis do "<text>"` -- the one, single,
+canonical typed freeform entry point named in the prompt, no
+aliases added. See `docs/protocol/README.md`'s own updated subcommand
+table.
 
 ## Maintaining this index
 
