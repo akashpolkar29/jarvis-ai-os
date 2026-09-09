@@ -172,6 +172,7 @@ from jarvis.adapters.secret import SecretServiceAdapter
 from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
+from jarvis.application.routing.router import RouteKind, RouteResult
 from jarvis.domain.browser import PageHandle
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.audit import authorize_and_view_audit_history
@@ -241,6 +242,7 @@ from jarvis.kernel.music import MUSIC_COMMAND_NAMES, authorize_and_run_music_com
 from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.project import authorize_and_get_project_status, authorize_and_start_project
+from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
     VALID_TASK_STATUSES,
     authorize_and_create_task,
@@ -724,6 +726,25 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_common_flags(list_parser)
 
 
+def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `do` -- WP-104's one, canonical typed freeform command router entry point.
+
+    A single, flat, top-level subcommand (mirroring
+    `ping`/`read`/`play`'s own granularity), not a nested group --
+    there is exactly one real verb here. Deliberately the only name
+    added (the prompt's own "do not add multiple aliases just for
+    convenience" instruction): `do` reads as "go act on this," which
+    matches what a granted route actually causes (executing a
+    deterministic command, or creating a task) better than `ask`,
+    which reads as a question-answering interface this is not.
+    """
+    do_parser = subparsers.add_parser(
+        "do", help="Route a typed, natural-language request (WP-104)."
+    )
+    do_parser.add_argument("text", help="The real, typed natural-language request.")
+    _add_common_flags(do_parser)
+
+
 def _add_browser_handle_flags(parser: argparse.ArgumentParser) -> None:
     """Add the four real PageHandle fields as required flags.
 
@@ -1097,6 +1118,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_planning_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_task_parsers(subparsers)
+    _add_do_parsers(subparsers)
     _add_browser_parsers(subparsers)
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
@@ -1746,6 +1768,42 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     )
 
 
+def _run_do_subcommand(args: argparse.Namespace) -> _CommandOutcome:
+    """Dispatch `do "<text>"` -- WP-104's typed freeform command router.
+
+    Split out from :func:`_dispatch_command` for the identical reason
+    :func:`_run_task_subcommand` is. `authorize_and_route` is `async`,
+    so this wraps its own call in `asyncio.run`, the same shape
+    `plan run`/`project start`/`task run` already use. Omits
+    `provider` entirely, the same real, deliberate scope limit those
+    three already establish -- `authorize_and_route`'s own real,
+    local-only reasoning-fallback default resolves automatically, with
+    the same real, honest reliability warning `kernel/planning.py`'s
+    own identical default logs.
+
+    `outcome.decision` is `None` whenever `authorize_and_route` itself
+    never attempted any downstream authorization (`RouteKind.UNKNOWN`,
+    or a real, recognized capability with no wired executor) -- see
+    `_CommandOutcome.decision`'s own widened type and `main()`'s own
+    handling of that case.
+    """
+    route_outcome = asyncio.run(
+        authorize_and_route(
+            args.text,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+    )
+    return _CommandOutcome(
+        route_outcome.decision,
+        "do",
+        route_result=route_outcome.route,
+        route_execution_result=route_outcome.execution_result,
+        route_task_id=route_outcome.task_id,
+    )
+
+
 def _handle_from_args(args: argparse.Namespace) -> PageHandle:
     """Reconstruct a real PageHandle from a prior 'browser open' call's own printed fields."""
     return PageHandle(
@@ -2095,9 +2153,16 @@ class _CommandOutcome:
     its own branch/statement count without bound as more subcommand
     families are added. All fields but ``decision``/``command_label``
     are ``None`` for most commands.
+
+    ``decision`` is ``None`` for exactly one real case (WP-104's
+    ``do``): a route that never caused any downstream authorization
+    attempt at all (``RouteKind.UNKNOWN``, or a real, recognized
+    capability with no wired executor) genuinely has no ``Decision``
+    to report -- fabricating one would misrepresent what happened.
+    Every other command still always supplies a real ``Decision``.
     """
 
-    decision: Decision
+    decision: Decision | None
     command_label: str
     content: Tainted[str] | None = None
     memory_identifier: str | None = None
@@ -2134,6 +2199,9 @@ class _CommandOutcome:
     task_reason: str | None = None
     task_record: MemoryRecord | None = None
     task_records: tuple[MemoryRecord, ...] | None = None
+    route_result: RouteResult | None = None
+    route_execution_result: object | None = None
+    route_task_id: str | None = None
 
 
 def _run_basic_subcommand(
@@ -2217,6 +2285,8 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
         return _run_project_subcommand(args)
     if args.command == "task":
         return _run_task_subcommand(args)
+    if args.command == "do":
+        return _run_do_subcommand(args)
     if args.command == "email":
         decision, email_summaries, email_message = _run_email_subcommand(args)
         return _CommandOutcome(
@@ -2336,6 +2406,42 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:
             _print_one_task_record(record)
 
 
+def _print_do_outcome(outcome: _CommandOutcome) -> None:
+    """Print a `do "<text>"` subcommand's own real route, plus whatever it caused.
+
+    Split out from :func:`_print_outcome` for the identical reason
+    `_print_project_outcome`/`_print_task_outcome` already are. Prints
+    the real, structured `RouteResult` first -- what the router
+    decided this request was, regardless of whether anything was
+    authorized -- then, only if something was, the same
+    `task_id`/record shape `task create` already prints via
+    `_print_task_outcome`'s own sibling logic (not reused directly:
+    a `COMPLEX_GOAL` route only ever produces a bare `task_id`, never
+    a full task record, status, or reason).
+    """
+    route = outcome.route_result
+    if route is None:
+        return
+    print(f"route: {route.kind.value} (source={route.source}, confidence={route.confidence})")
+    if route.capability_id is not None:
+        print(f"capability_id: {route.capability_id.value}")
+    if route.goal is not None:
+        print(f"goal: {route.goal}")
+    if route.detail is not None:
+        print(f"detail: {route.detail}")
+    if outcome.decision is None:
+        if route.kind == RouteKind.DETERMINISTIC_COMMAND:
+            print(
+                "This capability is recognized and registered, but is not wired for direct "
+                "execution via 'do' yet -- use its own dedicated subcommand instead."
+            )
+        return
+    if outcome.route_task_id is not None:
+        print(f"task_id: {outcome.route_task_id}")
+    if outcome.route_execution_result is not None:
+        print(f"result: {outcome.route_execution_result!r}")
+
+
 def _print_job_application_table(records: tuple[MemoryRecord, ...]) -> None:
     """Print job-application records as a real, readable table -- not a raw memory dump.
 
@@ -2424,6 +2530,7 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
     _print_fs_search_outcome(outcome)
     _print_project_outcome(outcome)
     _print_task_outcome(outcome)
+    _print_do_outcome(outcome)
     if outcome.calendar_event_uid is not None:
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:
@@ -2533,6 +2640,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     decision = outcome.decision
+    if decision is None:
+        # WP-104's `do`: a route that never caused any downstream authorization attempt at
+        # all (RouteKind.UNKNOWN, or a real capability with no wired executor) -- see
+        # _CommandOutcome.decision's own widened-type docstring. Nothing was granted or
+        # denied, so there is no real GRANTED/DENIED line to print; _print_outcome's own
+        # _print_do_outcome prints the real route instead. A non-zero exit code reflects
+        # that the request was not, in fact, fulfilled -- never silently reported as success.
+        print(f"{outcome.command_label}: NOT_ROUTED")
+        _print_outcome(outcome)
+        return 1
+
     status = "GRANTED" if decision.granted else "DENIED"
     print(
         f"{outcome.command_label}: {status} (tier={decision.tier.name}, reasons={decision.reasons})"

@@ -46,6 +46,7 @@ from jarvis.adapters.physical_confirmation import Gtk4PhysicalConfirmationAdapte
 from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanStep
+from jarvis.application.routing.router import RouteKind, RouteResult
 from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
 from jarvis.domain.browser import PageHandle
 from jarvis.domain.calendar import CalendarEvent
@@ -81,6 +82,7 @@ from jarvis.kernel.job_search import JobSearchSite
 from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.kernel.project import ProjectStartOutcome, ProjectStatusOutcome
+from jarvis.kernel.router import RouteOutcome
 from jarvis.kernel.tasks import TaskCreateOutcome, TaskGetOutcome, TaskListOutcome, TaskRunOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
@@ -2701,6 +2703,190 @@ def test_task_run_subcommand_requires_task_id_and_goal() -> None:
 def test_task_status_subcommand_requires_task_id() -> None:
     with pytest.raises(SystemExit):
         main(["task", "status"])
+
+
+def test_do_subcommand_prints_a_granted_deterministic_execution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted, wired deterministic route prints its route, decision, and real result."""
+    received: list[str] = []
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        received.append(text)
+        route = RouteResult(
+            kind=RouteKind.DETERMINISTIC_COMMAND,
+            original_input=text,
+            confidence=1.0,
+            source="deterministic",
+            capability_id=CapabilityId("memory.retrieve"),
+            arguments=Tainted({"query": "anything"}, Provenance.user()),
+        )
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return RouteOutcome(
+            route=route, decision=decision, execution_result="fake-result", task_id=None
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(["do", "recall anything", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert received == ["recall anything"]
+    assert exit_code == 0
+    assert "do: GRANTED" in captured.out
+    assert "route: deterministic_command" in captured.out
+    assert "capability_id: memory.retrieve" in captured.out
+    assert "result: 'fake-result'" in captured.out
+
+
+def test_do_subcommand_prints_not_routed_for_an_unknown_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A route with no downstream Decision prints NOT_ROUTED and exits non-zero, never GRANTED."""
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        route = RouteResult(
+            kind=RouteKind.UNKNOWN,
+            original_input="asdkjaslkdj",
+            confidence=0.0,
+            source="deterministic",
+            detail="No known deterministic command matched this request.",
+        )
+        return RouteOutcome(route=route, decision=None, execution_result=None, task_id=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(["do", "asdkjaslkdj", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "do: NOT_ROUTED" in captured.out
+    assert "GRANTED" not in captured.out
+    assert "DENIED" not in captured.out
+    assert "route: unknown" in captured.out
+    assert "detail: No known deterministic command matched this request." in captured.out
+
+
+def test_do_subcommand_reports_a_recognized_but_unwired_capability(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real, recognized capability with no wired executor is reported, never executed."""
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        route = RouteResult(
+            kind=RouteKind.DETERMINISTIC_COMMAND,
+            original_input="force push my repo",
+            confidence=0.5,
+            source="reasoning",
+            capability_id=CapabilityId("git.force_push"),
+            arguments=Tainted({}, Provenance.user()),
+        )
+        return RouteOutcome(route=route, decision=None, execution_result=None, task_id=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(
+        ["do", "force push my repo", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "do: NOT_ROUTED" in captured.out
+    assert "capability_id: git.force_push" in captured.out
+    assert "not wired for direct execution via 'do'" in captured.out
+
+
+def test_do_subcommand_prints_a_complex_goal_routes_task_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted complex_goal route prints the real goal and the new task's own id."""
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        route = RouteResult(
+            kind=RouteKind.COMPLEX_GOAL,
+            original_input="find good internships",
+            confidence=0.5,
+            source="reasoning",
+            goal="find good internships",
+        )
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return RouteOutcome(route=route, decision=decision, execution_result=None, task_id="mem:9")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(
+        [
+            "do",
+            "find good internships",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "do: GRANTED" in captured.out
+    assert "goal: find good internships" in captured.out
+    assert "task_id: mem:9" in captured.out
+    assert captured.out.count("task_id:") == 1
+
+
+def test_do_subcommand_requires_text() -> None:
+    with pytest.raises(SystemExit):
+        main(["do"])
 
 
 _EMAIL_COMMON_FLAGS = [
