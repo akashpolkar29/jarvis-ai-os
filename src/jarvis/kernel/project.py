@@ -67,8 +67,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from jarvis.application.planning.executor import PlanValidationError
-from jarvis.application.planning.planner import PlanningError
 from jarvis.kernel.memory import authorize_and_recall
 from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.tasks import TASK_KIND, derive_result_status, write_task_record
@@ -155,15 +153,26 @@ async def authorize_and_start_project(  # noqa: PLR0913 -- one per composition-f
     newer create-then-run sequencing.
 
     Raises:
-        jarvis.application.planning.planner.PlanningError: If the
-            provider's proposed plan fails real, structural validation.
-            A real, canonical ``"failed"`` status record is written
-            first (WP-109 -- the same word ``tasks.py`` itself writes
-            for this condition; this module's own public ``"stuck"``
-            vocabulary is a translation applied only to this
-            function's own return value, never to what's stored).
-        jarvis.application.planning.executor.PlanValidationError: As
-            above.
+        Exception: Any real exception raised either by plan validation
+            (``jarvis.application.planning.planner.PlanningError``,
+            ``jarvis.application.planning.executor.PlanValidationError``)
+            or by a plan step's own wrapped ``authorize_and_*`` call
+            during real execution (e.g. ``PathOutsideAllowedScopeError``,
+            ``GitCommandFailedError``, ``OSError``, ``sqlite3.Error`` --
+            see ``kernel.capability_dispatch.PLAN_STEP_EXECUTORS``). A
+            real, canonical ``"failed"`` status record is written first
+            in every case (WP-109's own word; this module's own public
+            ``"stuck"`` vocabulary is a translation applied only to
+            this function's own return value, never to what's stored),
+            then the identical, unmodified exception is re-raised. WP-113
+            (2026-09-10) widened this from a narrow
+            ``(PlanningError, PlanValidationError)`` catch -- unlike
+            ``tasks.authorize_and_run_task``, this function writes no
+            intermediate "running" record at all, so before this fix a
+            step-execution exception left **no status record whatsoever**
+            for the goal, not even a "stuck" one -- see
+            ``jarvis.kernel.tasks``'s own module docstring for the
+            identical finding against its own, differently-shaped gap.
     """
     try:
         decision, result = await authorize_and_run_plan(
@@ -173,7 +182,9 @@ async def authorize_and_start_project(  # noqa: PLR0913 -- one per composition-f
             remote_confirmation_available=remote_confirmation_available,
             chain_path=chain_path,
         )
-    except (PlanningError, PlanValidationError) as exc:
+    except Exception as exc:
+        # WP-113: deliberately broad -- see this function's own Raises
+        # docstring for why a narrower catch left a real gap here.
         write_task_record(
             goal,
             "failed",

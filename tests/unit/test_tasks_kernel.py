@@ -9,7 +9,9 @@ discipline.
 from __future__ import annotations
 
 import contextlib
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
@@ -25,6 +27,7 @@ from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.kernel.files import PathOutsideAllowedScopeError
 from jarvis.kernel.memory import authorize_and_remember
 from jarvis.kernel.tasks import (
     TASK_KIND,
@@ -37,7 +40,7 @@ from jarvis.kernel.tasks import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    import pytest
 
     from jarvis.domain.evidence import Attempt
     from jarvis.kernel.tasks import TaskCreateOutcome, TaskGetOutcome, TaskRunOutcome
@@ -209,6 +212,43 @@ async def test_run_on_a_malformed_plan_raises_and_marks_the_task_failed(tmp_path
     assert isinstance(data, dict)
     assert data["status"] == "failed"
     assert "PlanningError" in data["reason"]
+
+
+async def test_run_on_a_step_execution_exception_marks_the_task_failed_not_stuck_at_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP-113 real regression test for the real, named "stuck at running" bug.
+
+    A structurally-valid plan naming a real, wired PLAN_STEP_EXECUTORS
+    capability (fs.read_file) whose own real execution raises
+    PathOutsideAllowedScopeError -- not a PlanningError/PlanValidationError,
+    the two exception types the pre-WP-113 except clause alone caught.
+    Before this fix, this exact scenario left the task's own stored
+    status at "running" permanently; this proves it now lands at
+    "failed" with the real exception surfaced as the reason, and that
+    the same, real, unmodified exception still propagates to the caller.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "real_home")
+    create_outcome = _create(tmp_path, "read something outside scope")
+    assert create_outcome.task_id is not None
+
+    plan_response = json.dumps(
+        [{"capability_id": "fs.read_file", "arguments": {"path": "/etc/passwd"}}]
+    )
+    try:
+        await _run(tmp_path, create_outcome.task_id, "read something outside scope", plan_response)
+    except PathOutsideAllowedScopeError:
+        pass
+    else:
+        msg = "Expected PathOutsideAllowedScopeError to propagate."
+        raise AssertionError(msg)
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "failed"
+    assert "PathOutsideAllowedScopeError" in data["reason"]
 
 
 async def test_run_denied_without_confirmation_leaves_the_task_at_created(tmp_path: Path) -> None:

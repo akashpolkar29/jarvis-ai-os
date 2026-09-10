@@ -10,6 +10,7 @@ real status-record write) runs for real.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
@@ -25,6 +26,7 @@ from jarvis.domain.evidence import Candidate
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.capabilities import PLANNING_RUN_PLAN_CAPABILITY_ID
+from jarvis.kernel.files import PathOutsideAllowedScopeError
 from jarvis.kernel.project import (
     _CANONICAL_TO_PROJECT_STATE,
     VALID_PROJECT_STATES,
@@ -34,7 +36,7 @@ from jarvis.kernel.project import (
 from jarvis.kernel.tasks import derive_result_status, write_task_record
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    import pytest
 
     from jarvis.domain.evidence import Attempt
     from jarvis.kernel.project import ProjectStartOutcome, ProjectStatusOutcome
@@ -195,6 +197,39 @@ async def test_a_plan_naming_an_unregistered_capability_raises_and_records_faile
     data = status.record.value.value
     assert isinstance(data, dict)
     assert data["status"] == "failed"
+
+
+async def test_a_step_execution_exception_still_records_a_failed_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP-113 real regression test for the real gap named in this module's own docstring.
+
+    Before WP-113, a real exception raised by a plan step's own
+    execution (not PlanningError/PlanValidationError, the only two
+    types the previous except clause caught) propagated out of
+    authorize_and_start_project uncaught, leaving **no status record
+    at all** for the goal -- this module writes no intermediate
+    "running" record the way tasks.authorize_and_run_task does, so
+    there was nothing even resembling "stuck" to find, just silence.
+    This proves a real "failed" record now lands first.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "real_home")
+    plan_response = '[{"capability_id": "fs.read_file", "arguments": {"path": "/etc/passwd"}}]'
+
+    try:
+        await _start(tmp_path, "read something outside scope", plan_response)
+    except PathOutsideAllowedScopeError:
+        pass
+    else:
+        msg = "Expected PathOutsideAllowedScopeError to propagate."
+        raise AssertionError(msg)
+
+    status = _status(tmp_path, "read something outside scope")
+    assert status.record is not None
+    data = status.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "failed"
+    assert "PathOutsideAllowedScopeError" in data["reason"]
 
 
 def test_status_for_an_unknown_goal_finds_nothing(tmp_path: Path) -> None:

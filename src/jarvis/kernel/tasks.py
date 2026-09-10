@@ -104,8 +104,6 @@ from typing import TYPE_CHECKING
 
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.identifier import UuidIdAdapter
-from jarvis.application.planning.executor import PlanValidationError
-from jarvis.application.planning.planner import PlanningError
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.kernel.memory import authorize_and_get, authorize_and_recall, authorize_and_remember
 from jarvis.kernel.memory import authorize_and_update as _authorize_and_update_memory
@@ -445,13 +443,26 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         A ``TaskRunOutcome`` -- see its own docstring.
 
     Raises:
-        jarvis.application.planning.planner.PlanningError: If the
-            provider's proposed plan fails real, structural validation.
-            The task's own status is updated to "failed" first --
-            the caller still sees the same real exception ``jarvis
-            plan run`` already surfaces identically.
-        jarvis.application.planning.executor.PlanValidationError: As
-            above.
+        Exception: Any real exception raised either by plan validation
+            (``jarvis.application.planning.planner.PlanningError``,
+            ``jarvis.application.planning.executor.PlanValidationError``)
+            or by a plan step's own wrapped ``authorize_and_*`` call
+            during real execution (e.g. ``PathOutsideAllowedScopeError``,
+            ``GitCommandFailedError``, ``OSError``, ``sqlite3.Error`` --
+            see ``kernel.capability_dispatch.PLAN_STEP_EXECUTORS`` for
+            which capabilities are currently wired and what each one
+            can really raise). In every case the task's own status is
+            updated to "failed" first, with the real exception's own
+            type and message as the stored reason -- the caller still
+            sees the identical, unmodified exception re-raised
+            afterward, exactly like ``jarvis plan run``/``jarvis task
+            run`` already do for the two plan-validation cases. WP-113
+            (2026-09-10) widened this from a narrow
+            ``(PlanningError, PlanValidationError)`` catch specifically
+            because a step-execution exception previously propagated
+            all the way out of this function uncaught, leaving the
+            task's own stored status at "running" permanently -- see
+            this module's own docstring for the full account.
     """
     reason: str | None = None
     running_decision = update_task_status(
@@ -479,7 +490,17 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
             remote_confirmation_available=remote_confirmation_available,
             chain_path=chain_path,
         )
-    except (PlanningError, PlanValidationError) as exc:
+    except Exception as exc:
+        # WP-113: deliberately broad, not narrowed to (PlanningError,
+        # PlanValidationError) -- execute_plan's own per-step loop calls
+        # into a plan-step executor's real, wrapped authorize_and_* call
+        # (kernel.capability_dispatch.PLAN_STEP_EXECUTORS), which can
+        # raise its own real exception (PathOutsideAllowedScopeError,
+        # GitCommandFailedError, OSError, sqlite3.Error, ...) that a
+        # narrower catch here would let propagate uncaught, leaving the
+        # task's own stored status at "running" permanently -- the real
+        # bug this widening fixes. Re-raised unmodified below, so the
+        # caller still sees the identical, real exception either way.
         reason = f"{type(exc).__name__}: {exc}"
         update_task_status(
             task_id,
