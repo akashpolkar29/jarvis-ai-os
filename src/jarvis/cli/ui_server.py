@@ -100,6 +100,26 @@ about it. `GET /api/tasks/<task_id>` still correctly reflects that
 real, cross-process change, because it re-reads the real, shared,
 persistent task store directly, not this server's own in-process
 event history.
+
+**WP-112 (2026-09-10): a real, explicit way to run an already-created
+task from the UI.** `POST /api/tasks/<task_id>/run` reuses
+`kernel.tasks.authorize_and_run_task` completely unmodified -- the
+exact same function `jarvis task run` already calls, the exact same
+outer `memory.update`-based "running" transition gate, the exact same
+unmodified `planning.run_plan` outer gate plus real, individual,
+per-step authorization (ADR-0062). No new authorization concept, no
+new confirmation semantics: this endpoint reads
+`UiServerConfig.physical_confirmation_available`/
+`remote_confirmation_available` exactly like `POST /api/command`
+already does. **Never automatic**: creating a task (a `COMPLEX_GOAL`
+route) still only ever creates it -- running it is a real, separate,
+explicitly-triggered HTTP request the browser only sends when the
+user clicks a real "Run" control, mirroring `jarvis task create`/
+`jarvis task run`'s own already-established two-verb separation
+(WP-107) exactly. The real, current goal is looked up server-side via
+`authorize_and_get_task` before running -- the browser never supplies
+its own copy of the goal text, so it cannot smuggle a different goal
+into a real plan run than the one the task was actually created for.
 """
 
 from __future__ import annotations
@@ -114,6 +134,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.application.planning.executor import PlanValidationError
+from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
@@ -121,7 +143,7 @@ from jarvis.kernel.desktop import GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import authorize_and_route
-from jarvis.kernel.tasks import authorize_and_get_task
+from jarvis.kernel.tasks import authorize_and_get_task, authorize_and_run_task
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
@@ -140,6 +162,10 @@ _INDEX_HTML_PATH = _STATIC_DIR / "index.html"
 _TASK_STATUS_PATH_PREFIX = "/api/tasks/"
 """GET <this>+<task_id> -- a real, authoritative task-store read (WP-111). See
 module docstring's own "why this is not SSE" section."""
+
+_TASK_RUN_PATH_SUFFIX = "/run"
+"""POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- runs an already-created
+task (WP-112). See module docstring's own WP-112 section."""
 
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
@@ -175,6 +201,14 @@ _HANDLED_ROUTING_ERRORS = (
     ValueError,
     sqlite3.Error,
 )
+
+# POST /api/tasks/<task_id>/run (WP-112) reaches authorize_and_run_task, which --
+# unlike anything authorize_and_route itself can ever trigger -- genuinely runs a
+# real plan, so a real PlanningError/PlanValidationError is a real, reachable
+# failure mode here that _HANDLED_ROUTING_ERRORS's own narrower surface never
+# needed to cover. Everything else this tuple already covers (memory-store/OS-level
+# errors) applies equally, since both paths write through the same real store.
+_HANDLED_TASK_RUN_ERRORS = (*_HANDLED_ROUTING_ERRORS, PlanningError, PlanValidationError)
 
 
 @dataclass(frozen=True)
@@ -423,11 +457,20 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        """Handle `POST /api/command`. Validates input; never lets an error crash the server."""
-        if self.path != "/api/command":
-            self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+        """Handle `POST /api/command` or `POST /api/tasks/<id>/run`. Never crashes the server."""
+        if self.path == "/api/command":
+            self._handle_post_command()
             return
+        if self.path.startswith(_TASK_STATUS_PATH_PREFIX) and self.path.endswith(
+            _TASK_RUN_PATH_SUFFIX
+        ):
+            task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_RUN_PATH_SUFFIX)]
+            self._handle_run_task(task_id)
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
 
+    def _handle_post_command(self) -> None:
+        """Handle `POST /api/command`. Validates input; never lets an error crash the server."""
         text = self._read_and_validate_text()
         if text is None:
             return  # _read_and_validate_text already sent the real error response.
@@ -460,6 +503,76 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._send_json(HTTPStatus.OK, build_response_payload(outcome))
+
+    def _handle_run_task(self, task_id: str) -> None:
+        """Handle `POST /api/tasks/<task_id>/run` (WP-112) -- reuses authorize_and_run_task unmodified.
+
+        The real, current goal is looked up server-side first (never
+        supplied by the browser) so a caller cannot run a real plan
+        for a goal different from the one this task was actually
+        created for. See module docstring's own WP-112 section.
+        """  # noqa: E501
+        if not task_id:
+            self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+            return
+
+        config = self.server.jarvis_config
+        get_outcome = authorize_and_get_task(
+            task_id,
+            physical_confirmation_available=config.physical_confirmation_available,
+            remote_confirmation_available=config.remote_confirmation_available,
+            chain_path=config.chain_path,
+            database_path=config.database_path,
+        )
+        record = get_outcome.record
+        if record is None:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"type": "error", "message": "No task found for this identifier."},
+            )
+            return
+        data = record.value.value
+        goal = data.get("goal") if isinstance(data, dict) else None
+        if not isinstance(goal, str):
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "This task's own stored record is malformed."},
+            )
+            return
+
+        try:
+            run_outcome = asyncio.run(
+                authorize_and_run_task(
+                    task_id,
+                    goal,
+                    physical_confirmation_available=config.physical_confirmation_available,
+                    remote_confirmation_available=config.remote_confirmation_available,
+                    chain_path=config.chain_path,
+                    database_path=config.database_path,
+                    event_bus=self.server.event_bus,
+                )
+            )
+        except _HANDLED_TASK_RUN_ERRORS as exc:
+            _logger.warning("ui_server: running task %s failed: %s", task_id, exc)
+            self._send_json(HTTPStatus.BAD_REQUEST, {"type": "error", "message": str(exc)})
+            return
+        except Exception:
+            _logger.exception("ui_server: unexpected internal error running task %s", task_id)
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "An unexpected internal error occurred."},
+            )
+            return
+
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "task_id": task_id,
+                "granted": run_outcome.decision.granted,
+                "status": run_outcome.status,
+                "reason": run_outcome.reason,
+            },
+        )
 
     def _read_and_validate_text(self) -> str | None:
         """Read and validate the real request body. Sends its own error response and returns None on failure."""  # noqa: E501

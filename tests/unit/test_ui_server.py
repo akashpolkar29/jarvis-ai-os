@@ -24,6 +24,7 @@ from unittest import mock
 
 import pytest
 
+from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind, RouteResult
 from jarvis.cli.ui_server import (
     UiServerConfig,
@@ -48,7 +49,7 @@ from jarvis.kernel.desktop import GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import RouteOutcome
-from jarvis.kernel.tasks import TaskGetOutcome, authorize_and_create_task
+from jarvis.kernel.tasks import TaskGetOutcome, TaskRunOutcome, authorize_and_create_task
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -392,6 +393,151 @@ def test_get_task_status_reports_a_clean_500_for_a_malformed_stored_record(
 
     assert exc_info.value.code == HTTPStatus.INTERNAL_SERVER_ERROR
     data = json.loads(exc_info.value.read())
+    assert data["type"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# WP-112: POST /api/tasks/<task_id>/run -- runs an already-created task
+# ---------------------------------------------------------------------------
+
+
+def _post_run(base_url: str, task_id: str) -> tuple[int, dict[str, object]]:
+    req = urllib.request.Request(f"{base_url}/api/tasks/{task_id}/run", data=b"", method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_post_run_task_returns_404_for_an_unknown_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    status, data = _post_run(base_url, "no-such-task")
+
+    assert status == HTTPStatus.NOT_FOUND
+    assert data["type"] == "error"
+
+
+def test_post_run_task_returns_404_for_an_empty_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    status, data = _post_run(base_url, "")
+
+    assert status == HTTPStatus.NOT_FOUND
+    assert data["type"] == "error"
+
+
+def test_post_run_task_real_round_trip_looks_up_the_real_goal_and_runs_it(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A real task, created independently, is looked up and run -- authorize_and_run_task mocked.
+
+    Mocking `authorize_and_run_task` keeps this test hermetic
+    (independent of a real local Ollama server), but `authorize_and_get_task`
+    is completely real -- proving the endpoint's own real goal lookup
+    against a real, independently-created task record.
+    """
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a real, independently-created task",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    received: list[tuple[str, str]] = []
+
+    async def fake_authorize_and_run_task(
+        task_id: str, goal: str, *_args: object, **_kwargs: object
+    ) -> TaskRunOutcome:
+        received.append((task_id, goal))
+        return TaskRunOutcome(
+            decision=_make_decision(granted=True), status="completed", reason=None
+        )
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_run_task", fake_authorize_and_run_task):
+        status, data = _post_run(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.OK
+    assert data["task_id"] == create_outcome.task_id
+    assert data["granted"] is True
+    assert data["status"] == "completed"
+    assert received == [(create_outcome.task_id, "a real, independently-created task")]
+
+
+def test_post_run_task_reports_a_handled_planning_error_cleanly(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "an impossible goal",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    async def failing_authorize_and_run_task(*_args: object, **_kwargs: object) -> TaskRunOutcome:
+        raise PlanningError("the provider's response was not valid JSON")
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_run_task", failing_authorize_and_run_task):
+        status, data = _post_run(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert data["type"] == "error"
+    assert "not valid JSON" in str(data["message"])
+
+
+def test_post_run_task_never_leaks_a_traceback_on_an_unexpected_error(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a goal",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    async def failing_authorize_and_run_task(*_args: object, **_kwargs: object) -> TaskRunOutcome:
+        raise RuntimeError("boom, unexpected")
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_run_task", failing_authorize_and_run_task):
+        status, data = _post_run(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert data["type"] == "error"
+    assert "boom" not in str(data["message"])
+
+
+def test_post_run_task_reports_a_clean_500_for_a_malformed_stored_record(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+    malformed_record = MemoryRecord(
+        identifier="mem:weird",
+        value=Tainted("not a dict", Provenance.user()),
+        written_at=datetime(2026, 1, 1, tzinfo=UTC),
+        expires_at=None,
+    )
+    fake_outcome = TaskGetOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), record=malformed_record
+    )
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_get_task", return_value=fake_outcome):
+        status, data = _post_run(base_url, "mem:weird")
+
+    assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert data["type"] == "error"
 
 

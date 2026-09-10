@@ -144,6 +144,16 @@
     cursor: not-allowed;
     opacity: 0.6;
   }
+  .run-task-button {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+  .run-task-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 </style>
 </head>
 <body>
@@ -231,6 +241,43 @@
     }, TASK_POLL_INTERVAL_MS);
   }
 
+  // POST /api/tasks/<id>/run (WP-112) -- a real, explicit, separate action from
+  // task creation. Never sent automatically: only a real user click on the real
+  // "Run" button calls this. The button stays disabled after a request that was
+  // itself accepted (even if the underlying plan later fails) to avoid an easy,
+  // accidental duplicate run of the same task; a real request failure (network
+  // error, 404, 500) re-enables it so the user can retry.
+  function runTask(taskId, button) {
+    button.disabled = true;
+    button.textContent = "Running...";
+    fetch("/api/tasks/" + encodeURIComponent(taskId) + "/run", { method: "POST" })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        var data = result.data;
+        if (!result.ok || data.type === "error") {
+          addMessage(
+            "error", null, (data && data.message) || "Could not run this task.", null
+          );
+          button.disabled = false;
+          button.textContent = "Run";
+          return;
+        }
+        button.textContent = "Started";
+        addMessage("task", "Task " + taskId, "Status: " + (data.status || "running"), null);
+      })
+      .catch(function () {
+        addMessage(
+          "error", null, "Could not reach the JARVIS backend to run this task.", null
+        );
+        button.disabled = false;
+        button.textContent = "Run";
+      });
+  }
+
   // Renders one real backend response, distinguishing every real `type` the
   // API can return (see jarvis.cli.ui_server.build_response_payload) rather
   // than lumping every non-error response into one generic bubble.
@@ -243,8 +290,16 @@
     if (data.type === "task_created") {
       var status = data.task_status || "created";
       var body = "Task ID: " + data.task_id + "\nStatus: " + status;
-      addMessage("task", "Task created", body, metaFor(data));
+      var taskEl = addMessage("task", "Task created", body, metaFor(data));
       if (data.task_id) {
+        var runButton = document.createElement("button");
+        runButton.type = "button";
+        runButton.className = "run-task-button";
+        runButton.textContent = "Run";
+        runButton.addEventListener("click", function () {
+          runTask(data.task_id, runButton);
+        });
+        taskEl.appendChild(runButton);
         pollTaskStatus(data.task_id, status, TASK_POLL_MAX_ATTEMPTS);
       }
       return;
