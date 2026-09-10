@@ -60,6 +60,17 @@ replacement for either.
 
 ### Fixed
 
+- WP-115: the audit chain's real cross-process lost-write race --
+  two independent processes racing to save the same `--chain-path`
+  file no longer silently discard either one's own record.
+  `JsonFileAuditStorageAdapter.save()` now re-reads the file's current
+  content under a real, cross-process `fcntl.flock()` (held only for
+  its own critical section) and re-parents the caller's own new
+  records onto the disk's current tail via `AuditChain.append()`,
+  unmodified, rather than blindly overwriting with a possibly-stale
+  in-memory copy. No `AuditStoragePort` contract change, no new
+  dependency. Proven by real `multiprocessing.Process` tests. See
+  `docs/architecture/audit-chain-process-safety.md`.
 - WP-113: a task left stuck at `"running"` permanently when a plan
   step's own real execution raised an exception other than
   `PlanningError`/`PlanValidationError` (e.g. `PathOutsideAllowedScopeError`,

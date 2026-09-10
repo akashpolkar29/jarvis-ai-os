@@ -379,6 +379,25 @@ it.
   `Tier.MANUAL_ONLY` (ADR-0059). See
   `docs/architecture/wp114-conversational-execution-surface.md` and
   `docs/OPEN_DECISIONS.md` item 24.
+  **Updated 2026-09-11 (WP-115)**: the audit chain's real
+  cross-process lost-write race is closed — `JsonFileAuditStorageAdapter.save()`
+  no longer blindly overwrites the chain file with exactly the
+  in-memory chain it was given; under a real, cross-process
+  `fcntl.flock()` (a sibling `.lock` file, held only for `save()`'s
+  own critical section — `load()` needs none, since an atomic
+  `os.replace()`-backed file can never be read torn), it re-reads the
+  file's current content fresh and re-parents only the caller's own
+  genuinely new records onto the disk's current tail via
+  `AuditChain.append()`, unmodified. A real, necessary, explicitly-named
+  semantic change: `save()` no longer means "overwrite with exactly
+  this chain" — no real caller ever relied on that (checked directly).
+  No `AuditStoragePort` contract change, no new dependency (`fcntl` is
+  Linux stdlib). Proven by real `multiprocessing.Process` tests — not
+  threads, not sequential simulated instances — barrier-synchronized
+  immediately before each worker's own `save()` call; every worker's
+  own record survives, the final chain validates, sequences are
+  contiguous. See `docs/architecture/audit-chain-process-safety.md`
+  and `docs/OPEN_DECISIONS.md` item 5.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

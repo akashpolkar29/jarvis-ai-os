@@ -71,16 +71,26 @@ into the router's own execution boundary, and `communications.list_email`/
 `read_email`/`list_calendar_events` given real, typed-router-only
 grammar plus a real, direct `await` dispatch (the three are `async`,
 `PLAN_STEP_EXECUTORS` is sync-only), gated on `jarvis ui`'s own new,
-optional email/calendar connection flags. All items 1-4 and 6-24 below
-are resolved, decided, or built; only item 5 (one of the audit chain's
-four real structural gaps -- the cross-process race) remains genuinely
-open.
+optional email/calendar connection flags; and the audit chain's
+real cross-process lost-write race (item 5, 2026-09-11, WP-115),
+closed via a real `fcntl.flock()`-protected re-read-and-merge inside
+`save()`, proven by real `multiprocessing.Process` tests -- no
+`AuditStoragePort` contract change, no new dependency. All items 1-24
+below are resolved, decided, or built -- nothing in this index remains
+open as of 2026-09-11 (a real, separate, narrower residual limitation
+of item 5's own fix -- a privileged adversary fabricating a wholesale
+replacement chain, a genuinely different threat model -- is named in
+item 5 itself and in `docs/architecture/audit-log-integrity-scoping-notes.md`,
+not tracked as its own numbered item here).
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
 copied verbatim, never auto-tailored; no Overleaf integration exists;
 job-application submission is never automated (ADR-0058); the audit
-chain's cross-process race remains open (item 5); `piper-tts` (GPL)
+chain's whole-file-replacement gap (a privileged adversary fabricating
+a replacement chain -- a genuinely different threat model from the
+now-closed cross-process race) remains open, four real options laid
+out, undecided; `piper-tts` (GPL)
 and the `icalendar-searcher` transitive dependency (AGPL, its real
 code path empirically avoided but the package itself still present)
 are both kept, by real, direct user decision; `job-application list`'s
@@ -174,7 +184,7 @@ project. `memory` keeps its nested subcommand group
 bare `read`. See `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md`'s
 own "Real decision recorded" section. No code changed.
 
-## 5. The audit chain's real, open structural gaps -- three of four closed
+## 5. ~~The audit chain's real, open structural gaps~~ -- ALL FOUR CLOSED 2026-09-11 (WP-115)
 
 **Resolved in part**: the user chose option 1 (7 real decisions
 prompt, Decision 6) -- restrictive `0o600` file permissions, now
@@ -190,8 +200,7 @@ permissions, then `Path.replace()`s it over the real path in one
 atomic, indivisible OS-level step; a crash, kill, or power loss at any
 point before the replace leaves the real file exactly as it was, never
 truncated or partially written, proven by a real test simulating a
-failure mid-save. **Does not close the one remaining gap**, stated
-plainly, not rounded up:
+failure mid-save.
 
 - ~~Non-atomic writes~~ -- **CLOSED 2026-09-08 (WP-101)**:
   `save()` now writes atomically (temp-file-then-`Path.replace`). See
@@ -207,22 +216,32 @@ plainly, not rounded up:
   for this exact file format. See `jarvis.domain.audit`'s own module
   docstring and `docs/architecture/audit-log-integrity-scoping-notes.md`'s
   own updated note for the full account.
-- **Cross-process race**: two independent processes racing to save the
-  same `--chain-path` file still causes the second `save()` to
-  silently overwrite the first's new record entirely -- still open,
-  unaffected by atomicity (each individual `save()` is now
-  all-or-nothing, but atomicity says nothing about which of two
-  racing writers wins). A real fix needs file locking or a real
-  `AuditStoragePort` contract change (e.g. an append-only format), a
-  genuine architecture decision, not built here.
+- ~~Cross-process race~~ -- **CLOSED 2026-09-11 (WP-115)**: two
+  independent processes racing to save the same `--chain-path` file no
+  longer silently discard either one's own record. `save()` now
+  re-reads the file's real, current content under a real, cross-process
+  `fcntl.flock()`, held only for its own critical section, and
+  correctly re-parents each caller's own new records onto the disk's
+  *current* tail (via `AuditChain.append()`, completely unmodified)
+  rather than blindly overwriting with a possibly-stale in-memory
+  copy. No `AuditStoragePort` contract change, no new dependency
+  (`fcntl` is Linux stdlib) -- see
+  `docs/architecture/audit-chain-process-safety.md` for the full
+  account, including the real, necessary semantic change this required
+  (`save()` no longer means "overwrite with exactly this chain") and
+  what remains a genuinely different, out-of-scope threat model (a
+  privileged adversary fabricating a wholesale replacement chain,
+  the real, separate "whole-file replacement" gap below).
 
-**What's still needed**: a real architecture decision on the one
-remaining gap in `JsonFileAuditStorageAdapter`'s own persistence
-format -- the cross-process race. Full investigation, four real
-candidate fixes for the whole-file-replacement/no-tamper-evidence gap
-specifically, and the real record of Decision 6's own scope, in
-`docs/architecture/audit-log-integrity-scoping-notes.md`'s own "Real
-decision recorded and implemented" section.
+**What remains, stated precisely, not rounded up**: WP-115 closes the
+*lost-update* race between legitimate JARVIS processes -- it is not,
+and was never intended to be, a signing/HMAC/external-anchor defense
+against a privileged adversary with filesystem write access willing to
+fabricate an entire, freshly-self-consistent replacement chain (the
+real, separate "whole-file replacement" gap,
+`docs/architecture/audit-log-integrity-scoping-notes.md`'s own four
+laid-out options, still genuinely undecided -- a different threat
+model, not addressed by WP-115 and not claimed to be).
 
 ## 6a. ~~Task planning~~ -- IMPLEMENTED 2026-09-05
 
