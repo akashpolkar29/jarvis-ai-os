@@ -1192,6 +1192,45 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
         default=False,
         help="As --physical-confirmation-available, applied uniformly for the server's lifetime.",
     )
+    ui_parser.add_argument(
+        "--email-imap-host",
+        default=None,
+        help=(
+            "The real IMAP server hostname (WP-114) -- optional; enables 'list emails'/"
+            "'read email <id>' through this server when supplied together with "
+            "--email-smtp-host/--email-username/--email-password-reference. Omitted by "
+            "default, matching every other real port/credential flag's own 'no implicit "
+            "default' precedent."
+        ),
+    )
+    ui_parser.add_argument(
+        "--email-smtp-host", default=None, help="The real SMTP server hostname (WP-114)."
+    )
+    ui_parser.add_argument(
+        "--email-username", default=None, help="The real mailbox username (WP-114)."
+    )
+    ui_parser.add_argument(
+        "--email-password-reference",
+        default=None,
+        help="The keyring reference for the mailbox's password (WP-114), provisioned out of band.",
+    )
+    ui_parser.add_argument(
+        "--calendar-caldav-url",
+        default=None,
+        help=(
+            "The real CalDAV server URL (WP-114) -- optional; enables 'what's on my "
+            "calendar today/tomorrow/this week' through this server when supplied "
+            "together with --calendar-username/--calendar-password-reference."
+        ),
+    )
+    ui_parser.add_argument(
+        "--calendar-username", default=None, help="The real CalDAV account username (WP-114)."
+    )
+    ui_parser.add_argument(
+        "--calendar-password-reference",
+        default=None,
+        help="The keyring reference for the CalDAV account's password (WP-114).",
+    )
 
     return parser
 
@@ -1325,6 +1364,49 @@ def _run_listen(chain_path: Path, *, verbose: bool) -> int:
     return 0
 
 
+def _email_port_from_ui_args(args: argparse.Namespace) -> ImapEmailAdapter | None:
+    """Construct a real ImapEmailAdapter for `jarvis ui`'s own optional email flags (WP-114).
+
+    `None` unless all four connection flags were supplied together --
+    mirrors `_run_email_subcommand`'s own real construction exactly,
+    just optional here since email is not required to run `jarvis ui`
+    at all.
+    """
+    if (
+        args.email_imap_host is None
+        or args.email_smtp_host is None
+        or args.email_username is None
+        or args.email_password_reference is None
+    ):
+        return None
+    return ImapEmailAdapter(
+        args.email_imap_host,
+        args.email_username,
+        SecretServiceAdapter(),
+        args.email_password_reference,
+        smtp_host=args.email_smtp_host,
+    )
+
+
+def _calendar_port_from_ui_args(args: argparse.Namespace) -> CalDavCalendarAdapter | None:
+    """Construct a real CalDavCalendarAdapter for `jarvis ui`'s own optional calendar flags.
+
+    See `_email_port_from_ui_args`'s own identical reasoning (WP-114).
+    """
+    if (
+        args.calendar_caldav_url is None
+        or args.calendar_username is None
+        or args.calendar_password_reference is None
+    ):
+        return None
+    return CalDavCalendarAdapter(
+        args.calendar_caldav_url,
+        args.calendar_username,
+        SecretServiceAdapter(),
+        args.calendar_password_reference,
+    )
+
+
 def _run_ui(args: argparse.Namespace) -> int:
     """Serve the JARVIS UI foundation (WP-108) in the foreground until interrupted.
 
@@ -1336,12 +1418,21 @@ def _run_ui(args: argparse.Namespace) -> int:
     every request for the server's own lifetime (see that module's own
     docstring for why this is a real, deliberate choice, not an
     oversight).
+
+    WP-114: ``email_port``/``calendar_port`` are real, optional ports
+    constructed here (``cli`` is the one layer permitted to construct
+    concrete adapters) -- ``None`` unless the operator supplied the
+    matching connection flags, exactly mirroring
+    ``email_port``/``calendar_port``'s own established "no implicit
+    default" precedent everywhere else in this codebase.
     """
     config = UiServerConfig(
         chain_path=args.chain_path,
         physical_confirmation_available=args.physical_confirmation_available,
         remote_confirmation_available=args.remote_confirmation_available,
         database_path=args.database_path,
+        email_port=_email_port_from_ui_args(args),
+        calendar_port=_calendar_port_from_ui_args(args),
     )
     server = create_server(args.port, config)
     bound_port = server.server_address[1]

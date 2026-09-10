@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from http import HTTPStatus
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest import mock
 
@@ -33,6 +34,7 @@ from jarvis.cli.ui_server import (
     create_server,
     run_ui_server,
 )
+from jarvis.domain.calendar import CalendarEvent
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -40,20 +42,32 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.email import EmailMessage, EmailSummary
 from jarvis.domain.events import TaskCreated, TaskStatusChanged
 from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
-from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.provenance import Classification, Provenance, Tainted
+from jarvis.kernel.capability_dispatch import (
+    CalendarListStepResult,
+    EmailListStepResult,
+    EmailReadStepResult,
+)
 from jarvis.kernel.desktop import GitStatusOutcome
-from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.files import (
+    ContentSearchOutcome,
+    DirListOutcome,
+    FileFindOutcome,
+    FileReadOutcome,
+    PathOutsideAllowedScopeError,
+    RecentFilesOutcome,
+)
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import RouteOutcome
 from jarvis.kernel.tasks import TaskGetOutcome, TaskRunOutcome, authorize_and_create_task
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
     from jarvis.cli.ui_server import JarvisUiServer
 
@@ -136,6 +150,94 @@ def test_real_server_reports_a_recognized_but_unwired_capability(
     assert data["type"] == "unwired_capability"
     assert data["capability_id"] == "ping"
     assert data["granted"] is None
+
+
+def test_real_server_finds_recent_files_via_the_real_router(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """WP-114: "recent files" reaches the real router and actually executes (fs.recent)."""
+    base_url, _server = running_server
+    (tmp_path / "a.txt").write_text("hi")
+
+    with mock.patch("jarvis.kernel.files.Path.home", return_value=tmp_path):
+        status, data = _post(base_url, json.dumps({"text": "recent files"}).encode())
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "response"
+    assert data["capability_id"] == "fs.recent"
+    assert data["granted"] is True
+    assert "a.txt" in str(data["message"])
+
+
+def test_real_server_reports_email_not_configured_with_a_precise_message(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """WP-114: "list emails" is recognized, but this server has no configured email_port."""
+    base_url, _server = running_server
+
+    status, data = _post(base_url, json.dumps({"text": "list emails"}).encode())
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "unwired_capability"
+    assert data["capability_id"] == "communications.list_email"
+    assert "isn't configured" in str(data["message"])
+
+
+class _StubEmailPort:
+    """A minimal, real, hermetic EmailPort stub -- never reaches a real network."""
+
+    def __init__(self, summaries: tuple[EmailSummary, ...]) -> None:
+        self._summaries = summaries
+        self.list_calls: list[tuple[str, int]] = []
+
+    async def list_messages(self, folder: str, limit: int) -> tuple[EmailSummary, ...]:
+        self.list_calls.append((folder, limit))
+        return self._summaries
+
+    async def read_message(self, message_id: str) -> EmailMessage:
+        raise NotImplementedError
+
+    async def send_message(self, to: tuple[str, ...], subject: str, body: str) -> None:
+        raise NotImplementedError
+
+
+def test_real_server_executes_list_emails_with_a_configured_email_port(tmp_path: Path) -> None:
+    """WP-114: a real, end-to-end HTTP round trip proving a configured email_port is used.
+
+    Constructs its own server (rather than the shared `running_server`
+    fixture) since this is the one test that needs a real,
+    non-default `UiServerConfig.email_port`.
+    """
+    config = UiServerConfig(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=tmp_path / "memory.sqlite3",
+        email_port=_StubEmailPort(
+            summaries=(
+                EmailSummary(
+                    message_id="<one@x.com>", sender="a@x.com", subject="Hi", received_at="d"
+                ),
+            )
+        ),
+    )
+    server = create_server(0, config)
+    port = server.server_address[1]
+    thread = threading.Thread(target=run_ui_server, args=(server,), daemon=True)
+    thread.start()
+    try:
+        status, data = _post(
+            f"http://127.0.0.1:{port}", json.dumps({"text": "list emails"}).encode()
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "response"
+    assert data["capability_id"] == "communications.list_email"
+    assert data["granted"] is True
+    assert "Hi" in str(data["message"])
 
 
 # ---------------------------------------------------------------------------
@@ -786,6 +888,213 @@ def test_summarize_execution_result_falls_back_for_an_unrecognized_result_shape(
     summary = _summarize_execution_result("some.capability", object())
 
     assert summary == "Ran some.capability."
+
+
+# ---------------------------------------------------------------------------
+# _summarize_execution_result -- WP-114's six new real result shapes
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_execution_result_for_a_non_empty_find_files() -> None:
+    result = FileFindOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        matches=(Path("/home/user/a.py"), Path("/home/user/b.py")),
+    )
+
+    summary = _summarize_execution_result("fs.find", result)
+
+    assert "a.py" in summary
+    assert "b.py" in summary
+
+
+def test_summarize_execution_result_for_an_empty_find_files_falls_back() -> None:
+    result = FileFindOutcome(decision=_make_decision(granted=True, tier=Tier.ALLOW), matches=())
+
+    summary = _summarize_execution_result("fs.find", result)
+
+    assert summary == "Ran fs.find."
+
+
+def test_summarize_execution_result_for_search_content_with_matches() -> None:
+    result = ContentSearchOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        matches=((Path("/home/user/a.py"), 3, "def foo():"),),
+        capped=False,
+    )
+
+    summary = _summarize_execution_result("fs.search_content", result)
+
+    assert "a.py:3" in summary
+    assert "def foo():" in summary
+    assert "capped" not in summary
+
+
+def test_summarize_execution_result_for_search_content_reports_capping() -> None:
+    result = ContentSearchOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        matches=((Path("/home/user/a.py"), 3, "def foo():"),),
+        capped=True,
+    )
+
+    summary = _summarize_execution_result("fs.search_content", result)
+
+    assert "capped" in summary
+
+
+def test_summarize_execution_result_for_a_non_empty_recent_files() -> None:
+    result = RecentFilesOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), files=(Path("/home/user/a.py"),)
+    )
+
+    summary = _summarize_execution_result("fs.recent", result)
+
+    assert "a.py" in summary
+
+
+def test_summarize_execution_result_for_list_email_with_summaries() -> None:
+    result = EmailListStepResult(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        summaries=(
+            Tainted(
+                EmailSummary(
+                    message_id="<a@x.com>", sender="a@x.com", subject="Hi", received_at="d"
+                ),
+                Provenance.external(source="<a@x.com>", classification=Classification.SENSITIVE),
+            ),
+        ),
+    )
+
+    summary = _summarize_execution_result("communications.list_email", result)
+
+    assert "a@x.com" in summary
+    assert "Hi" in summary
+
+
+def test_summarize_execution_result_for_list_email_with_no_summaries() -> None:
+    result = EmailListStepResult(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), summaries=()
+    )
+
+    summary = _summarize_execution_result("communications.list_email", result)
+
+    assert summary == "No messages found."
+
+
+def test_summarize_execution_result_for_read_email() -> None:
+    result = EmailReadStepResult(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        message=Tainted(
+            EmailMessage(
+                message_id="<a@x.com>",
+                sender="a@x.com",
+                recipients=("b@x.com",),
+                subject="Hi",
+                body="body text",
+                received_at="d",
+            ),
+            Provenance.external(source="<a@x.com>", classification=Classification.SENSITIVE),
+        ),
+    )
+
+    summary = _summarize_execution_result("communications.read_email", result)
+
+    assert "a@x.com" in summary
+    assert "Hi" in summary
+    assert "body text" in summary
+
+
+def test_summarize_execution_result_for_list_calendar_events_with_events() -> None:
+    result = CalendarListStepResult(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        events=(
+            Tainted(
+                CalendarEvent(
+                    uid="1",
+                    summary="Standup",
+                    start="2026-09-10T09:00:00+00:00",
+                    end="2026-09-10T09:30:00+00:00",
+                    attendees=(),
+                ),
+                Provenance.external(source="1", classification=Classification.SENSITIVE),
+            ),
+        ),
+    )
+
+    summary = _summarize_execution_result("communications.list_calendar_events", result)
+
+    assert "Standup" in summary
+
+
+def test_summarize_execution_result_for_list_calendar_events_with_no_events() -> None:
+    result = CalendarListStepResult(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), events=()
+    )
+
+    summary = _summarize_execution_result("communications.list_calendar_events", result)
+
+    assert summary == "No events found."
+
+
+def test_summarize_execution_result_for_a_denied_search_content_falls_back() -> None:
+    result = ContentSearchOutcome(
+        decision=_make_decision(granted=False, tier=Tier.ALLOW), matches=None, capped=False
+    )
+
+    summary = _summarize_execution_result("fs.search_content", result)
+
+    assert summary == "Ran fs.search_content."
+
+
+def test_summarize_execution_result_for_a_denied_recent_files_falls_back() -> None:
+    result = RecentFilesOutcome(decision=_make_decision(granted=False, tier=Tier.ALLOW), files=None)
+
+    summary = _summarize_execution_result("fs.recent", result)
+
+    assert summary == "Ran fs.recent."
+
+
+def test_summarize_execution_result_for_a_denied_list_email_falls_back() -> None:
+    result = EmailListStepResult(
+        decision=_make_decision(granted=False, tier=Tier.ALLOW), summaries=None
+    )
+
+    summary = _summarize_execution_result("communications.list_email", result)
+
+    assert summary == "Ran communications.list_email."
+
+
+def test_summarize_execution_result_for_a_denied_read_email_falls_back() -> None:
+    result = EmailReadStepResult(
+        decision=_make_decision(granted=False, tier=Tier.ALLOW), message=None
+    )
+
+    summary = _summarize_execution_result("communications.read_email", result)
+
+    assert summary == "Ran communications.read_email."
+
+
+def test_summarize_execution_result_for_a_denied_list_calendar_events_falls_back() -> None:
+    result = CalendarListStepResult(
+        decision=_make_decision(granted=False, tier=Tier.ALLOW), events=None
+    )
+
+    summary = _summarize_execution_result("communications.list_calendar_events", result)
+
+    assert summary == "Ran communications.list_calendar_events."
+
+
+def test_real_server_reports_calendar_not_configured_with_a_precise_message(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """WP-114: "show my calendar" is recognized, but this server has no configured calendar_port."""
+    base_url, _server = running_server
+
+    status, data = _post(base_url, json.dumps({"text": "show my calendar"}).encode())
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "unwired_capability"
+    assert data["capability_id"] == "communications.list_calendar_events"
+    assert "isn't configured" in str(data["message"])
 
 
 # ---------------------------------------------------------------------------

@@ -695,6 +695,123 @@ def test_ui_has_no_host_flag() -> None:
         main(["ui", "--host", "0.0.0.0"])
 
 
+def test_ui_with_no_email_or_calendar_flags_leaves_both_ports_unconfigured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-114: omitting the new, optional email/calendar flags behaves exactly as before."""
+    received: list[UiServerConfig] = []
+
+    def fake_create_server(port: int, config: UiServerConfig) -> object:
+        received.append(config)
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(["ui", "--chain-path", str(tmp_path / "audit_chain.json")])
+
+    assert len(received) == 1
+    assert received[0].email_port is None
+    assert received[0].calendar_port is None
+
+
+def test_ui_with_all_four_email_flags_constructs_a_real_email_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-114: a real ImapEmailAdapter is constructed when all four email flags are given."""
+    received: list[UiServerConfig] = []
+
+    def fake_create_server(port: int, config: UiServerConfig) -> object:
+        received.append(config)
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(
+        [
+            "ui",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+            "--email-imap-host",
+            "imap.example.com",
+            "--email-smtp-host",
+            "smtp.example.com",
+            "--email-username",
+            "user@example.com",
+            "--email-password-reference",
+            "example-ref",
+        ]
+    )
+
+    assert len(received) == 1
+    assert isinstance(received[0].email_port, ImapEmailAdapter)
+    assert received[0].calendar_port is None
+
+
+def test_ui_with_a_partial_set_of_email_flags_leaves_the_port_unconfigured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-114: all-or-nothing -- three of four email flags is the same as zero."""
+    received: list[UiServerConfig] = []
+
+    def fake_create_server(port: int, config: UiServerConfig) -> object:
+        received.append(config)
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(
+        [
+            "ui",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+            "--email-imap-host",
+            "imap.example.com",
+            "--email-smtp-host",
+            "smtp.example.com",
+            "--email-username",
+            "user@example.com",
+        ]
+    )
+
+    assert len(received) == 1
+    assert received[0].email_port is None
+
+
+def test_ui_with_all_three_calendar_flags_constructs_a_real_calendar_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-114: a real CalDavCalendarAdapter is constructed when all three calendar flags are given."""  # noqa: E501
+    received: list[UiServerConfig] = []
+
+    def fake_create_server(port: int, config: UiServerConfig) -> object:
+        received.append(config)
+        return _FakeBoundServer(port)
+
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "create_server", fake_create_server)
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"], "run_ui_server", lambda _server: None)
+
+    main(
+        [
+            "ui",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+            "--calendar-caldav-url",
+            "https://caldav.example.com",
+            "--calendar-username",
+            "user@example.com",
+            "--calendar-password-reference",
+            "example-ref",
+        ]
+    )
+
+    assert len(received) == 1
+    assert received[0].email_port is None
+    assert isinstance(received[0].calendar_port, CalDavCalendarAdapter)
+
+
 def _make_memory_record(identifier: str = "mem:1", text: str = "prefers tabs") -> MemoryRecord:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     return MemoryRecord(

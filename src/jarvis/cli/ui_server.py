@@ -134,16 +134,30 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.calendar import CalendarEventCreationError
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
+from jarvis.kernel.capability_dispatch import (
+    CalendarListStepResult,
+    EmailListStepResult,
+    EmailReadStepResult,
+)
 from jarvis.kernel.desktop import GitStatusOutcome
-from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
+from jarvis.kernel.files import (
+    ContentSearchOutcome,
+    DirListOutcome,
+    FileFindOutcome,
+    FileReadOutcome,
+    PathOutsideAllowedScopeError,
+    RecentFilesOutcome,
+)
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import authorize_and_get_task, authorize_and_run_task
+from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
@@ -151,6 +165,8 @@ from jarvis.ports.retrieval import MemoryIntegrityViolationError
 if TYPE_CHECKING:
     from jarvis.adapters.memory import UnsupportedMemoryValueError
     from jarvis.kernel.router import RouteOutcome
+    from jarvis.ports.calendar import CalendarPort
+    from jarvis.ports.email import EmailPort
 else:
     from jarvis.adapters.memory import UnsupportedMemoryValueError
 
@@ -181,13 +197,20 @@ this codebase's own established "cap, report honestly, never silently truncate
 without saying so" convention (see fs.search_content's own capped flag)."""
 
 # The real, narrow exception surface `authorize_and_route` can actually raise, given
-# the router's own real, structural execution boundary (WP-104): only the four
-# fs.read_file/fs.list_dir/git.status/memory.retrieve PLAN_STEP_EXECUTORS entries, or
-# memory.write for task creation, ever run real, external-I/O-touching code. This is
-# deliberately narrower than main()'s own broad exception tuple, which additionally
-# handles capabilities (email, calendar, browser, docker, desktop-app control, coding,
-# job assistance) the router cannot reach at all -- listing those here would be a real,
-# misleading claim of a failure mode this module can never actually hit.
+# the router's own real, structural execution boundary (WP-104): the seven
+# fs.read_file/fs.list_dir/git.status/memory.retrieve/fs.find/fs.search_content/fs.recent
+# PLAN_STEP_EXECUTORS entries, memory.write for task creation, or (WP-114) one of the
+# three communications.* reads this router now directly awaits when the matching port
+# is configured. This is deliberately narrower than main()'s own broad exception tuple,
+# which additionally handles capabilities (browser, docker, desktop-app control, coding,
+# job assistance, calendar/email *writes*) the router cannot reach at all -- listing
+# those here would be a real, misleading claim of a failure mode this module can never
+# actually hit. `CalendarNotFoundError`/`CalendarSearchError` (real, adapter-level
+# exceptions `authorize_and_list_calendar_events` can also raise) are deliberately not
+# added either -- `cli/main.py`'s own `calendar list-events` subcommand does not catch
+# them today (a real, pre-existing gap, not this work package's own scope to fix); this
+# module's own final `except Exception` backstop still reports a clean 500 for either,
+# never a leaked traceback.
 _HANDLED_ROUTING_ERRORS = (
     JarvisError,
     PathOutsideAllowedScopeError,
@@ -195,6 +218,9 @@ _HANDLED_ROUTING_ERRORS = (
     MemoryRecordNotFoundError,
     UnsupportedMemoryValueError,
     MemoryIntegrityViolationError,
+    EmailConnectionError,
+    EmailMessageNotFoundError,
+    CalendarEventCreationError,
     OSError,
     UnicodeDecodeError,
     KeyError,
@@ -234,12 +260,22 @@ class UiServerConfig:
         database_path: Where the real memory store lives. `None`
             reaches the same real, existing default every other
             memory-touching subcommand already uses.
+        email_port: (WP-114) The real, already-constructed
+            `ImapEmailAdapter`, if `jarvis ui` was launched with email
+            connection flags. `None` (the default) means
+            `communications.list_email`/`read_email` are recognized by
+            the router but never executed -- see
+            `kernel.router.authorize_and_route`'s own docstring.
+        calendar_port: As `email_port`, for
+            `communications.list_calendar_events`.
     """
 
     chain_path: Path
     physical_confirmation_available: bool
     remote_confirmation_available: bool
     database_path: Path | None = None
+    email_port: EmailPort | None = None
+    calendar_port: CalendarPort | None = None
 
 
 def _log_task_created(event: TaskCreated) -> None:
@@ -297,29 +333,125 @@ def _summarize_dir_list(result: DirListOutcome) -> str | None:
     )
 
 
-def _summarize_execution_result(capability_id: str, result: object) -> str:
-    """Render one of the four real, wired PLAN_STEP_EXECUTORS results as chat text.
+def _summarize_find_files(result: FileFindOutcome) -> str | None:
+    """Render a real `fs.find` result as chat text (WP-114). `None` if no matches."""
+    if not result.matches:
+        return None
+    return "\n".join(str(match) for match in result.matches)
 
-    A real, closed, exhaustive set -- `PLAN_STEP_EXECUTORS` (WP-104,
-    `kernel/capability_dispatch.py`) has exactly four entries today,
-    so this function's own four `isinstance` branches are a complete
-    match, not a partial one that silently drops a fifth real shape.
-    The fallback line only fires if that table itself grows without
-    this function being updated alongside it -- a real, honest gap,
-    not hidden.
+
+def _summarize_search_content(result: ContentSearchOutcome) -> str | None:
+    """Render a real `fs.search_content` result as chat text (WP-114). `None` if no matches."""
+    if not result.matches:
+        return None
+    lines = [f"{path}:{line_number}: {line}" for path, line_number, line in result.matches]
+    if result.capped:
+        lines.append("(capped -- not every file was scanned)")
+    return "\n".join(lines)
+
+
+def _summarize_recent_files(result: RecentFilesOutcome) -> str | None:
+    """Render a real `fs.recent` result as chat text (WP-114). `None` if no files."""
+    if not result.files:
+        return None
+    return "\n".join(str(recent_file) for recent_file in result.files)
+
+
+def _summarize_list_email(result: EmailListStepResult) -> str | None:
+    """Render a real `communications.list_email` result as chat text (WP-114)."""
+    if result.summaries is None:
+        return None
+    if not result.summaries:
+        return "No messages found."
+    return "\n".join(
+        f"{tainted.value.message_id}: {tainted.value.sender} -- {tainted.value.subject}"
+        for tainted in result.summaries
+    )
+
+
+def _summarize_read_email(result: EmailReadStepResult) -> str | None:
+    """Render a real `communications.read_email` result as chat text (WP-114)."""
+    if result.message is None:
+        return None
+    message = result.message.value
+    return f"From: {message.sender}\nSubject: {message.subject}\n\n{message.body}"
+
+
+def _summarize_list_calendar_events(result: CalendarListStepResult) -> str | None:
+    """Render a real `communications.list_calendar_events` result as chat text (WP-114)."""
+    if result.events is None:
+        return None
+    if not result.events:
+        return "No events found."
+    return "\n".join(
+        f"{tainted.value.start} - {tainted.value.end}: {tainted.value.summary}"
+        for tainted in result.events
+    )
+
+
+def _summarize_wp104_execution_result(result: object) -> str | None:
+    """Render one of WP-104's own four, original `PLAN_STEP_EXECUTORS` result shapes.
+
+    `None` if `result` matches none of these four, or matches one
+    whose own real content was empty (the caller falls through to its
+    own next check either way).
     """
     if isinstance(result, MemoryRecallOutcome):
         return _summarize_memory_recall(result)
     if isinstance(result, FileReadOutcome):
-        summary = _summarize_file_read(result)
-        if summary is not None:
-            return summary
+        return _summarize_file_read(result)
     if isinstance(result, DirListOutcome):
-        summary = _summarize_dir_list(result)
+        return _summarize_dir_list(result)
+    if isinstance(result, GitStatusOutcome):
+        return result.status
+    return None
+
+
+def _summarize_wp114_fs_execution_result(result: object) -> str | None:
+    """Render one of WP-114's own three new `fs.*` result shapes. `None` if no match/no content."""
+    if isinstance(result, FileFindOutcome):
+        return _summarize_find_files(result)
+    if isinstance(result, ContentSearchOutcome):
+        return _summarize_search_content(result)
+    if isinstance(result, RecentFilesOutcome):
+        return _summarize_recent_files(result)
+    return None
+
+
+def _summarize_wp114_communications_execution_result(result: object) -> str | None:
+    """Render one of WP-114's own three new `communications.*` result shapes.
+
+    `None` if no match/no content.
+    """
+    if isinstance(result, EmailListStepResult):
+        return _summarize_list_email(result)
+    if isinstance(result, EmailReadStepResult):
+        return _summarize_read_email(result)
+    if isinstance(result, CalendarListStepResult):
+        return _summarize_list_calendar_events(result)
+    return None
+
+
+def _summarize_execution_result(capability_id: str, result: object) -> str:
+    """Render a real, wired execution result as chat text.
+
+    A real, closed, exhaustive set -- every real result shape
+    `authorize_and_route` (`kernel/router.py`) can ever produce, given
+    its own structural execution boundary (`PLAN_STEP_EXECUTORS`, WP-104,
+    plus the three real `communications.*` reads WP-114 added directly).
+    Split across three helpers purely to stay under ruff's own
+    branch-count limit -- not a real behavioral split. The final
+    fallback line only fires if that boundary grows without one of
+    them being updated alongside it -- a real, honest gap, not hidden.
+    """
+    for summarize in (
+        _summarize_wp104_execution_result,
+        _summarize_wp114_fs_execution_result,
+        _summarize_wp114_communications_execution_result,
+    ):
+        summary = summarize(result)
         if summary is not None:
             return summary
-    if isinstance(result, GitStatusOutcome) and result.status is not None:
-        return result.status
     return f"Ran {capability_id}."
 
 
@@ -351,15 +483,37 @@ def build_response_payload(outcome: RouteOutcome) -> dict[str, object]:
             # A real, distinct case from genuine UNKNOWN -- see
             # kernel/router.py's own module docstring: the request was
             # confidently, correctly recognized, it just names a real
-            # capability with no entry in PLAN_STEP_EXECUTORS yet.
-            # Mirrors _print_do_outcome's own identical distinction in
+            # capability with no entry in PLAN_STEP_EXECUTORS yet, or
+            # (WP-114) a real communications.* capability whose real
+            # port was never configured for this server. Mirrors
+            # _print_do_outcome's own identical distinction in
             # cli/main.py -- reporting "I couldn't determine this"
             # here would be a real, honest-sounding lie.
             payload["type"] = "unwired_capability"
-            payload["message"] = (
-                f"I recognized this as {payload['capability_id']}, but it isn't wired for "
-                "direct execution through this UI yet -- use its own dedicated command instead."
-            )
+            if route.capability_id is not None and route.capability_id.value in (
+                "communications.list_email",
+                "communications.read_email",
+            ):
+                payload["message"] = (
+                    "I recognized this as an email command, but email isn't configured for "
+                    "this server -- start `jarvis ui` with the real IMAP connection flags, "
+                    "or use `jarvis email list`/`jarvis email read` directly."
+                )
+            elif (
+                route.capability_id is not None
+                and route.capability_id.value == "communications.list_calendar_events"
+            ):
+                payload["message"] = (
+                    "I recognized this as a calendar command, but calendar isn't configured "
+                    "for this server -- start `jarvis ui` with the real CalDAV connection "
+                    "flags, or use `jarvis calendar list-events` directly."
+                )
+            else:
+                payload["message"] = (
+                    f"I recognized this as {payload['capability_id']}, but it isn't wired for "
+                    "direct execution through this UI yet -- use its own dedicated command "
+                    "instead."
+                )
             return payload
         payload["type"] = "not_routed"
         payload["message"] = route.detail or "I couldn't confidently determine what you meant."
@@ -485,6 +639,8 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                     chain_path=config.chain_path,
                     database_path=config.database_path,
                     event_bus=self.server.event_bus,
+                    email_port=config.email_port,
+                    calendar_port=config.calendar_port,
                 )
             )
         except _HANDLED_ROUTING_ERRORS as exc:
