@@ -59,9 +59,15 @@ capability, or touching the audit chain; and a real task-execution
 trigger from the UI (item 22, 2026-09-10, WP-112), a "Run" button
 reusing `authorize_and_run_task` completely unmodified, never
 automatic, with the real goal looked up server-side rather than
-trusted from the client. All items 1-4 and 6-22 below are resolved,
-decided, or built; only item 5 (one of the audit chain's four real
-structural gaps -- the cross-process race) remains genuinely open.
+trusted from the client; and a real fix for the "stuck at running" gap
+item 22 itself named (item 23, 2026-09-10, WP-113), widening both real
+callers of `authorize_and_run_plan` to a deliberate, documented
+`except Exception` so a plan step's own real execution exception
+always lands the task/project record at `"failed"` instead of leaving
+it stuck (or, for `project.py`, leaving no record at all). All items
+1-4 and 6-23 below are resolved, decided, or built; only item 5 (one
+of the audit chain's four real structural gaps -- the cross-process
+race) remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -941,6 +947,62 @@ update, both success and failure paths). Roadmap numbering checked
 directly first -- WP-112 was genuinely the next available number. See
 `docs/architecture/wp112-task-execution-trigger.md` for the full
 account.
+
+## 23. ~~Task left stuck at "running" on an uncaught plan-step exception~~ -- RESOLVED/BUILT 2026-09-10
+
+**Resolved/built, WP-113**. Closes the real, pre-existing limitation
+item 22 (WP-112) found and deliberately did not fix: `authorize_and_run_task`'s
+own exception handling caught only `(PlanningError, PlanValidationError)`
+-- a real exception raised from *within* a plan step's own wrapped
+`authorize_and_*` call (e.g. `PathOutsideAllowedScopeError`,
+`GitCommandFailedError`, `OSError`, `sqlite3.Error` -- anything a
+capability currently wired into `kernel.capability_dispatch.PLAN_STEP_EXECUTORS`
+can really raise) propagated all the way out uncaught, leaving the
+task's own stored status at `"running"` permanently.
+
+**The fix**: both real callers of `authorize_and_run_plan` -- `kernel.tasks.authorize_and_run_task`
+and `kernel.project.authorize_and_start_project` -- widened their own
+`except (PlanningError, PlanValidationError)` clause to a deliberate,
+documented `except Exception`, each still re-raising the identical,
+unmodified exception afterward (the caller sees exactly what it saw
+before this fix); only the task/project record's own stored status
+changed, from "never updated" to "failed," with the real exception's
+own type and message as the reason.
+
+**A second, real, related gap found while investigating, not just the
+one item 22 already named**: `kernel.project.authorize_and_start_project`
+writes no intermediate "running" record at all (unlike `tasks.py`'s own
+create-then-run split), so a step-execution exception there did not
+leave a task "stuck" -- it left **no status record whatsoever** for the
+goal, a real, silent gap of its own, also closed by the same widening.
+
+**Deliberately broad, not a curated exception list, and why**: only
+four capabilities are wired into `PLAN_STEP_EXECUTORS` today
+(`fs.read_file`, `fs.list_dir`, `git.status`, `memory.retrieve`), and
+their own real exception types were investigated directly (not
+guessed) to scope this fix -- but a curated tuple naming only today's
+four would silently reintroduce this exact bug the next time
+`PLAN_STEP_EXECUTORS` gains a capability with a new exception type.
+`except Exception` (never `BaseException` -- `KeyboardInterrupt`/`SystemExit`
+still propagate immediately, unaffected) is the deliberate, structural
+choice instead, documented plainly in both functions' own docstrings
+and inline comments as a considered, named exception to this project's
+own general preference for precise, curated exception lists over
+blanket catches.
+
+Two new real regression tests (`test_tasks_kernel.py`,
+`test_project_kernel.py`), each driving a real, structurally-valid
+plan naming the real `fs.read_file` capability against a path outside
+its `allowed_root`, proving the real `PathOutsideAllowedScopeError`
+still propagates to the caller while the stored record now correctly
+shows `"failed"`. No new `CapabilityId`/`Effect`/`Tier`, no ADR --
+this is a pure error-handling correctness fix to an already-classified
+code path, not a new authorization decision. Roadmap numbering checked
+directly first -- WP-113 was genuinely the next available number (the
+one `WP-124` reference in `CLAUDE.md` is a proposed implementation-order
+range from an unbuilt UI-architecture artifact, not a real, built work
+package). See `docs/architecture/wp113-task-stuck-at-running-fix.md`
+for the full account.
 
 ## Maintaining this index
 

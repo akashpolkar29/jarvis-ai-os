@@ -48,6 +48,16 @@ replacement for either.
 
 ### Fixed
 
+- WP-113: a task left stuck at `"running"` permanently when a plan
+  step's own real execution raised an exception other than
+  `PlanningError`/`PlanValidationError` (e.g. `PathOutsideAllowedScopeError`,
+  `GitCommandFailedError`) -- `kernel.tasks.authorize_and_run_task` and
+  `kernel.project.authorize_and_start_project` (which had the same gap,
+  but left no status record at all instead of a stuck one) both widened
+  their exception handling to a deliberate, documented
+  `except Exception`, re-raising the identical exception afterward
+  while correctly recording `"failed"` first. See
+  `docs/architecture/wp113-task-stuck-at-running-fix.md`.
 - WP-110: a real message-ordering hazard in `jarvis ui` -- two rapid
   Enter presses (or typing a second message before the first response
   arrived) could fire two concurrent requests whose responses could

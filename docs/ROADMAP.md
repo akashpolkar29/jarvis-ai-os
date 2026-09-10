@@ -335,6 +335,24 @@ it.
   today; not fixed here, a genuine separate decision. See
   `docs/architecture/wp112-task-execution-trigger.md` and
   `docs/OPEN_DECISIONS.md` item 22.
+  **Updated 2026-09-10 (WP-113)**: that exact limitation, fixed. Both
+  real callers of `authorize_and_run_plan` (`kernel.tasks.authorize_and_run_task`,
+  `kernel.project.authorize_and_start_project`) widened their own
+  `except (PlanningError, PlanValidationError)` clause to a deliberate,
+  documented `except Exception`, re-raising the identical, unmodified
+  exception afterward — only the stored status changes, to `"failed"`,
+  with the real exception named as the reason. Investigated first, not
+  assumed: `project.py` shares the identical root cause but a
+  differently-shaped symptom (no intermediate `"running"` record at
+  all, so it left no status record whatsoever, not a stuck one) —
+  fixed by the same widening. Deliberately broad rather than a curated
+  exception tuple: a list naming only today's four wired
+  `PLAN_STEP_EXECUTORS` capabilities' own real exception types would
+  silently reintroduce this bug the next time that registry gains a
+  fifth. No new `CapabilityId`/`Effect`/`Tier`, no ADR — a pure
+  error-handling correctness fix. See
+  `docs/architecture/wp113-task-stuck-at-running-fix.md` and
+  `docs/OPEN_DECISIONS.md` item 23.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

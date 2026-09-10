@@ -89,14 +89,18 @@ restriction, narrower than ADR-0062's own stated ceiling), so any step
 above `ALLOW` fails the whole plan's own validation before any step
 ever runs, rather than pausing one step for confirmation. "Stuck"
 therefore reuses the real, reachable signals instead: `PlanningError`/
-`PlanValidationError` (a real status record is written with the real
-reason, then the same exception still propagates, exactly matching
-`plan run`'s own existing CLI behavior) or a plan step genuinely
-denied mid-execution (not reachable today, since every real
-`PLAN_STEP_EXECUTORS` entry is `Tier.ALLOW` and `Tier.ALLOW` always
-grants — handled defensively anyway, proven by a pure unit test, no
-new registry entry). See `kernel/project.py`'s own module docstring
-for the full account. It previously covered 50, adding `calendar list-events`
+`PlanValidationError`, or (WP-113, 2026-09-10) any other real exception
+a plan step's own wrapped `authorize_and_*` call raises during actual
+execution (e.g. `PathOutsideAllowedScopeError`) — in every case a real
+status record is written with the real reason first, then the same
+exception still propagates, exactly matching `plan run`'s own existing
+CLI behavior — or a plan step genuinely denied mid-execution (not
+reachable today, since every real `PLAN_STEP_EXECUTORS` entry is
+`Tier.ALLOW` and `Tier.ALLOW` always grants — handled defensively
+anyway, proven by a pure unit test, no new registry entry). See
+`kernel/project.py`'s own module docstring and
+`docs/architecture/wp113-task-stuck-at-running-fix.md` for the full
+account. It previously covered 50, adding `calendar list-events`
 (`communications.list_calendar_events` -- a real, previously-missing
 CLI entry point re-confirmed by grepping every real, registered
 `kernel/communications.py` composition function directly, not assumed
