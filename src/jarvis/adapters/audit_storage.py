@@ -53,17 +53,54 @@ their provenance metadata.
 ``save`` writes atomically (temp-file-then-``os.replace``, WP-101,
 2026-09-08): a crash or kill mid-write can no longer leave a
 truncated, invalid file at ``path`` -- either the old, complete
-content is still there, or the new, complete content is. Still not
-handled here: a lost-update race between two independent *processes*
-both racing to save the same ``path`` -- whichever process's atomic
-replace lands last simply wins outright, silently discarding the
-other's own newly-appended record, with no corruption and no error
-raised. See ``docs/architecture/audit-log-integrity-scoping-notes.md``
-for the full account of what atomicity does and does not close.
+content is still there, or the new, complete content is.
+
+**WP-115 (2026-09-11): the cross-process race is closed.** Before this,
+two independent *processes* racing to ``save()`` the same ``path``
+both individually wrote an atomically-complete file, but whichever
+process's replace landed *last* won outright -- silently discarding
+the other's own newly-appended record, with no corruption and no
+error raised (`verify()` on the survivor still reported `valid=True`,
+since nothing about *that* chain's own internal linkage was wrong,
+only its relationship to history). **The real root cause**: `save()`
+persisted exactly the in-memory `AuditChain` it was handed, with no
+regard for what another process might have written to the same
+``path`` in the meantime -- a blind whole-file overwrite, not a
+durable append.
+
+``save()`` now durably *merges* instead of overwrites. It tracks how
+many records this adapter instance's own most recent :meth:`load` saw
+(`self._loaded_count`); at save time, under a real, cross-process
+`fcntl.flock()` exclusive lock (held only for this method's own
+critical section -- `load()` needs no lock at all, since an atomic
+`os.replace()`-backed file can never be read in a torn state), it
+re-reads the file's *current* content fresh, takes only the records
+this caller actually appended beyond what it loaded (`chain`'s own
+tail beyond `self._loaded_count`), and re-parents each one onto the
+file's current tail via `AuditChain.append()` -- recomputing a fresh
+`sequence`/`previous_hash`/`record_hash` for each, exactly as if this
+caller's own append had happened after whatever the other process
+already persisted. The merged result is what gets written, through
+the same, unmodified atomic temp-file-then-replace mechanism.
+
+**A real, necessary, explicitly-stated semantic change, not silently
+glossed over**: `save()` no longer means "overwrite the file with
+exactly this chain" -- it means "durably persist this chain's own new
+content, without ever discarding unrelated content already on disk."
+`save(AuditChain())` (an empty chain) can no longer be used to wipe an
+existing file; there is no mechanism in this codebase that ever relied
+on that (confirmed directly, not assumed -- every real kernel caller
+follows the identical `load()` -> authorize (-> `append()`) -> `save()`
+sequence on one shared adapter instance, never a bare `save()` meant
+to discard unrelated history). See
+``docs/architecture/audit-chain-process-safety.md`` for the full
+account, including the real lock file's own lifecycle and why `load()`
+deliberately does not need one.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
@@ -231,7 +268,12 @@ def _decode_record(data: dict[str, Any]) -> AuditRecord:
 
 
 class JsonFileAuditStorageAdapter:
-    """Persists an AuditChain as a single JSON file at a constructor-supplied path."""
+    """Persists an AuditChain as a single JSON file at a constructor-supplied path.
+
+    WP-115 (2026-09-11): safe across independent OS processes, not
+    merely within one. See this module's own docstring for the full
+    account of the real race this closes and how.
+    """
 
     def __init__(self, path: Path) -> None:
         """Store the path this adapter reads from and writes to.
@@ -242,56 +284,64 @@ class JsonFileAuditStorageAdapter:
                 is a normal, valid state until the first :meth:`save`.
         """
         self._path = path
+        self._loaded_count = 0
+        """How many records this instance's own most recent :meth:`load`
+        saw. Used by :meth:`save` to know which of ``chain``'s own
+        records are genuinely new (everything from this index onward)
+        versus already-persisted content this instance itself read.
+        Starts at 0 (not ``None``) so a :meth:`save` call with no prior
+        :meth:`load` on this instance treats its entire chain as new
+        -- appended after whatever is already on disk, never silently
+        discarding it. Updated again after every real :meth:`save`, so
+        repeated ``save()`` calls on one instance (with no intervening
+        ``load()``) also work correctly."""
 
-    def save(self, chain: AuditChain) -> None:
-        """Atomically overwrite the file at ``path`` with every record in ``chain``.
+    @property
+    def _lock_path(self) -> Path:
+        """A real, permanent, zero-byte sibling file used only for ``fcntl.flock()``.
 
-        Writes the full, new content to a temp file in the same
-        directory as ``path`` (same filesystem, required for
-        ``os.replace`` to be atomic), sets that temp file's
-        permissions, then ``os.replace``s it over ``path`` in one,
-        indivisible OS-level step (WP-101, 2026-09-08). A crash, kill,
-        or power loss at any point up to the replace leaves ``path``
-        exactly as it was before this call; a crash after the replace
-        leaves it exactly as this call intended. There is no window in
-        which ``path`` itself is truncated or contains partial JSON --
-        closing the "non-atomic writes" gap named in
-        ``docs/architecture/audit-log-integrity-scoping-notes.md``. If
-        writing or replacing fails partway, the temp file is removed
-        so it never lingers as a stray, unreferenced file.
+        **Why a separate file, not the chain file itself**: :meth:`save`'s
+        own atomic write replaces ``path``'s inode via ``Path.replace()``
+        -- ``flock()``ing the chain file directly would leave the lock
+        bound to the *old* inode the instant any writer's replace
+        lands, silently detaching it from the path every future caller
+        actually opens. A separate, stable-identity file has no such
+        hazard: it is never replaced, only ever opened and flocked.
 
-        Sets restrictive, owner-only permissions (``0o600``) on the
-        temp file before the replace (7 real decisions prompt,
-        Decision 6, 2026-09-05, extended here to apply pre-replace
-        rather than post-write so ``path`` is never briefly readable
-        under a looser mode) -- the user's own chosen mitigation
-        against casual/other-local-user tampering, the simplest of
-        four real options laid out in
-        ``docs/architecture/audit-log-integrity-scoping-notes.md``.
-        Explicit ``os.chmod`` is required, not merely relying on the
-        temp file's own default mode: ``tempfile.mkstemp`` already
-        creates it ``0o600`` on POSIX, but that is an implementation
-        detail of the stdlib, not a documented, relied-upon guarantee,
-        so this still sets it explicitly rather than assuming it.
-        Applied on every save, not only file creation, so a
-        pre-existing file with looser permissions (e.g. one written
-        before Decision 6 existed) is also tightened the next time
-        it's saved.
-
-        **What this does and does not close, stated plainly**: closes
-        the non-atomic-writes gap. Does **not** close the audit
-        chain's one remaining real, distinct, already-documented gap
-        -- a cross-process race between two legitimate JARVIS
-        processes saving the same file at nearly the same time. Both
-        processes' own atomic replaces still individually succeed;
-        whichever lands last simply wins outright, silently discarding
-        the other's own newly-appended record -- a lost update, not
-        corruption, and still open. See
-        ``docs/architecture/audit-log-integrity-scoping-notes.md``'s
-        own updated note for the full account.
+        **Why permanent, never deleted**: deleting a lock file while
+        another process might still hold a lock on it recreates it
+        under a new inode too -- the identical hazard from a different
+        angle (a waiting process's already-open file descriptor would
+        stay locked against the *deleted* inode, while a new caller
+        opens and locks the *freshly recreated* one, and neither
+        excludes the other). A small, permanent, zero-byte file is the
+        accepted, standard cost of ``flock()``-based locking, not an
+        oversight -- see ``docs/architecture/audit-chain-process-safety.md``.
         """
-        records = [_encode_record(record) for record in chain]
-        payload = json.dumps(records, indent=2)
+        return self._path.with_name(self._path.name + ".lock")
+
+    def _read_records_from_disk(self) -> list[AuditRecord]:
+        """Read and decode every record currently at ``path``, or ``[]`` if it doesn't exist yet.
+
+        The real, shared implementation both :meth:`load` (unlocked --
+        an atomic ``os.replace()``-backed file can never be read in a
+        torn state, so no lock is needed just to read it) and
+        :meth:`save` (locked -- re-reading the *current* state is the
+        core of how the cross-process race is closed) call.
+        """
+        if not self._path.exists():
+            return []
+        raw = json.loads(self._path.read_text(encoding="utf-8"))
+        return [_decode_record(item) for item in raw]
+
+    def _write_atomic(self, records: list[AuditRecord]) -> None:
+        """Atomically overwrite ``path`` with exactly ``records`` (temp-file-then-replace, WP-101).
+
+        Unchanged from the pre-WP-115 mechanism -- see :meth:`save`'s
+        own docstring for what calls this and why it is now always fed
+        a real, merged record list rather than the raw chain argument.
+        """
+        payload = json.dumps([_encode_record(record) for record in records], indent=2)
         fd, tmp_name = tempfile.mkstemp(
             dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp"
         )
@@ -305,10 +355,95 @@ class JsonFileAuditStorageAdapter:
             tmp_path.unlink(missing_ok=True)
             raise
 
+    def save(self, chain: AuditChain) -> None:
+        """Durably persist ``chain``'s own new records, merged against the current disk state.
+
+        **WP-115 (2026-09-11)**: this is no longer a blind whole-file
+        overwrite -- see this module's own docstring for the full
+        account of the cross-process race this closes and why.
+        Concretely, under a real, cross-process exclusive
+        ``fcntl.flock()`` held only for this method's own critical
+        section:
+
+        1. Re-reads ``path``'s *current* content fresh (never trusts
+           whatever this instance's own last :meth:`load` saw -- that
+           may now be stale if another process has since saved).
+        2. Takes only ``chain``'s own genuinely new records -- its
+           tail beyond ``self._loaded_count`` (the count this
+           instance's own most recent :meth:`load` returned; 0 if
+           :meth:`load` was never called on this instance).
+        3. Re-parents each new record onto the file's current tail via
+           ``AuditChain.append()`` -- recomputing a fresh ``sequence``/
+           ``previous_hash``/``record_hash`` for each, exactly as if
+           this caller's own append had happened after whatever
+           another process already persisted, since a record's
+           position in the chain is only truly known at the moment it
+           is actually durably persisted, not when it was first
+           computed in memory.
+        4. Atomically writes the merged result (:meth:`_write_atomic`,
+           unchanged from WP-101) and updates
+           ``self._loaded_count`` to match.
+
+        **A real, necessary, explicitly-named consequence**: a
+        record's own in-memory ``sequence``/``previous_hash``/
+        ``record_hash`` (as originally computed by
+        ``AuthorizationOrchestrator``/``AuditChain.append()`` at
+        authorization time) may differ from what is actually persisted
+        if another process's own save landed in between -- this is
+        invisible to every real caller in this codebase, confirmed
+        directly: no kernel composition function ever reads
+        ``AuditRecord.sequence``/``.record_hash`` from a just-appended,
+        not-yet-reloaded record (`Decision`, the one value every real
+        ``authorize_and_*`` function returns, carries neither field at
+        all). A caller that reads the chain back via a fresh
+        :meth:`load` always sees the true, correctly-rebased final
+        state.
+
+        In the common case -- no concurrent writer, the overwhelming
+        majority of real calls -- the disk has not moved since this
+        instance's own :meth:`load`, so rebasing the new records onto
+        the unchanged base reproduces ``chain`` exactly, record for
+        record, hash for hash; this method's observable behavior is
+        byte-for-byte identical to before WP-115.
+
+        Restrictive, owner-only permissions (``0o600``, 7 real
+        decisions prompt, Decision 6) are still applied to the written
+        file on every real call, unchanged.
+
+        Raises:
+            jarvis.domain.errors.AuditRecordTampered: If ``path``'s
+                *current* on-disk content (re-read under the lock) is
+                itself tampered -- a real, additional safety property
+                WP-115 adds for free: the pre-WP-115 `save()` never
+                read the disk at all, so it would have silently
+                overwritten a corrupted file without ever noticing.
+        """
+        lock_fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                disk_records = self._read_records_from_disk()
+                new_records = list(chain)[self._loaded_count :]
+                merged_chain = AuditChain(disk_records)
+                for record in new_records:
+                    merged_chain.append(record.decision, written_at=record.written_at)
+                self._write_atomic(list(merged_chain))
+                self._loaded_count = len(merged_chain)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
     def load(self) -> AuditChain:
-        """Return the chain last saved, or an empty AuditChain if ``path`` doesn't exist yet."""
-        if not self._path.exists():
-            return AuditChain()
-        raw = json.loads(self._path.read_text(encoding="utf-8"))
-        records = [_decode_record(item) for item in raw]
+        """Return the chain last saved, or an empty AuditChain if ``path`` doesn't exist yet.
+
+        No lock is taken -- an atomic, ``os.replace()``-backed file can
+        never be observed in a torn state by a concurrent reader, so
+        reading it is always safe without one (see this module's own
+        docstring). Records how many records were seen
+        (``self._loaded_count``) so a later :meth:`save` on this same
+        instance knows which of its own chain's records are new.
+        """
+        records = self._read_records_from_disk()
+        self._loaded_count = len(records)
         return AuditChain(records)

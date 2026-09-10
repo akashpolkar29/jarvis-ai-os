@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -26,6 +28,8 @@ _NO_CONFIRMATION = PolicyContext(
 )
 
 _RECORDS_AFTER_MIDDLE_DELETION = 2
+_VARIED_CHAIN_LENGTH = 3
+"""The real, fixed number of records `_build_varied_chain()` always builds."""
 
 
 def _descriptor(effects: Effect, capability_id: str) -> CapabilityDescriptor:
@@ -348,34 +352,72 @@ def test_save_re_tightens_permissions_on_a_pre_existing_looser_file(tmp_path: Pa
     assert real_mode == (stat.S_IRUSR | stat.S_IWUSR)
 
 
-def test_save_overwrites_a_previous_save(tmp_path: Path) -> None:
-    """A second save() replaces the file's content, it doesn't append to it."""
-    adapter = JsonFileAuditStorageAdapter(tmp_path / "audit.json")
-    first_chain = _build_varied_chain()
-    adapter.save(first_chain)
+def test_save_of_an_empty_chain_on_a_fresh_instance_does_not_discard_existing_records(
+    tmp_path: Path,
+) -> None:
+    """WP-115: save() no longer means "overwrite with exactly this chain."
 
-    second_chain = AuditChain()
-    adapter.save(second_chain)
-    loaded = adapter.load()
+    Before WP-115, saving an empty ``AuditChain()`` replaced the whole
+    file, wiping out any real, already-persisted history -- exactly
+    the same blind-overwrite mechanism that caused the cross-process
+    race this work package closes. A *fresh* adapter instance (one
+    that never called :meth:`load`) saving an empty chain must not
+    discard real, existing content it never saw -- it has nothing new
+    to contribute, so the file is left exactly as it was.
+    """
+    path = tmp_path / "audit.json"
+    JsonFileAuditStorageAdapter(path).save(_build_varied_chain())
 
-    assert len(loaded) == 0
+    JsonFileAuditStorageAdapter(path).save(AuditChain())
+    loaded = JsonFileAuditStorageAdapter(path).load()
+
+    assert len(loaded) == _VARIED_CHAIN_LENGTH
+    assert loaded.verify().valid is True
+
+
+def test_save_on_the_same_instance_that_loaded_first_correctly_appends_only_the_new_records(
+    tmp_path: Path,
+) -> None:
+    """The real, established kernel pattern: one instance, load() then append then save().
+
+    Mirrors every real ``kernel/*.py`` composition function's own
+    ``storage = JsonFileAuditStorageAdapter(chain_path); chain =
+    storage.load(); ...; storage.save(chain)`` shape -- the new
+    record(s) a caller appended to the chain it loaded are the only
+    ones persisted; the base content it loaded is never duplicated.
+    """
+    path = tmp_path / "audit.json"
+    JsonFileAuditStorageAdapter(path).save(_build_varied_chain())
+
+    adapter = JsonFileAuditStorageAdapter(path)
+    chain = adapter.load()
+    new_invocation = CapabilityInvocation(
+        _descriptor(Effect.READ_LOCAL, "ping"), Tainted({}, Provenance.user())
+    )
+    chain.append(evaluate(new_invocation, _NO_CONFIRMATION), written_at="2026-09-11T00:00:00+00:00")
+    adapter.save(chain)
+
+    loaded = JsonFileAuditStorageAdapter(path).load()
+    assert len(loaded) == _VARIED_CHAIN_LENGTH + 1
+    assert loaded.verify().valid is True
+    assert [record.sequence for record in loaded] == list(range(_VARIED_CHAIN_LENGTH + 1))
 
 
 def test_save_leaves_no_leftover_temp_file_on_success(tmp_path: Path) -> None:
-    """A successful save() leaves exactly the target file, no stray temp file beside it.
+    """A successful save() leaves exactly the target file plus the real, permanent lock file.
 
     WP-101 (2026-09-08): save() writes to a temp file in the same
     directory first, then ``Path.replace``s it over the real path.
     ``replace`` consumes the temp file (renames it), so nothing named
-    differently from the target should remain in the directory
-    afterward.
+    differently from the target (or the real, permanent, WP-115 lock
+    file) should remain in the directory afterward.
     """
     path = tmp_path / "audit.json"
     adapter = JsonFileAuditStorageAdapter(path)
 
     adapter.save(_build_varied_chain())
 
-    assert [entry.name for entry in tmp_path.iterdir()] == ["audit.json"]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["audit.json", "audit.json.lock"]
 
 
 def test_save_leaves_the_original_file_untouched_if_the_write_fails_partway(
@@ -389,7 +431,10 @@ def test_save_leaves_the_original_file_untouched_if_the_write_fails_partway(
     in for a crash/kill at any point before the replace) must leave
     the real, pre-existing file at `path` completely untouched -- old
     content, not truncated, not replaced -- and must not leave the
-    temp file lingering behind either.
+    temp file lingering behind either. WP-115's own real, permanent
+    lock file is expected to exist (it is created and locked *before*
+    this simulated crash, and is never deleted by design -- see this
+    module's own ``_lock_path`` docstring).
     """
     path = tmp_path / "audit.json"
     adapter = JsonFileAuditStorageAdapter(path)
@@ -405,52 +450,83 @@ def test_save_leaves_the_original_file_untouched_if_the_write_fails_partway(
         adapter.save(AuditChain())
 
     assert path.read_bytes() == original_content
-    assert [entry.name for entry in tmp_path.iterdir()] == ["audit.json"]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["audit.json", "audit.json.lock"]
 
 
-def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_writers_record(
+def test_save_releases_its_real_lock_even_when_the_write_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP-115: a real exception inside save()'s own critical section still releases the lock.
+
+    Proven directly and deterministically, not inferred from a later
+    call merely succeeding (which could also "succeed" by hanging
+    forever if the lock were never actually checked) -- immediately
+    after the failed ``save()`` call, a second, independent attempt to
+    take the identical real ``fcntl.flock()`` in *non-blocking* mode
+    must succeed at once. If ``save()`` had left the lock held, this
+    second attempt would raise ``BlockingIOError`` instead.
+    """
+    path = tmp_path / "audit.json"
+    adapter = JsonFileAuditStorageAdapter(path)
+    adapter.save(_build_varied_chain())
+
+    def _raising_chmod(_self: Path, _mode: int) -> None:
+        raise OSError("simulated crash mid-save")
+
+    monkeypatch.setattr(Path, "chmod", _raising_chmod)
+
+    with pytest.raises(OSError, match="simulated crash mid-save"):
+        adapter.save(AuditChain())
+
+    lock_path = tmp_path / "audit.json.lock"
+    probe_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+
+
+def test_two_independent_writers_racing_on_the_same_file_both_records_survive(
     tmp_path: Path,
 ) -> None:
-    """A real, deliberately-caused cross-process lost-write race -- confirmed, not fixed.
+    """WP-115: the real, previously-confirmed cross-process lost-write race is now closed.
 
     Real concurrency investigation (property-matrix/fuzzing/concurrency
-    pass, Track 3, 2026-09-04). Two independent AuditChain +
-    JsonFileAuditStorageAdapter pairs -- standing in for two separate
-    real OS processes, e.g. the CLI invoked twice concurrently against
-    the same --chain-path, or the CLI and a running voice loop both
-    targeting the same file -- both load() the same starting chain,
-    both append() their own new decision, then save() in sequence.
-    save() itself now writes atomically (WP-101, 2026-09-08, temp-file-
-    then-``Path.replace``) -- neither individual save() call can leave
-    a torn/partial file. That is a different property from this test:
-    atomicity guarantees each *individual* replace is all-or-nothing,
-    it does nothing to arbitrate *between* two replaces racing for the
-    same destination path. The second save() still completely replaces
-    the first's whole, valid file with its own whole, valid file -- the
-    first writer's own new record is not merged, not detected as a
-    conflict, and not present anywhere in the final file. verify() on
-    the final loaded chain still reports valid=True:
-    the surviving chain is internally coherent, so this loss is
-    invisible to the one integrity check this codebase already has.
+    pass, Track 3, 2026-09-04) originally found and confirmed this real
+    race: two independent AuditChain + JsonFileAuditStorageAdapter
+    pairs -- standing in for two separate real OS processes, e.g. the
+    CLI invoked twice concurrently against the same --chain-path, or
+    the CLI and a running `jarvis ui` server both targeting the same
+    file -- each uses its *own* single adapter instance for its own
+    whole load() -> append() -> save() sequence, exactly mirroring how
+    every real `kernel/*.py` composition function uses one
+    `JsonFileAuditStorageAdapter` instance throughout one real call.
+    Both writers load() the same starting chain, both append() their
+    own new decision, then save() in sequence.
 
-    Deliberately NOT fixed here: unlike the in-process AuditChain.append()
-    race this same pass found and fixed with an internal lock, closing
-    this cross-process gap for real would mean changing
-    AuditStoragePort's own save()/load() contract (real file locking,
-    or an append-only file format) -- a genuine architecture decision,
-    not a test-writing fix, and out of this pass's own safe scope
-    (see CLAUDE.md's standing "never silently change the architecture"
-    rule). Recorded here as a real, confirmed, previously-undocumented-
-    as-a-concrete-scenario gap for docs/threat-model/v0.md, not
-    silently patched.
+    **Before WP-115**: the second save() completely replaced the
+    first's whole, valid file with its own whole, valid file -- the
+    first writer's own new record was not merged, not detected as a
+    conflict, and not present anywhere in the final file, even though
+    `verify()` on the survivor still reported `valid=True` (the loss
+    was invisible to the one integrity check this codebase had).
+
+    **After WP-115**: the second writer's own `save()` re-reads the
+    file's real, current state under a real, cross-process lock,
+    finds the first writer's own record already there, and correctly
+    rebases its own new record *after* it -- both records end up in
+    the final, valid chain; neither is lost.
     """
     path = tmp_path / "audit.json"
 
     starting_chain = _build_varied_chain()
     JsonFileAuditStorageAdapter(path).save(starting_chain)
 
-    first_writer_chain = JsonFileAuditStorageAdapter(path).load()
-    second_writer_chain = JsonFileAuditStorageAdapter(path).load()
+    first_writer = JsonFileAuditStorageAdapter(path)
+    first_writer_chain = first_writer.load()
+    second_writer = JsonFileAuditStorageAdapter(path)
+    second_writer_chain = second_writer.load()
 
     first_new_invocation = CapabilityInvocation(
         _descriptor(Effect.READ_LOCAL, "ping"),
@@ -468,14 +544,17 @@ def test_two_independent_writers_racing_on_the_same_file_silently_lose_one_write
         evaluate(second_new_invocation, _NO_CONFIRMATION), written_at="2026-09-07T00:00:00+00:00"
     )
 
-    JsonFileAuditStorageAdapter(path).save(first_writer_chain)
-    JsonFileAuditStorageAdapter(path).save(second_writer_chain)
+    first_writer.save(first_writer_chain)
+    second_writer.save(second_writer_chain)
 
     final_chain = JsonFileAuditStorageAdapter(path).load()
     final_capability_ids = {
         record.decision.invocation.descriptor.id.value for record in final_chain
     }
 
+    assert first_new_record.decision.invocation.descriptor.id.value in final_capability_ids
     assert second_new_record.decision.invocation.descriptor.id.value in final_capability_ids
-    assert first_new_record.decision.invocation.descriptor.id.value not in final_capability_ids
+    assert len(final_chain) == _VARIED_CHAIN_LENGTH + 2
+    assert final_chain.verify().valid is True
+    assert [record.sequence for record in final_chain] == list(range(_VARIED_CHAIN_LENGTH + 2))
     assert final_chain.verify().valid is True
