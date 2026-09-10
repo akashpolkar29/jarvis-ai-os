@@ -55,10 +55,13 @@ no new router and no new authorization path; and a real, minimal,
 in-process task-event model plus EventBus (item 21, 2026-09-10,
 WP-111), turning real task-lifecycle transitions into real,
 observable events without EventBus ever owning state, executing a
-capability, or touching the audit chain. All items 1-4 and 6-21
-below are resolved, decided, or built; only item 5 (one of the
-audit chain's four real structural gaps -- the cross-process race)
-remains genuinely open.
+capability, or touching the audit chain; and a real task-execution
+trigger from the UI (item 22, 2026-09-10, WP-112), a "Run" button
+reusing `authorize_and_run_task` completely unmodified, never
+automatic, with the real goal looked up server-side rather than
+trusted from the client. All items 1-4 and 6-22 below are resolved,
+decided, or built; only item 5 (one of the audit chain's four real
+structural gaps -- the cross-process race) remains genuinely open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -883,6 +886,61 @@ maintained on `domain/events.py`, `kernel/router.py`, and
 checked directly before starting -- WP-111 was genuinely the next
 available number, no collision this time. See
 `docs/architecture/wp111-task-events.md` for the full design.
+
+## 22. ~~Task-execution trigger from the UI~~ -- RESOLVED/BUILT 2026-09-10
+
+**Resolved/built, WP-112, a real, direct user decision**. Closes the
+real gap WP-111 left open: `kernel.router.authorize_and_route`'s own
+`COMPLEX_GOAL` handling only ever creates a task, never runs one, so
+there was no way, from `jarvis ui` alone, to make a created task
+actually execute.
+
+**One new endpoint, zero new authorization logic**: `POST /api/tasks/<task_id>/run`
+reuses `kernel.tasks.authorize_and_run_task` completely unmodified --
+the exact same function `jarvis task run` already calls, the exact
+same outer gates and per-step authorization (ADR-0062), unchanged.
+The real, current goal is looked up server-side via
+`authorize_and_get_task` first -- the browser never supplies its own
+copy, so it cannot request a real plan run for a different goal than
+the one the task was actually created for.
+
+**Never automatic**: task creation and task running remain two real,
+separately-triggered actions -- a `COMPLEX_GOAL` route still only ever
+creates a task; running one requires a second, explicit HTTP request
+the frontend only sends on a real user click of a real "Run" button,
+mirroring `jarvis task create`/`jarvis task run`'s own established
+two-verb separation (WP-107).
+
+**A real, pre-existing limitation found while building this, not
+introduced by it, confirmed directly**: `authorize_and_run_task` only
+catches `(PlanningError, PlanValidationError)` -- a real, uncaught
+exception from *within* a plan step's own execution (e.g.
+`PathOutsideAllowedScopeError`) leaves the task's own stored status at
+`"running"` permanently. `jarvis task run` (the CLI) has the identical
+property today; not fixed here, since `authorize_and_run_task` was
+deliberately not modified -- a genuine, separate architectural
+decision, not a drive-by fix. Live-verified directly: a real task run
+three times against a real hallucinated out-of-scope path was left at
+`"running"` each time, each attempt still cleanly reported as a `400`
+to the caller (the endpoint's own exception handling works correctly;
+the underlying kernel function's own status bookkeeping is the real,
+separate gap).
+
+**Frontend "Run" button, disabled after use**: on a granted response
+it shows `"Started"` and stays disabled (preventing an easy,
+accidental duplicate run, since re-running is not unsafe -- every step
+is still individually authorized -- just confusing/wasteful); on any
+real failure it re-enables so the user can retry. No progress is
+fabricated.
+
+New endpoint: `POST /api/tasks/<task_id>/run` (`jarvis.cli.ui_server`).
+No new `CapabilityId`/`Effect`/`Tier`, no ADR. 100% coverage maintained
+on `cli/ui_server.py`; 6 new backend tests plus real, live frontend
+verification (button click -> real POST -> real response -> real DOM
+update, both success and failure paths). Roadmap numbering checked
+directly first -- WP-112 was genuinely the next available number. See
+`docs/architecture/wp112-task-execution-trigger.md` for the full
+account.
 
 ## Maintaining this index
 

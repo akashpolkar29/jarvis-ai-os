@@ -37,6 +37,14 @@ replacement for either.
   authorization both explicitly untouched -- events observe state,
   they do not own or authorize anything. See
   `docs/architecture/wp111-task-events.md`.
+- WP-112: a real task-execution trigger from the UI --
+  `POST /api/tasks/<task_id>/run` reuses `kernel.tasks.authorize_and_run_task`
+  completely unmodified (same outer gates, same per-step
+  authorization, ADR-0062, unchanged). Never automatic -- task
+  creation and running remain two separate, explicitly-triggered
+  actions. The real, current goal is looked up server-side, never
+  trusted from the client. See
+  `docs/architecture/wp112-task-execution-trigger.md`.
 
 ### Fixed
 

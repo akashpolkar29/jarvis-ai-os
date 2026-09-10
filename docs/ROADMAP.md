@@ -319,6 +319,22 @@ it.
   anything. Roadmap numbering checked directly first; WP-111 was
   genuinely free. See `docs/architecture/wp111-task-events.md` and
   `docs/OPEN_DECISIONS.md` item 21.
+  **Updated 2026-09-10 (WP-112)**: a real task-execution trigger from
+  the UI — `POST /api/tasks/<task_id>/run` reuses
+  `kernel.tasks.authorize_and_run_task` completely unmodified (the
+  exact same function `jarvis task run` already calls, the exact same
+  outer gates and per-step authorization, ADR-0062, unchanged). Never
+  automatic — task creation and running remain two separate,
+  explicitly-triggered actions, mirroring `jarvis task create`/
+  `jarvis task run`'s own two-verb separation. The real, current goal
+  is looked up server-side, never trusted from the client. A real,
+  pre-existing limitation found (not introduced): `authorize_and_run_task`
+  only catches `PlanningError`/`PlanValidationError` — an uncaught
+  exception from within a plan step's own execution leaves a task
+  stuck at `"running"` forever, identically to `jarvis task run`
+  today; not fixed here, a genuine separate decision. See
+  `docs/architecture/wp112-task-execution-trigger.md` and
+  `docs/OPEN_DECISIONS.md` item 22.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
