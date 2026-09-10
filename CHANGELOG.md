@@ -45,6 +45,18 @@ replacement for either.
   actions. The real, current goal is looked up server-side, never
   trusted from the client. See
   `docs/architecture/wp112-task-execution-trigger.md`.
+- WP-114: expanded the conversational execution surface -- `fs.find`/
+  `fs.search_content`/`fs.recent` (already had voice/typed grammar,
+  never wired into the router's own execution boundary) now actually
+  execute through `jarvis do`/`jarvis ui`. `communications.list_email`/
+  `read_email`/`list_calendar_events` gained real, typed-router-only
+  grammar (e.g. "list emails", "read email <id>", "what's on my
+  calendar today/tomorrow/this week") plus a real, direct dispatch
+  inside `authorize_and_route`, gated on `jarvis ui`'s seven new,
+  optional `--email-*`/`--calendar-*` connection flags. No new
+  `CapabilityId`/`Effect`/`Tier`; `communications.send_email`/
+  `create_calendar_event` remain untouched, still `Tier.MANUAL_ONLY`.
+  See `docs/architecture/wp114-conversational-execution-surface.md`.
 
 ### Fixed
 

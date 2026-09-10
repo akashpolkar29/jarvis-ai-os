@@ -64,10 +64,17 @@ item 22 itself named (item 23, 2026-09-10, WP-113), widening both real
 callers of `authorize_and_run_plan` to a deliberate, documented
 `except Exception` so a plan step's own real execution exception
 always lands the task/project record at `"failed"` instead of leaving
-it stuck (or, for `project.py`, leaving no record at all). All items
-1-4 and 6-23 below are resolved, decided, or built; only item 5 (one
-of the audit chain's four real structural gaps -- the cross-process
-race) remains genuinely open.
+it stuck (or, for `project.py`, leaving no record at all); and a real
+expansion of the conversational execution surface (item 24,
+2026-09-10, WP-114) -- `fs.find`/`fs.search_content`/`fs.recent` wired
+into the router's own execution boundary, and `communications.list_email`/
+`read_email`/`list_calendar_events` given real, typed-router-only
+grammar plus a real, direct `await` dispatch (the three are `async`,
+`PLAN_STEP_EXECUTORS` is sync-only), gated on `jarvis ui`'s own new,
+optional email/calendar connection flags. All items 1-4 and 6-24 below
+are resolved, decided, or built; only item 5 (one of the audit chain's
+four real structural gaps -- the cross-process race) remains genuinely
+open.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1003,6 +1010,69 @@ one `WP-124` reference in `CLAUDE.md` is a proposed implementation-order
 range from an unbuilt UI-architecture artifact, not a real, built work
 package). See `docs/architecture/wp113-task-stuck-at-running-fix.md`
 for the full account.
+
+## 24. ~~Expanding the conversational execution surface~~ -- RESOLVED/BUILT 2026-09-10
+
+**Resolved/built, WP-114**. Closes a real gap a repository audit
+found: `fs.find`/`fs.search_content`/`fs.recent` already had
+voice/typed grammar (`kernel/intent.py`) but were never wired into
+`kernel.capability_dispatch.PLAN_STEP_EXECUTORS`, the router's own real
+execution boundary -- typing "find files *.py" was *recognized* but
+never *run*. `communications.list_email`/`read_email`/
+`list_calendar_events` had no grammar at all.
+
+**The fix**: the three `fs.*` capabilities were added to
+`PLAN_STEP_EXECUTORS` directly (no port needed, real safe defaults).
+The three `communications.*` reads needed a different mechanism: their
+own `authorize_and_*` functions are `async def`, but `PlanStepExecutor`
+is sync-only -- wrapping the async call in `asyncio.run()` inside a
+sync executor raises `RuntimeError` from inside
+`authorize_and_route`'s own already-running event loop (confirmed by a
+real failing test before fixing). `kernel.router.authorize_and_route`
+now `await`s these three directly, in three new branches, only when
+the matching `email_port`/`calendar_port` was supplied to that
+specific call.
+
+**New grammar lives in `kernel.router`, deliberately not in the shared
+`kernel.intent.resolve_intent()`** -- two real, independent reasons:
+(1) these three capabilities need a real, pre-configured port with no
+safe default, and `kernel.voice_loop`'s own dispatch has no branch for
+them, ending in an unguarded dict lookup that would `KeyError` for a
+newly-resolvable voice phrase -- a real regression this work package's
+hard boundary (no voice changes) forbids introducing; (2) calendar
+"today"/"tomorrow"/"this week" needs a `ClockPort`, and
+`resolve_intent()` is deliberately pure/clockless. Confined entirely to
+`kernel.router` (never imported by `kernel.voice_loop`), so this
+structurally cannot affect voice.
+
+**A real collision found and fixed during implementation**:
+`resolve_intent()`'s own pre-existing `"read <path>"` command happily
+(mis)resolved `"read email <id>"` to `fs.read_file` with
+`path="email <id>"`. Fixed by checking the new grammar *before*
+`resolve_intent()`, not as an `UnrecognizedIntent` fallback -- proven
+by a dedicated regression test that an ordinary `"read notes.txt"`
+still resolves correctly.
+
+`jarvis ui` gained seven new, entirely optional flags
+(`--email-imap-host`/`--email-smtp-host`/`--email-username`/
+`--email-password-reference`, `--calendar-caldav-url`/
+`--calendar-username`/`--calendar-password-reference`) mirroring
+`jarvis email list`/`jarvis calendar list-events`'s own existing flag
+names exactly -- all-or-nothing per port, no credentials committed
+anywhere, the existing keyring-reference mechanism reused unmodified.
+Omitting them behaves byte-for-byte as before.
+
+No new `CapabilityId`/`Effect`/`Tier`, no ADR, no second router, no
+direct UI-to-capability path. `communications.send_email`/
+`create_calendar_event` (the two write capabilities) are completely
+untouched -- still dynamic-effect, never registered, never in any
+executor table, still `Tier.MANUAL_ONLY` (ADR-0059). The frontend
+(`index.html`) needed zero changes -- it already renders `"response"`/
+`"unwired_capability"` generically. Roadmap numbering checked directly
+first -- WP-114 was genuinely the next available number. See
+`docs/architecture/wp114-conversational-execution-surface.md` for the
+full account, including the real inspection table (which capabilities
+already had what) and every named limitation.
 
 ## Maintaining this index
 

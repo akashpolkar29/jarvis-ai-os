@@ -27,6 +27,25 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
+**Updated 2026-09-10 (WP-114, expanding the conversational execution
+surface) — no new subcommand (still 58); `jarvis ui` gained seven new,
+entirely optional flags** (`--email-imap-host`/`--email-smtp-host`/
+`--email-username`/`--email-password-reference`, `--calendar-caldav-url`/
+`--calendar-username`/`--calendar-password-reference`), mirroring
+`jarvis email list`/`jarvis calendar list-events`'s own existing flag
+names exactly. `do "<text>"`/`jarvis ui`'s own `authorize_and_route`
+now also directly `await`s `communications.list_email`/`read_email`/
+`list_calendar_events` (each `Effect.EGRESS_LOCAL`/`Tier.ALLOW`) when
+the matching port was supplied -- a real, separate dispatch path from
+`PLAN_STEP_EXECUTORS`, since those three capabilities' own
+`authorize_and_*` functions are `async` while `PLAN_STEP_EXECUTORS`'s
+own `PlanStepExecutor` contract is sync-only. `PLAN_STEP_EXECUTORS`
+itself also grew from four to seven entries, adding `fs.find`/
+`fs.search_content`/`fs.recent` (already had `do`-reachable grammar via
+`kernel/intent.py`, never previously wired for execution). See
+`docs/architecture/wp114-conversational-execution-surface.md` and
+`docs/OPEN_DECISIONS.md` item 24 for the full account.
+
 **Updated 2026-09-09 (WP-108, a real, minimal local web UI) — this
 table now covers 58 real subcommands, adding `ui` (`jarvis.cli.ui_server`
 — no capability of its own, mirroring `listen`/`doctor`'s own existing
@@ -48,13 +67,16 @@ and unduplicated, and only falls back to a real `ReasoningPort`
 provider when that match fails). `do` never executes a capability
 directly as a structural property, not just a policy one: a
 recognized, resolvable command is only ever actually run if its
-capability id is one of the (currently four) entries already wired in
-`kernel/capability_dispatch.py`'s own `PLAN_STEP_EXECUTORS` table — a
-real, registered capability the reasoning fallback names but that has
-no wired executor (e.g. `git.force_push`) is reported back, never
+capability id is one of the (originally four, now seven as of WP-114)
+entries already wired in `kernel/capability_dispatch.py`'s own
+`PLAN_STEP_EXECUTORS` table, or (WP-114) one of the three
+`communications.*` reads `kernel.router` directly `await`s when its
+matching port is configured — a real, registered capability the
+reasoning fallback names but that has no wired executor and no
+configured port (e.g. `git.force_push`) is reported back, never
 invoked. A request classified as a real, complex goal instead creates
 (never runs) a new task via WP-107's own `authorize_and_create_task`.
-See `docs/OPEN_DECISIONS.md` item 18 for the full account.
+See `docs/OPEN_DECISIONS.md` items 18 and 24 for the full account.
 
 **Updated 2026-09-09 (WP-107, a real, persistent Task/TaskStore) — this
 table previously covered 56 real subcommands, adding `task create`/`task
@@ -187,7 +209,7 @@ not to duplicate the policy engine's own reasoning.
 | `task run <task-id> <goal>` | `planning.run_plan` (reused unmodified, no new capability — updates the task's own status in place via `memory.update`, WP-107) | `task-id`, `goal` (must match the id/goal from a prior `task create`) |
 | `task status <task-id>` | `memory.get` (WP-107 — a real, exact, O(1)-by-identifier lookup, not an approximate query) | `task-id` |
 | `task list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, one of `created`/`running`/`waiting_approval`/`completed`/`failed`/`cancelled`) |
-| `do "<text>"` | Deterministic: whichever real capability `resolve_intent()` resolves to and is wired in `PLAN_STEP_EXECUTORS` (currently `fs.read_file`/`fs.list_dir`/`git.status`/`memory.retrieve`, all `Tier.ALLOW`). Complex-goal: `memory.write` (via `authorize_and_create_task`, same as `task create`). A recognized-but-unwired or ambiguous/unknown request authorizes nothing at all (WP-104) | `text` |
+| `do "<text>"` | Deterministic, via `PLAN_STEP_EXECUTORS`: `fs.read_file`/`fs.list_dir`/`git.status`/`memory.retrieve`/`fs.find`/`fs.search_content`/`fs.recent`, all `Tier.ALLOW`. Deterministic, via a real, direct `await` (WP-114, only when `email_port`/`calendar_port` is configured -- never for bare `jarvis do`, which has no flag to supply either): `communications.list_email`/`read_email`/`list_calendar_events`, all `Tier.ALLOW`. Complex-goal: `memory.write` (via `authorize_and_create_task`, same as `task create`). A recognized-but-unwired/unconfigured or ambiguous/unknown request authorizes nothing at all (WP-104) | `text` |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `calendar list-events` | `communications.list_calendar_events` | `--start`, `--end` (both required, ISO-8601), `--caldav-url`, `--username`, `--password-reference` |
@@ -202,7 +224,7 @@ not to duplicate the policy engine's own reasoning.
 | `fs recent` | `fs.recent` | `--limit` (default 20) |
 | `listen` | (runs the voice loop continuously; no single capability) | `--verbose` |
 | `doctor` | *(no capability -- not authorized, no audit record; see `docs/architecture/jarvis-doctor.md`)* | none |
-| `ui` | (serves the UI foundation continuously; no single capability of its own -- every real `POST /api/command` request reaches `authorize_and_route`, the same as `do`; `GET /api/tasks/<task_id>`, WP-111, reaches `memory.get` via `authorize_and_get_task`, a real, authoritative status read; `POST /api/tasks/<task_id>/run`, WP-112, reaches `authorize_and_run_task` -- the exact same function `task run` below calls, same outer gates and per-step authorization -- none of these are a capability invocation the CLI table below itself covers, but all reach the same real choke point) | `--port` (default 8765), `--physical-confirmation-available`/`--remote-confirmation-available` (applied uniformly to every request for the server's lifetime, not per-request) |
+| `ui` | (serves the UI foundation continuously; no single capability of its own -- every real `POST /api/command` request reaches `authorize_and_route`, the same as `do`; `GET /api/tasks/<task_id>`, WP-111, reaches `memory.get` via `authorize_and_get_task`, a real, authoritative status read; `POST /api/tasks/<task_id>/run`, WP-112, reaches `authorize_and_run_task` -- the exact same function `task run` below calls, same outer gates and per-step authorization -- none of these are a capability invocation the CLI table below itself covers, but all reach the same real choke point) | `--port` (default 8765), `--physical-confirmation-available`/`--remote-confirmation-available` (applied uniformly to every request for the server's lifetime, not per-request), and (WP-114) seven new, optional `--email-*`/`--calendar-*` connection flags -- `jarvis ui` is the only CLI entry point that can configure `authorize_and_route`'s `email_port`/`calendar_port` at all; `do "<text>"` has no equivalent flags and can never execute `communications.list_email`/`read_email`/`list_calendar_events`, only recognize them |
 
 **Two real, deliberate naming inconsistencies, not yet resolved** (see
 `docs/architecture/plugin-architecture-and-cli-ux-audit-phase8.md` for

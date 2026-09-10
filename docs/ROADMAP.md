@@ -353,6 +353,32 @@ it.
   error-handling correctness fix. See
   `docs/architecture/wp113-task-stuck-at-running-fix.md` and
   `docs/OPEN_DECISIONS.md` item 23.
+  **Updated 2026-09-10 (WP-114)**: a real expansion of the
+  conversational execution surface — `fs.find`/`fs.search_content`/
+  `fs.recent` (already had voice/typed grammar, never wired into
+  `PLAN_STEP_EXECUTORS`, the router's own execution boundary) now
+  actually execute when typed through `jarvis do`/`jarvis ui`.
+  `communications.list_email`/`read_email`/`list_calendar_events`
+  gained real, typed-router-only grammar (deliberately not added to
+  the shared `kernel.intent.resolve_intent()` — they need a
+  pre-configured port `resolve_intent()` has no way to supply, and
+  `kernel.voice_loop`'s own dispatch would `KeyError` on them) plus a
+  real, direct `await` dispatch inside `authorize_and_route` itself
+  (their own `authorize_and_*` functions are `async`, while
+  `PLAN_STEP_EXECUTORS` is sync-only — a real `RuntimeError` from
+  `asyncio.run()`-inside-a-running-loop was caught and fixed during
+  implementation, not assumed safe). Gated entirely on `jarvis ui`'s
+  own new, optional `--email-*`/`--calendar-*` connection flags —
+  omitting them behaves byte-for-byte as before. A real collision
+  between the new "read email <id>" grammar and `resolve_intent()`'s
+  own pre-existing "read <path>" command was found and fixed (checked
+  first, not as an `UnrecognizedIntent` fallback). No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR, no second router, no direct
+  UI-to-capability path; `communications.send_email`/
+  `create_calendar_event` remain completely untouched, still
+  `Tier.MANUAL_ONLY` (ADR-0059). See
+  `docs/architecture/wp114-conversational-execution-surface.md` and
+  `docs/OPEN_DECISIONS.md` item 24.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
