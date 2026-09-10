@@ -28,6 +28,15 @@ replacement for either.
   (task-created, authorization-required, plain response) and a
   small, additive `task_status` field. See
   `docs/architecture/wp110-ui-conversation.md`.
+- WP-111: real task progress + event infrastructure -- a minimal,
+  in-process event model (`jarvis.domain.events`) plus a synchronous
+  `EventBus`, wired into `kernel.tasks`'s two real state-change
+  points. `GET /api/tasks/<task_id>` (polling, not SSE/WebSockets --
+  the UI server is deliberately single-threaded) lets the browser
+  recover real task status after a disconnect. Audit chain and
+  authorization both explicitly untouched -- events observe state,
+  they do not own or authorize anything. See
+  `docs/architecture/wp111-task-events.md`.
 
 ### Fixed
 

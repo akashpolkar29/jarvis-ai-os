@@ -51,7 +51,11 @@ follow-up turning that UI into a genuinely reliable typed conversation
 (item 20, 2026-09-09, WP-110 — renumbered from the originating
 prompt's own "WP-109," which a different, real, already-merged work
 package already owns), fixing one real message-ordering hazard with
-no new router and no new authorization path. All items 1-4 and 6-20
+no new router and no new authorization path; and a real, minimal,
+in-process task-event model plus EventBus (item 21, 2026-09-10,
+WP-111), turning real task-lifecycle transitions into real,
+observable events without EventBus ever owning state, executing a
+capability, or touching the audit chain. All items 1-4 and 6-21
 below are resolved, decided, or built; only item 5 (one of the
 audit chain's four real structural gaps -- the cross-process race)
 remains genuinely open.
@@ -819,6 +823,66 @@ code with no automated coverage (`ui/confirm/dialog.py`'s own "needs a
 real display" note), stated plainly as a real, standing gap.
 
 See `docs/architecture/wp110-ui-conversation.md` for the full account.
+
+## 21. ~~Task progress + event infrastructure~~ -- RESOLVED/BUILT 2026-09-10
+
+**Resolved/built, WP-111, a real, direct user decision**. A real,
+minimal, in-process event model (`jarvis.domain.events`:
+`TaskCreated`/`TaskStatusChanged`, deliberately two types, not five --
+see that module's own docstring for why) plus a synchronous,
+deterministic `EventBus` (subscribe/publish/unsubscribe, no
+concurrency, no lock -- a considered choice, not an oversight, since
+no real concurrent caller exists anywhere in this codebase today).
+
+**Events are derived from real state changes, never fabricated**:
+`kernel.tasks.write_task_record`/`update_task_status` -- the two, and
+only two, real places stored task state ever changes -- publish their
+own event only after the underlying write/update was actually
+granted. Proven directly against the real `authorize_and_create_task`/
+`authorize_and_run_task` call chain, never a fake `Task` object.
+
+**Subscriber-failure semantics, a real, explicit decision**: a
+subscriber that raises is logged (never silently swallowed) but never
+propagates to the publisher and never blocks other subscribers -- the
+real state change an event describes already happened and is
+unaffected by a subscriber's own bug.
+
+**UI delivery is polling, not SSE, for a structural reason**:
+`jarvis.cli.ui_server`'s own `HTTPServer` is deliberately
+single-threaded (WP-108) -- a long-lived SSE connection would block
+that one thread from handling any other request. `GET /api/tasks/<task_id>`
+instead re-reads the real, authoritative task store directly per call
+(no `EventBus` involvement), which also solves browser reconnection
+for free: a refreshed browser gets the same real, current answer
+back regardless of what it missed.
+
+**A real, honest, stated limitation**: `kernel.router.authorize_and_route`
+never runs a task (a `COMPLEX_GOAL` route creates, never runs -- WP-104's
+own unchanged design), so no real `TaskStatusChanged` event can ever
+originate from the router itself today -- only a separate
+`jarvis task run` invocation (a different process) can produce one.
+The status-recovery endpoint is unaffected by this, since it reads
+the real, shared task store, not this server's own in-process event
+history.
+
+**Audit chain, authorization, and job-submission boundaries all
+explicitly untouched**: no event is ever written to the audit chain
+and no audit record is ever derived from one; `EventBus.publish()`
+structurally cannot execute a capability, grant authorization, approve
+a task, or change a `Tier`; ADR-0058/ADR-0062 were not modified.
+
+New file: `src/jarvis/domain/events.py`. New endpoint:
+`GET /api/tasks/<task_id>` (`jarvis.cli.ui_server`). `event_bus` is a
+new, optional, default-`None` parameter on
+`write_task_record`/`update_task_status`/`authorize_and_create_task`/
+`authorize_and_run_task`/`authorize_and_route` -- every existing caller
+that never passes one behaves byte-for-byte as before, proven
+directly. No new `CapabilityId`/`Effect`/`Tier`, no ADR. 100% coverage
+maintained on `domain/events.py`, `kernel/router.py`, and
+`cli/ui_server.py`; 29 new tests across three files. Roadmap numbering
+checked directly before starting -- WP-111 was genuinely the next
+available number, no collision this time. See
+`docs/architecture/wp111-task-events.md` for the full design.
 
 ## Maintaining this index
 

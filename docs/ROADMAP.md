@@ -303,6 +303,22 @@ it.
   already-merged work package (item 17) — to WP-110, the next real,
   available number. See `docs/architecture/wp110-ui-conversation.md`
   and `docs/OPEN_DECISIONS.md` item 20.
+  **Updated 2026-09-10 (WP-111)**: real task progress + event
+  infrastructure — a minimal, in-process event model
+  (`jarvis.domain.events`: `TaskCreated`/`TaskStatusChanged`) plus a
+  synchronous, deterministic `EventBus`, wired into
+  `kernel.tasks`'s own two real state-change points
+  (`write_task_record`/`update_task_status`) and into
+  `kernel.router.authorize_and_route`. UI delivery is polling
+  (`GET /api/tasks/<task_id>`), not SSE/WebSockets — a structural
+  choice, since `jarvis.cli.ui_server`'s own single-threaded
+  `HTTPServer` (WP-108) cannot hold a long-lived streaming connection
+  open without blocking every other request. The audit chain,
+  authorization kernel, and ADR-0058/ADR-0062 are all explicitly
+  untouched — events observe state, they do not own or authorize
+  anything. Roadmap numbering checked directly first; WP-111 was
+  genuinely free. See `docs/architecture/wp111-task-events.md` and
+  `docs/OPEN_DECISIONS.md` item 21.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
