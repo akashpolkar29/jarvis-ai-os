@@ -195,6 +195,42 @@
     return parts.join(" · ");
   }
 
+  var TERMINAL_TASK_STATUSES = ["completed", "failed", "cancelled"];
+  var TASK_POLL_INTERVAL_MS = 2000;
+  var TASK_POLL_MAX_ATTEMPTS = 60; // ~2 minutes total -- a real, bounded ceiling, not forever.
+
+  // Polls GET /api/tasks/<id> -- the real, authoritative task-store read
+  // (jarvis.kernel.tasks.authorize_and_get_task) -- and appends one new,
+  // real message each time the task's own real status actually changes.
+  // Never fabricates progress: a status that hasn't changed since the last
+  // poll produces no new message at all. Stops on a real terminal status,
+  // a real fetch failure, or after TASK_POLL_MAX_ATTEMPTS -- whichever
+  // comes first.
+  function pollTaskStatus(taskId, lastKnownStatus, attemptsLeft) {
+    if (attemptsLeft <= 0) { return; }
+    setTimeout(function () {
+      fetch("/api/tasks/" + encodeURIComponent(taskId))
+        .then(function (response) {
+          if (!response.ok) { return null; }
+          return response.json();
+        })
+        .then(function (data) {
+          if (!data) { return; }
+          if (data.status && data.status !== lastKnownStatus) {
+            addMessage("task", "Task " + taskId, "Status: " + data.status, null);
+            lastKnownStatus = data.status;
+          }
+          if (TERMINAL_TASK_STATUSES.indexOf(lastKnownStatus) !== -1) { return; }
+          pollTaskStatus(taskId, lastKnownStatus, attemptsLeft - 1);
+        })
+        .catch(function () {
+          // A real, transient network failure -- stop polling quietly rather than
+          // spamming the conversation with repeated error bubbles for a side effect
+          // of a background status check the user never directly asked for.
+        });
+    }, TASK_POLL_INTERVAL_MS);
+  }
+
   // Renders one real backend response, distinguishing every real `type` the
   // API can return (see jarvis.cli.ui_server.build_response_payload) rather
   // than lumping every non-error response into one generic bubble.
@@ -205,8 +241,12 @@
       return;
     }
     if (data.type === "task_created") {
-      var body = "Task ID: " + data.task_id + "\nStatus: " + (data.task_status || "created");
+      var status = data.task_status || "created";
+      var body = "Task ID: " + data.task_id + "\nStatus: " + status;
       addMessage("task", "Task created", body, metaFor(data));
+      if (data.task_id) {
+        pollTaskStatus(data.task_id, status, TASK_POLL_MAX_ATTEMPTS);
+      }
       return;
     }
     if (data.type === "denied") {

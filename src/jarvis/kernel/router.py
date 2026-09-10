@@ -79,6 +79,15 @@ real `RouteResult` exists:
 `RouteKind.UNKNOWN` (from either stage) never reaches any of the
 above -- :func:`authorize_and_route` returns a `RouteOutcome` with no
 `decision` at all in that case, since nothing was authorized.
+
+**WP-111 (2026-09-10)**: an optional `event_bus` parameter is passed
+straight through, unmodified, to `authorize_and_create_task` -- a real
+`TaskCreated` event (`jarvis.domain.events`) is published the moment a
+`COMPLEX_GOAL` route actually creates a task, if a real, shared bus
+was supplied. This router itself never runs a task (see above), so no
+real `TaskStatusChanged` event can ever originate from this function
+today -- only `kernel.tasks.authorize_and_run_task` (a separate,
+explicit call, e.g. `jarvis task run`) can produce one.
 """
 
 from __future__ import annotations
@@ -99,6 +108,7 @@ from jarvis.kernel.tasks import authorize_and_create_task
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from jarvis.domain.events import EventBus
     from jarvis.domain.policy import Decision
     from jarvis.ports.clock import ClockPort
     from jarvis.ports.embedding import EmbeddingPort
@@ -257,6 +267,7 @@ async def authorize_and_route(  # noqa: PLR0913 -- one per composition-function 
     embedding_port: EmbeddingPort | None = None,
     clock: ClockPort | None = None,
     id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
 ) -> RouteOutcome:
     """Route `text` (Stage A, then Stage B if needed), then act only within the real boundary.
 
@@ -331,6 +342,7 @@ async def authorize_and_route(  # noqa: PLR0913 -- one per composition-function 
             embedding_port=embedding_port,
             clock=clock,
             id_port=id_port,
+            event_bus=event_bus,
         )
         return RouteOutcome(
             route=route,

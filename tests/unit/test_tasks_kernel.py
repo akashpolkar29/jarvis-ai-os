@@ -21,6 +21,7 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 
 _NOW = datetime(2026, 9, 9, tzinfo=UTC)
 _ALL_TASKS_COUNT = 2
+_EXPECTED_TRANSITION_COUNT = 2
 
 
 class _FakeEmbeddingPort:
@@ -82,13 +84,14 @@ class _FakeReasoningProvider:
         return Tainted(candidate, Provenance.system())
 
 
-def _create(
+def _create(  # noqa: PLR0913 -- one per fake-fixture pass-through
     tmp_path: Path,
     goal: str,
     *,
     physical_confirmation_available: bool = True,
     remote_confirmation_available: bool = False,
     id_port: _SequentialIdPort | None = None,
+    event_bus: EventBus | None = None,
 ) -> TaskCreateOutcome:
     return authorize_and_create_task(
         goal,
@@ -99,6 +102,7 @@ def _create(
         embedding_port=_FakeEmbeddingPort(),
         clock=_FakeClock(),
         id_port=id_port or _SequentialIdPort(),
+        event_bus=event_bus,
     )
 
 
@@ -123,6 +127,7 @@ async def _run(  # noqa: PLR0913 -- one per fake-fixture pass-through
     *,
     physical_confirmation_available: bool = True,
     remote_confirmation_available: bool = False,
+    event_bus: EventBus | None = None,
 ) -> TaskRunOutcome:
     return await authorize_and_run_task(
         task_id,
@@ -135,6 +140,7 @@ async def _run(  # noqa: PLR0913 -- one per fake-fixture pass-through
         embedding_port=_FakeEmbeddingPort(),
         clock=_FakeClock(),
         id_port=_SequentialIdPort(),
+        event_bus=event_bus,
     )
 
 
@@ -343,3 +349,130 @@ def test_valid_task_statuses_are_exactly_the_documented_six() -> None:
         "failed",
         "cancelled",
     )
+
+
+# ---------------------------------------------------------------------------
+# WP-111: real task lifecycle transitions emit real events, proven against
+# the real authorize_and_create_task/authorize_and_run_task call chain --
+# never a fake, hand-constructed Task object standing in for the real thing.
+# ---------------------------------------------------------------------------
+
+
+def test_a_granted_task_creation_publishes_a_real_task_created_event(tmp_path: Path) -> None:
+    bus = EventBus()
+    received: list[TaskCreated] = []
+    bus.subscribe(TaskCreated, received.append)
+
+    outcome = _create(tmp_path, "build a thing", event_bus=bus)
+
+    assert outcome.task_id is not None
+    assert len(received) == 1
+    event = received[0]
+    assert event.task_id == outcome.task_id
+    assert event.goal == "build a thing"
+    assert event.status == "created"
+    assert event.timestamp == _NOW.isoformat()
+
+
+def test_a_denied_task_creation_publishes_no_event_at_all(tmp_path: Path) -> None:
+    """No real state change happened -- there must be nothing for an event to describe."""
+    bus = EventBus()
+    received: list[TaskCreated] = []
+    bus.subscribe(TaskCreated, received.append)
+
+    outcome = _create(
+        tmp_path, "build a thing", physical_confirmation_available=False, event_bus=bus
+    )
+
+    assert outcome.task_id is None
+    assert received == []
+
+
+async def test_running_a_task_to_completion_publishes_real_status_changed_events_in_order(
+    tmp_path: Path,
+) -> None:
+    """A real authorize_and_run_task call on a zero-step plan: created -> running -> completed."""
+    bus = EventBus()
+    created_events: list[TaskCreated] = []
+    changed_events: list[TaskStatusChanged] = []
+    bus.subscribe(TaskCreated, created_events.append)
+    bus.subscribe(TaskStatusChanged, changed_events.append)
+
+    create_outcome = _create(tmp_path, "a trivial goal", event_bus=bus)
+    assert create_outcome.task_id is not None
+
+    run_outcome = await _run(
+        tmp_path, create_outcome.task_id, "a trivial goal", "[]", event_bus=bus
+    )
+
+    assert run_outcome.status == "completed"
+    assert len(created_events) == 1
+    assert created_events[0].status == "created"
+    # Exactly two real transitions for a zero-step plan: created -> running, running -> completed.
+    assert len(changed_events) == _EXPECTED_TRANSITION_COUNT
+    assert changed_events[0].previous_status == "created"
+    assert changed_events[0].new_status == "running"
+    assert changed_events[1].previous_status == "running"
+    assert changed_events[1].new_status == "completed"
+    for event in changed_events:
+        assert event.task_id == create_outcome.task_id
+        assert event.goal == "a trivial goal"
+
+
+async def test_a_malformed_plan_publishes_a_real_failed_status_changed_event(
+    tmp_path: Path,
+) -> None:
+    """A real PlanningError still leaves a real, observable created -> running -> failed trail."""
+    bus = EventBus()
+    changed_events: list[TaskStatusChanged] = []
+    bus.subscribe(TaskStatusChanged, changed_events.append)
+
+    create_outcome = _create(tmp_path, "an impossible goal", event_bus=bus)
+    assert create_outcome.task_id is not None
+
+    with contextlib.suppress(PlanningError):
+        await _run(
+            tmp_path,
+            create_outcome.task_id,
+            "an impossible goal",
+            "not valid json",
+            event_bus=bus,
+        )
+
+    assert len(changed_events) == _EXPECTED_TRANSITION_COUNT
+    assert changed_events[0].new_status == "running"
+    assert changed_events[1].previous_status == "running"
+    assert changed_events[1].new_status == "failed"
+    assert changed_events[1].reason is not None
+    assert "PlanningError" in changed_events[1].reason
+
+
+async def test_a_denied_running_transition_publishes_no_status_changed_event(
+    tmp_path: Path,
+) -> None:
+    """No real state change happened (the task stays "created") -- nothing real to describe."""
+    bus = EventBus()
+    changed_events: list[TaskStatusChanged] = []
+    bus.subscribe(TaskStatusChanged, changed_events.append)
+
+    create_outcome = _create(tmp_path, "a goal nobody confirms", event_bus=bus)
+    assert create_outcome.task_id is not None
+
+    run_outcome = await _run(
+        tmp_path,
+        create_outcome.task_id,
+        "a goal nobody confirms",
+        "[]",
+        physical_confirmation_available=False,
+        event_bus=bus,
+    )
+
+    assert run_outcome.decision.granted is False
+    assert changed_events == []
+
+
+def test_omitting_event_bus_is_a_harmless_no_op_matching_prior_behavior(tmp_path: Path) -> None:
+    """Every existing caller that never passes event_bus behaves exactly as before this change."""
+    outcome = _create(tmp_path, "build a thing")  # no event_bus at all
+
+    assert outcome.task_id is not None  # unchanged, real behavior -- no crash, no new requirement

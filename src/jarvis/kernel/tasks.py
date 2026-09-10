@@ -76,6 +76,25 @@ produces it yet -- ``application/planning/executor.py``'s own
 confirmation today (see ``project.py``'s own, unchanged explanation of
 this exact finding). Likewise ``"cancelled"``: the state exists for a
 future cancel verb this module does not yet implement.
+
+**WP-111 (2026-09-10): real task-lifecycle events.** ``write_task_record``/
+``update_task_status`` -- the two, and only two, real places this
+module's own stored task state ever changes -- each now publish a real
+``jarvis.domain.events.TaskCreated``/``TaskStatusChanged`` event to an
+injected ``EventBus``, but **only after** the underlying write/update
+was actually granted. A denied write never publishes anything -- there
+is no real state change for an event to describe. ``event_bus``
+defaults to ``None``, resolved to a brand-new, empty ``EventBus()`` per
+call exactly like ``clock``/``id_port`` already default -- publishing
+to a bus nobody subscribed to is a real, harmless no-op, so every
+existing caller that does not pass one behaves byte-for-byte as before
+this change. A real, separate ``IdPort``/``ClockPort`` resolution from
+the one the underlying ``authorize_and_remember``/``authorize_and_update``
+call makes internally -- harmless, since generating one extra real,
+independent id/timestamp pair has no real side effect to share or
+duplicate. See ``jarvis.domain.events``'s own module docstring for the
+full reasoning (why exactly two event types, why no lock, why a
+subscriber's own failure never propagates here).
 """
 
 from __future__ import annotations
@@ -84,8 +103,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.clock import SystemClockAdapter
+from jarvis.adapters.identifier import UuidIdAdapter
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
+from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.kernel.memory import authorize_and_get, authorize_and_recall, authorize_and_remember
 from jarvis.kernel.memory import authorize_and_update as _authorize_and_update_memory
 from jarvis.kernel.planning import authorize_and_run_plan
@@ -161,6 +182,7 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
     embedding_port: EmbeddingPort | None,
     clock: ClockPort | None,
     id_port: IdPort | None,
+    event_bus: EventBus | None = None,
 ) -> tuple[Decision, str | None]:
     """Write one real, new task record. Reuses authorize_and_remember unmodified.
 
@@ -170,6 +192,10 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
     ``"kind": "task"`` storage rather than two separate conventions.
     Exported (not a private, underscore-prefixed name) specifically so
     ``project.py`` can call it without reimplementing this logic.
+
+    Publishes a real ``TaskCreated`` to ``event_bus`` -- but only if
+    ``authorize_and_remember`` actually granted the write (see module
+    docstring: no event for a state change that did not happen).
 
     Returns:
         ``(decision, identifier)`` -- ``identifier`` is the new
@@ -195,6 +221,16 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
         clock=resolved_clock,
         id_port=id_port,
     )
+    if write_outcome.decision.granted and write_outcome.identifier is not None:
+        (event_bus or EventBus()).publish(
+            TaskCreated(
+                event_id=(id_port or UuidIdAdapter()).new_id(),
+                task_id=write_outcome.identifier,
+                goal=goal,
+                status=status,
+                timestamp=now,
+            )
+        )
     return write_outcome.decision, write_outcome.identifier
 
 
@@ -211,6 +247,7 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     embedding_port: EmbeddingPort | None,
     clock: ClockPort | None,
     id_port: IdPort | None,
+    event_bus: EventBus | None = None,
 ) -> Decision:
     """Update an existing task record's status in place. Reuses authorize_and_update.
 
@@ -227,6 +264,11 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     ``memory.get``, always granted, so this never itself blocks on
     confirmation), preserves every field it does not itself change,
     and only then writes the merged result.
+
+    Publishes a real ``TaskStatusChanged`` to ``event_bus`` -- again,
+    only if the update was actually granted, and carrying the real
+    ``previous_status`` this same read already retrieved (never a
+    second, separate guess at what it must have been).
     """
     resolved_clock = clock or SystemClockAdapter()
     get_outcome = authorize_and_get(
@@ -240,20 +282,23 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         id_port=id_port,
     )
     existing = get_outcome.record.value.value if get_outcome.record is not None else None
+    raw_previous_status = existing.get("status") if isinstance(existing, dict) else None
+    previous_status = raw_previous_status if isinstance(raw_previous_status, str) else None
     created_at = (
         existing.get("created_at")
         if isinstance(existing, dict)
         else resolved_clock.now().isoformat()
     )
+    now = resolved_clock.now().isoformat()
     record: dict[str, object] = {
         "kind": TASK_KIND,
         "goal": goal,
         "status": status,
         "reason": reason,
         "created_at": created_at,
-        "updated_at": resolved_clock.now().isoformat(),
+        "updated_at": now,
     }
-    return _authorize_and_update_memory(
+    update_decision = _authorize_and_update_memory(
         task_id,
         record,
         physical_confirmation_available=physical_confirmation_available,
@@ -264,6 +309,19 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         clock=resolved_clock,
         id_port=id_port,
     )
+    if update_decision.granted:
+        (event_bus or EventBus()).publish(
+            TaskStatusChanged(
+                event_id=(id_port or UuidIdAdapter()).new_id(),
+                task_id=task_id,
+                goal=goal,
+                previous_status=previous_status,
+                new_status=status,
+                reason=reason,
+                timestamp=now,
+            )
+        )
+    return update_decision
 
 
 @dataclass(frozen=True)
@@ -291,6 +349,7 @@ def authorize_and_create_task(  # noqa: PLR0913 -- one per composition-function 
     embedding_port: EmbeddingPort | None = None,
     clock: ClockPort | None = None,
     id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
 ) -> TaskCreateOutcome:
     """Create a new real task record, status "created". Does not run any plan.
 
@@ -312,6 +371,7 @@ def authorize_and_create_task(  # noqa: PLR0913 -- one per composition-function 
         embedding_port=embedding_port,
         clock=clock,
         id_port=id_port,
+        event_bus=event_bus,
     )
     return TaskCreateOutcome(decision=decision, task_id=task_id)
 
@@ -351,6 +411,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
     embedding_port: EmbeddingPort | None = None,
     clock: ClockPort | None = None,
     id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
 ) -> TaskRunOutcome:
     """Run planning.run_plan for an already-created task, updating its status in place.
 
@@ -375,6 +436,10 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         embedding_port: Overridable for tests.
         clock: Defaults to a real ``SystemClockAdapter``.
         id_port: Defaults to a real ``UuidIdAdapter``.
+        event_bus: A real, shared ``EventBus`` every real status
+            transition this call makes publishes to, if supplied.
+            Defaults to a fresh, empty ``EventBus()`` per transition
+            (a harmless no-op) -- see module docstring.
 
     Returns:
         A ``TaskRunOutcome`` -- see its own docstring.
@@ -401,6 +466,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         embedding_port=embedding_port,
         clock=clock,
         id_port=id_port,
+        event_bus=event_bus,
     )
     if not running_decision.granted:
         return TaskRunOutcome(decision=running_decision, status=None, reason=None)
@@ -427,6 +493,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
             embedding_port=embedding_port,
             clock=clock,
             id_port=id_port,
+            event_bus=event_bus,
         )
         raise
 
@@ -454,6 +521,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
             embedding_port=embedding_port,
             clock=clock,
             id_port=id_port,
+            event_bus=event_bus,
         )
         return TaskRunOutcome(decision=plan_decision, status="failed", reason=reason)
 
@@ -470,6 +538,7 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         embedding_port=embedding_port,
         clock=clock,
         id_port=id_port,
+        event_bus=event_bus,
     )
     return TaskRunOutcome(decision=plan_decision, status=status, reason=reason)
 

@@ -59,6 +59,47 @@ list in memory only (see `ui_static/index.html`). This keeps
 package's own explicit instruction: no UI message is ever
 auto-written to memory, and no conversation history lives inside
 `TaskStore`.
+
+**WP-111 (2026-09-10): real task lifecycle events + status recovery.**
+`JarvisUiServer` now owns one real, shared `jarvis.domain.events.EventBus`
+for its entire lifetime, passed into every `authorize_and_route` call
+so a `COMPLEX_GOAL` route's own real `TaskCreated` event (WP-111) is
+genuinely published in-process. Two minimal, real subscribers are
+attached at construction time, logging every real event -- the one,
+deliberately small "future adapters" consumer this pass actually
+builds, proving the wiring is real rather than just plumbing nothing
+ever uses.
+
+**Why this is not SSE, and not a live push mechanism at all**: this
+server is deliberately single-threaded (see above) -- an SSE
+connection that stays open indefinitely would block the one real
+thread from handling any other request for as long as it stayed open,
+directly contradicting the single-threaded design this module already
+committed to. `GET /api/tasks/<task_id>` instead does one real,
+authoritative read of the real, persistent task store
+(`kernel.tasks.authorize_and_get_task`) per call -- the frontend polls
+this at a short interval while a task is outstanding. This also
+solves browser-reconnection cleanly, for free: a refreshed or
+reconnected browser has nothing but this same real, authoritative
+query to ask again, and gets the same real answer back, regardless of
+whether it missed any events while disconnected -- the real
+`TaskStore` is authoritative, `EventBus` is not, and is not made to
+pretend to be.
+
+**A real, stated limitation, not hidden**: today, nothing in
+`kernel.router.authorize_and_route`'s own real call graph ever runs an
+already-created task (a `COMPLEX_GOAL` route creates, never runs, by
+WP-104's own explicit, unchanged design) -- so a task created through
+this UI can only ever be observed reaching `"created"` via this
+server's own, single, long-running process. If a task is later run via
+a separate `jarvis task run <id> <goal>` invocation (a different
+process), that process's own real `TaskStatusChanged` events publish
+into *that* process's own, separate, short-lived `EventBus` instance,
+never this server's -- this server's own `EventBus` was never told
+about it. `GET /api/tasks/<task_id>` still correctly reflects that
+real, cross-process change, because it re-reads the real, shared,
+persistent task store directly, not this server's own in-process
+event history.
 """
 
 from __future__ import annotations
@@ -75,10 +116,12 @@ from typing import TYPE_CHECKING
 
 from jarvis.application.routing.router import RouteKind
 from jarvis.domain.errors import JarvisError
+from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.kernel.desktop import GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import authorize_and_route
+from jarvis.kernel.tasks import authorize_and_get_task
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
@@ -93,6 +136,10 @@ _logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "ui_static"
 _INDEX_HTML_PATH = _STATIC_DIR / "index.html"
+
+_TASK_STATUS_PATH_PREFIX = "/api/tasks/"
+"""GET <this>+<task_id> -- a real, authoritative task-store read (WP-111). See
+module docstring's own "why this is not SSE" section."""
 
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
@@ -161,12 +208,29 @@ class UiServerConfig:
     database_path: Path | None = None
 
 
+def _log_task_created(event: TaskCreated) -> None:
+    """The one, minimal, real "future adapters" consumer this pass actually builds."""
+    _logger.info("task event: TaskCreated task_id=%s status=%s", event.task_id, event.status)
+
+
+def _log_task_status_changed(event: TaskStatusChanged) -> None:
+    _logger.info(
+        "task event: TaskStatusChanged task_id=%s %s -> %s",
+        event.task_id,
+        event.previous_status,
+        event.new_status,
+    )
+
+
 class JarvisUiServer(HTTPServer):
     """A real, single-threaded, `127.0.0.1`-only HTTP server. See module docstring."""
 
     def __init__(self, server_address: tuple[str, int], config: UiServerConfig) -> None:
-        """Store `config` for every request this server will handle, then bind the real socket."""
+        """Store `config`, build one real, shared EventBus, then bind the real socket."""
         self.jarvis_config = config
+        self.event_bus = EventBus()
+        self.event_bus.subscribe(TaskCreated, _log_task_created)
+        self.event_bus.subscribe(TaskStatusChanged, _log_task_status_changed)
         super().__init__(server_address, _JarvisUiRequestHandler)
 
 
@@ -298,17 +362,65 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         _logger.debug("%s - %s", self.address_string(), format % args)
 
     def do_GET(self) -> None:
-        """Serve the one real static page. Anything else is a real 404, never a file listing."""
-        if self.path != "/":
+        """Serve the one real static page, or a real task-status lookup. Anything else is a 404."""
+        if self.path == "/":
+            body = _INDEX_HTML_PATH.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith(_TASK_STATUS_PATH_PREFIX):
+            task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) :]
+            self._handle_get_task_status(task_id)
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+
+    def _handle_get_task_status(self, task_id: str) -> None:
+        """Handle `GET /api/tasks/<task_id>` -- a real, authoritative task-store read.
+
+        No `EventBus` involvement at all: this always re-reads
+        `kernel.tasks.authorize_and_get_task` directly, so a
+        reconnected or refreshed browser gets the real, current answer
+        regardless of any event it may have missed while disconnected
+        (see module docstring's own "why this is not SSE" section).
+        """
+        if not task_id:
             self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
             return
-        body = _INDEX_HTML_PATH.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        config = self.server.jarvis_config
+        get_outcome = authorize_and_get_task(
+            task_id,
+            physical_confirmation_available=config.physical_confirmation_available,
+            remote_confirmation_available=config.remote_confirmation_available,
+            chain_path=config.chain_path,
+            database_path=config.database_path,
+        )
+        record = get_outcome.record
+        if record is None:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"type": "error", "message": "No task found for this identifier."},
+            )
+            return
+        data = record.value.value
+        if not isinstance(data, dict):
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "This task's own stored record is malformed."},
+            )
+            return
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "task_id": task_id,
+                "goal": data.get("goal"),
+                "status": data.get("status"),
+                "reason": data.get("reason"),
+            },
+        )
 
     def do_POST(self) -> None:
         """Handle `POST /api/command`. Validates input; never lets an error crash the server."""
@@ -329,6 +441,7 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                     remote_confirmation_available=config.remote_confirmation_available,
                     chain_path=config.chain_path,
                     database_path=config.database_path,
+                    event_bus=self.server.event_bus,
                 )
             )
         except _HANDLED_ROUTING_ERRORS as exc:

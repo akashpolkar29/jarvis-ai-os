@@ -39,6 +39,7 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.events import TaskCreated, TaskStatusChanged
 from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
@@ -47,6 +48,7 @@ from jarvis.kernel.desktop import GitStatusOutcome
 from jarvis.kernel.files import DirListOutcome, FileReadOutcome, PathOutsideAllowedScopeError
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import RouteOutcome
+from jarvis.kernel.tasks import TaskGetOutcome, authorize_and_create_task
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -306,6 +308,131 @@ def test_post_command_full_round_trip_for_a_task_created_response(
     assert data["type"] == "task_created"
     assert data["task_id"] == "mem:123"
     assert data["task_status"] == "created"
+
+
+# ---------------------------------------------------------------------------
+# WP-111: GET /api/tasks/<task_id> -- real task-status recovery
+# ---------------------------------------------------------------------------
+
+
+def test_get_task_status_returns_404_for_an_unknown_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{base_url}/api/tasks/no-such-task", timeout=5)
+
+    assert exc_info.value.code == HTTPStatus.NOT_FOUND
+
+
+def test_get_task_status_returns_404_for_an_empty_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{base_url}/api/tasks/", timeout=5)
+
+    assert exc_info.value.code == HTTPStatus.NOT_FOUND
+
+
+def test_get_task_status_recovers_a_real_task_created_outside_this_http_request(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A real task created via a direct kernel call is correctly recovered by a real GET.
+
+    Proves Step 12's own "browser reconnects" requirement directly: the
+    server never saw this task get created (no `/api/command` call was
+    ever made for it) -- `GET /api/tasks/<id>` still reports its real,
+    current, authoritative status, because it re-reads the real,
+    shared task store directly, never relying on any event the server
+    itself happened to observe.
+    """
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a real, independently-created task",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    resp = urllib.request.urlopen(f"{base_url}/api/tasks/{create_outcome.task_id}", timeout=5)
+    data = json.loads(resp.read())
+
+    assert resp.status == HTTPStatus.OK
+    assert data["task_id"] == create_outcome.task_id
+    assert data["goal"] == "a real, independently-created task"
+    assert data["status"] == "created"
+    assert data["reason"] is None
+
+
+def test_get_task_status_reports_a_clean_500_for_a_malformed_stored_record(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """A defensive branch: a task record whose value isn't a dict is reported, not crashed on."""
+    base_url, _server = running_server
+    malformed_record = MemoryRecord(
+        identifier="mem:weird",
+        value=Tainted("not a dict", Provenance.user()),
+        written_at=datetime(2026, 1, 1, tzinfo=UTC),
+        expires_at=None,
+    )
+    fake_outcome = TaskGetOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), record=malformed_record
+    )
+
+    with (
+        mock.patch("jarvis.cli.ui_server.authorize_and_get_task", return_value=fake_outcome),
+        pytest.raises(urllib.error.HTTPError) as exc_info,
+    ):
+        urllib.request.urlopen(f"{base_url}/api/tasks/mem:weird", timeout=5)
+
+    assert exc_info.value.code == HTTPStatus.INTERNAL_SERVER_ERROR
+    data = json.loads(exc_info.value.read())
+    assert data["type"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# WP-111: JarvisUiServer owns one real, shared EventBus with real subscribers
+# ---------------------------------------------------------------------------
+
+
+def test_server_event_bus_has_a_real_subscriber_for_task_created(
+    running_server: tuple[str, JarvisUiServer], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Proves the wiring is real: publishing directly to the server's own bus is observed."""
+    _base_url, server = running_server
+    event = TaskCreated(
+        event_id="evt:1", task_id="mem:1", goal="test goal", status="created", timestamp="t1"
+    )
+
+    with caplog.at_level("INFO", logger="jarvis.cli.ui_server"):
+        server.event_bus.publish(event)
+
+    assert any("TaskCreated" in record.getMessage() for record in caplog.records)
+
+
+def test_server_event_bus_has_a_real_subscriber_for_task_status_changed(
+    running_server: tuple[str, JarvisUiServer], caplog: pytest.LogCaptureFixture
+) -> None:
+    _base_url, server = running_server
+    event = TaskStatusChanged(
+        event_id="evt:2",
+        task_id="mem:1",
+        goal="test goal",
+        previous_status="created",
+        new_status="running",
+        reason=None,
+        timestamp="t2",
+    )
+
+    with caplog.at_level("INFO", logger="jarvis.cli.ui_server"):
+        server.event_bus.publish(event)
+
+    assert any("TaskStatusChanged" in record.getMessage() for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
