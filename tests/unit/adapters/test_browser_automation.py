@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,7 @@ import pytest
 
 from jarvis.adapters.browser_automation import (
     CdpBrowserAutomationAdapter,
+    _process_is_really_gone,
     _wait_for_devtools_active_port,
 )
 from jarvis.domain.browser import PageHandle
@@ -356,6 +358,35 @@ async def test_close_is_a_noop_for_an_already_gone_process() -> None:
         user_data_dir="/tmp/fake-profile",
     )
     await adapter.close(handle)  # must not raise, even though the process is already gone
+
+
+def test_process_is_really_gone_treats_permission_error_as_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real, reproduced-in-CI bug: PermissionError from os.kill(pid, 0) was left uncaught.
+
+    `os.kill(pid, 0)` raises `PermissionError`, not `ProcessLookupError`,
+    when `pid` genuinely exists right now but belongs to a different
+    user -- only reachable here via real PID reuse (the OS recycling
+    `pid` for an unrelated process after the one this adapter actually
+    launched already exited, since a process this adapter itself
+    spawned is always ours to signal). Reproduced directly before
+    fixing, not assumed: `os.kill(1, 0)` (PID 1, always real, always
+    root-owned) raises exactly this under an ordinary, non-root test
+    user. A real CI run hit this exact case live: `_FakeProcess`'s own
+    hardcoded placeholder PID (4242) collided with a real, unrelated,
+    other-user-owned process already running on that specific runner.
+    """
+    monkeypatch.setattr(
+        os, "waitpid", lambda _pid, _options: (_ for _ in ()).throw(ChildProcessError)
+    )
+
+    def _raising_kill(_pid: int, _sig: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "kill", _raising_kill)
+
+    assert _process_is_really_gone(4242) is True
 
 
 @pytest.mark.skipif(

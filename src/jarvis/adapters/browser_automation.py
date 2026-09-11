@@ -207,6 +207,22 @@ def _process_is_really_gone(pid: int) -> bool:
     (or, once that parent itself exits, the real init/subreaper
     process) can ever reap it; nothing this function does can change
     that Unix-level ownership rule.
+
+    **A real `PermissionError` is treated identically to
+    `ProcessLookupError`, found and fixed live, not assumed safe**:
+    `os.kill(pid, 0)` raises `PermissionError` when `pid` genuinely
+    exists right now but is owned by a different user -- this is only
+    reachable here via real PID reuse (the OS recycling `pid` for an
+    unrelated process *after* the process this adapter actually
+    launched already exited), since a process this adapter itself
+    spawned is always ours to signal. Reproduced directly, not
+    hypothetical: a real CI run (`PID 4242`, the real hardcoded
+    placeholder `tests/unit/adapters/test_browser_automation.py`'s own
+    `_FakeProcess` default uses) collided with a real, unrelated,
+    other-user-owned process already running on that specific runner.
+    Either outcome means the same real thing for this function's own
+    purpose -- whatever this adapter launched under `pid` is no longer
+    identifiable as alive -- so both are `True`.
     """
     with contextlib.suppress(ChildProcessError):
         reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
@@ -214,7 +230,7 @@ def _process_is_really_gone(pid: int) -> bool:
             return True
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return True
     return False
 
@@ -245,7 +261,10 @@ async def _wait_for_process_exit(pid: int) -> None:
         await asyncio.sleep(_POLL_INTERVAL)
         elapsed += _POLL_INTERVAL
 
-    with contextlib.suppress(ProcessLookupError):
+    # PermissionError, like ProcessLookupError, means pid is no longer ours to
+    # signal -- see _process_is_really_gone's own docstring for the real,
+    # reproduced-in-CI PID-reuse reasoning this mirrors.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, signal.SIGKILL)
     elapsed = 0.0
     while elapsed < _KILL_GRACE_PERIOD:
@@ -472,7 +491,10 @@ class CdpBrowserAutomationAdapter:
         already died is exactly as much of a real disk-space leak as
         one left behind after a process this call actually killed.
         """
-        with contextlib.suppress(ProcessLookupError):
+        # PermissionError, like ProcessLookupError, means process_id is no
+        # longer ours to signal -- see _process_is_really_gone's own
+        # docstring for the real, reproduced-in-CI PID-reuse reasoning.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(handle.process_id, signal.SIGTERM)
         await _wait_for_process_exit(handle.process_id)
         await _remove_directory_with_retry(handle.user_data_dir)
