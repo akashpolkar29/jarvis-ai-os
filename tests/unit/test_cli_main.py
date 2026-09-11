@@ -3863,6 +3863,19 @@ def test_task_worker_once_reports_a_claimed_run(
     assert "task:1 -- ran, status: completed" in captured.out
 
 
+def _fake_authorize_and_list_tasks_with_no_created_tasks(
+    *,
+    status: str | None = None,  # noqa: ARG001
+    physical_confirmation_available: bool,  # noqa: ARG001
+    remote_confirmation_available: bool,  # noqa: ARG001
+    chain_path: Path,  # noqa: ARG001
+) -> TaskListOutcome:
+    """WP-150: the ordinary (non-dry-run) worker path also calls this when a pass is empty."""
+    return TaskListOutcome(
+        decision=_make_decision(granted=True, capability_id="memory.retrieve"), records=()
+    )
+
+
 def test_task_worker_once_reports_no_eligible_tasks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3872,6 +3885,11 @@ def test_task_worker_once_reports_no_eligible_tasks(
     monkeypatch.setattr(
         sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
     )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_tasks",
+        _fake_authorize_and_list_tasks_with_no_created_tasks,
+    )
 
     exit_code = main(
         ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
@@ -3880,6 +3898,97 @@ def test_task_worker_once_reports_no_eligible_tasks(
 
     assert exit_code == 0
     assert "no eligible" in captured.out
+
+
+def test_task_worker_once_reports_scheduled_tasks_not_yet_due(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-150: distinguishes "genuinely nothing" from "scheduled, but not due yet"."""
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        return WorkerPassOutcome(attempted=())
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        def _record(identifier: str) -> MemoryRecord:
+            return MemoryRecord(
+                identifier=identifier,
+                value=Tainted(
+                    {
+                        "kind": "task",
+                        "goal": "a future goal",
+                        "status": "created",
+                        "reason": None,
+                        "created_at": "2026-09-09T00:00:00+00:00",
+                        "updated_at": "2026-09-09T00:00:00+00:00",
+                    },
+                    Provenance.user(),
+                ),
+                written_at=datetime(2026, 9, 9, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        return TaskListOutcome(
+            decision=_make_decision(granted=True, capability_id="memory.retrieve"),
+            records=(_record("task:not-due-1"), _record("task:not-due-2")),
+            due_task_ids=frozenset(),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "no tasks due right now (2 'created' task(s) scheduled for later)." in captured.out
+
+
+def test_task_worker_once_skips_the_scheduling_check_when_a_task_was_attempted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-150: the extra authorize_and_list_tasks read only happens when attempted is empty."""
+    list_calls: list[object] = []
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        return WorkerPassOutcome(
+            attempted=(
+                WorkerTaskOutcome(task_id="task:1", claimed=True, status="completed", reason=None),
+            )
+        )
+
+    def fake_authorize_and_list_tasks(**_kwargs: object) -> TaskListOutcome:
+        list_calls.append(object())
+        return TaskListOutcome(
+            decision=_make_decision(granted=True, capability_id="memory.retrieve"), records=()
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert list_calls == []
+    assert "task:1 -- ran, status: completed" in captured.out
 
 
 def test_task_worker_once_reports_a_not_claimed_task_and_a_real_error(
@@ -3963,6 +4072,11 @@ def test_task_worker_max_passes_stops_deterministically_with_no_real_sleep(
     monkeypatch.setattr(
         sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
     )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_tasks",
+        _fake_authorize_and_list_tasks_with_no_created_tasks,
+    )
     monkeypatch.setattr(sys.modules["jarvis.cli.main"].time, "sleep", sleep_calls.append)
 
     exit_code = main(
@@ -4007,6 +4121,11 @@ def test_task_worker_max_passes_exits_non_zero_if_any_pass_had_a_real_error(
 
     monkeypatch.setattr(
         sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_tasks",
+        _fake_authorize_and_list_tasks_with_no_created_tasks,
     )
     monkeypatch.setattr(sys.modules["jarvis.cli.main"].time, "sleep", lambda _seconds: None)
 

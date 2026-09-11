@@ -1697,6 +1697,20 @@ committed). No repairs, no ADR. See
 `docs/architecture/wp147-doctor-memory-database-check.md` for the
 full account.
 
+## 51. ~~Scheduled task worker visibility~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-150**. `jarvis task worker`'s ordinary (non-
+`--dry-run`) output could not distinguish "genuinely zero eligible
+tasks" from "tasks exist, but are all scheduled for a future time" --
+both printed the identical "no eligible tasks found" line. Fixed by
+making an extra, real `authorize_and_list_tasks` read only when a
+pass's own `attempted` tuple is empty, printing the real count of
+not-yet-due `"created"` tasks when there are any. No new task status,
+no ADR. A real hermeticity gap in three existing tests (a stray,
+unmocked `memory.sqlite3` write) was found and fixed alongside this.
+See `docs/architecture/wp150-scheduled-task-worker-visibility.md` for
+the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

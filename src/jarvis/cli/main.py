@@ -1489,11 +1489,29 @@ def _run_doctor() -> int:
     return 0
 
 
-def _print_worker_pass(pass_outcome: WorkerPassOutcome) -> None:
-    """Print one real worker pass's own outcomes -- shared by --once and continuous mode."""
+def _print_worker_pass(pass_outcome: WorkerPassOutcome, *, not_due_count: int = 0) -> None:
+    """Print one real worker pass's own outcomes -- shared by --once and continuous mode.
+
+    ``not_due_count`` (WP-150) distinguishes two real, different
+    "nothing happened" states that previously both printed the
+    identical "no eligible tasks found" line: genuinely zero real
+    `"created"` tasks, versus one or more real, scheduled tasks that
+    simply haven't reached their own `scheduled_at` yet (WP-122). An
+    unscheduled `"created"` task is always immediately eligible
+    (WP-122's own unchanged design), so if `pass_outcome.attempted` is
+    empty, any `"created"` records the caller separately counted here
+    must all be scheduled-but-not-yet-due -- never a task the worker
+    itself failed to notice.
+    """
     attempted = pass_outcome.attempted
     if not attempted:
-        print("worker: no eligible ('created') tasks found.")
+        if not_due_count > 0:
+            print(
+                f"worker: no tasks due right now ({not_due_count} 'created' task(s) "
+                "scheduled for later)."
+            )
+        else:
+            print("worker: no eligible ('created') tasks found.")
         return
     for outcome in attempted:
         if outcome.error is not None:
@@ -1527,6 +1545,25 @@ def _run_task_worker(args: argparse.Namespace) -> int:
     def _pass_had_a_real_error(pass_outcome: WorkerPassOutcome) -> bool:
         return any(outcome.error is not None for outcome in pass_outcome.attempted)
 
+    def _print_pass_with_scheduling_context(pass_outcome: WorkerPassOutcome) -> None:
+        # WP-150: only pay for the extra, real memory.retrieve read when there is
+        # genuinely nothing to distinguish -- an ordinary pass that attempted at
+        # least one task never makes this second call.
+        not_due_count = 0
+        if not pass_outcome.attempted:
+            list_outcome = authorize_and_list_tasks(
+                status="created",
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+            not_due_count = sum(
+                1
+                for record in list_outcome.records
+                if record.identifier not in list_outcome.due_task_ids
+            )
+        _print_worker_pass(pass_outcome, not_due_count=not_due_count)
+
     if args.dry_run:
         # WP-139: a real, read-only inspection -- reuses authorize_and_list_tasks's own
         # already-computed due_task_ids (WP-125) directly; never calls
@@ -1550,7 +1587,7 @@ def _run_task_worker(args: argparse.Namespace) -> int:
 
     if args.once:
         pass_outcome = asyncio.run(_one_pass())
-        _print_worker_pass(pass_outcome)
+        _print_pass_with_scheduling_context(pass_outcome)
         # WP-132: a non-zero exit lets a script/cron job/systemd unit detect a real
         # per-task error without parsing printed text -- the worker's own tolerant,
         # never-abort-the-pass behavior (module docstring) is completely unchanged;
@@ -1566,7 +1603,7 @@ def _run_task_worker(args: argparse.Namespace) -> int:
     try:
         while args.max_passes is None or passes_run < args.max_passes:
             pass_outcome = asyncio.run(_one_pass())
-            _print_worker_pass(pass_outcome)
+            _print_pass_with_scheduling_context(pass_outcome)
             any_error = any_error or _pass_had_a_real_error(pass_outcome)
             passes_run += 1
             if args.max_passes is not None and passes_run >= args.max_passes:

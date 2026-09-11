@@ -261,6 +261,13 @@ replacement for either.
   read-only if present, forcing real schema validation via
   `sqlite_master`, catching corruption a bare `SELECT 1` would miss).
   See `docs/architecture/wp147-doctor-memory-database-check.md`.
+- WP-150: `jarvis task worker`'s ordinary output now distinguishes
+  "genuinely zero eligible tasks" from "tasks exist but are scheduled
+  for later" -- previously both printed the identical "no eligible
+  tasks found" line. Also fixed a real hermeticity gap this change
+  surfaced: three existing worker tests were exercising the real,
+  unmocked default database. See
+  `docs/architecture/wp150-scheduled-task-worker-visibility.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check
