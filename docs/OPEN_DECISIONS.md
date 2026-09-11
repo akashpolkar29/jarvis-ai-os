@@ -1903,6 +1903,16 @@ lines found."`. No change to search logic, scope checks, or the
 `capped` reporting mechanism. See
 `docs/architecture/wp163-fs-search-empty-result-messages.md`.
 
+## 64. ~~Email/calendar read experience: empty-result messages~~ -- RESOLVED/BUILT 2026-09-12 (WP-164)
+
+**Resolved/built, WP-164**. `jarvis email list`/`calendar list-events`
+shared the identical gap WP-144/WP-163 already fixed elsewhere: a
+granted, zero-result response printed nothing at all beyond the
+`GRANTED` line. Now prints `"No messages found."`/`"No events
+found."`. Read-only; no change to `communications.send_email`/
+`create_calendar_event`. See
+`docs/architecture/wp164-email-calendar-empty-result-messages.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

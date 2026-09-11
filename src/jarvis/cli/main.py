@@ -3203,10 +3203,17 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
             step_status = "GRANTED" if step_record.decision.granted else "DENIED"
             print(f"step: {step_record.step.capability_id.value} {step_status}")
     if outcome.email_summaries is not None:
+        # WP-164: a granted, zero-message result previously printed nothing at all here --
+        # the same gap WP-144/WP-163 already fixed for memory retrieve/fs find/search-content/
+        # recent.
+        if not outcome.email_summaries:
+            print("No messages found.")
         for tainted_summary in outcome.email_summaries:
             summary = tainted_summary.value
             print(f"{summary.message_id}: {summary.sender} -- {summary.subject}")
     if outcome.calendar_events is not None:
+        if not outcome.calendar_events:
+            print("No events found.")
         for tainted_event in outcome.calendar_events:
             event = tainted_event.value
             print(f"{event.uid}: {event.summary} ({event.start} -- {event.end})")

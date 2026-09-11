@@ -4578,6 +4578,43 @@ def test_email_list_subcommand_reports_each_summary(
     assert "<1@localhost>: alice@example.com -- Hello" in captured.out
 
 
+def test_email_list_subcommand_reports_no_messages_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-164: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    async def fake_authorize_and_list_email(  # noqa: PLR0913 -- mirrors the real signature
+        folder: str,  # noqa: ARG001
+        limit: int,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        email_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[EmailSummary], ...]]:
+        decision = _make_decision(granted=True, capability_id="communications.list_email")
+        return decision, ()
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_email", fake_authorize_and_list_email
+    )
+
+    exit_code = main(
+        [
+            "email",
+            "list",
+            *_EMAIL_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No messages found." in captured.out
+
+
 def test_email_read_subcommand_reports_the_full_message(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -4805,6 +4842,45 @@ def test_calendar_list_events_subcommand_reports_each_event(
         "event-1: Team sync (2026-09-03T10:00:00+00:00 -- 2026-09-03T11:00:00+00:00)"
         in captured.out
     )
+
+
+def test_calendar_list_events_subcommand_reports_no_events_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-164: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    async def fake_authorize_and_list_calendar_events(  # noqa: PLR0913 -- mirrors the real signature
+        start: str,  # noqa: ARG001
+        end: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        calendar_port: object,  # noqa: ARG001
+    ) -> tuple[Decision, tuple[Tainted[CalendarEvent], ...]]:
+        decision = _make_decision(granted=True, capability_id="communications.list_calendar_events")
+        return decision, ()
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_calendar_events",
+        fake_authorize_and_list_calendar_events,
+    )
+
+    exit_code = main(
+        [
+            "calendar",
+            "list-events",
+            *_CALENDAR_LIST_EVENTS_COMMON_FLAGS,
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No events found." in captured.out
 
 
 def test_calendar_list_events_subcommand_denied_prints_no_events(
