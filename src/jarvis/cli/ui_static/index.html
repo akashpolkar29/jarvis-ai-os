@@ -232,7 +232,12 @@
         .then(function (data) {
           if (!data) { return; }
           if (data.status && data.status !== lastKnownStatus) {
-            var pollMsgEl = addMessage("task", "Task " + taskId, "Status: " + data.status, null);
+            var bodyLines = ["Status: " + data.status];
+            if (data.reason) { bodyLines.push("Reason: " + data.reason); }
+            if (Array.isArray(data.attempts) && data.attempts.length > 0) {
+              bodyLines.push("Attempts: " + data.attempts.length);
+            }
+            var pollMsgEl = addMessage("task", "Task " + taskId, bodyLines.join("\n"), null);
             addRetryButtonIfFailed(pollMsgEl, taskId, data.status);
             lastKnownStatus = data.status;
           }

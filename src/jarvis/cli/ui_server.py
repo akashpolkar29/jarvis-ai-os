@@ -148,6 +148,20 @@ own shape: no server-side goal lookup needed here either, since
 `"failed"` -- from `runTask`'s own synchronous response, from a later
 `pollTaskStatus` status change, or from a prior retry that failed
 again -- never speculatively on task creation.
+
+**WP-130 (2026-09-12): task recovery/history visibility in the UI.**
+`GET /api/tasks/<task_id>` now also returns `updated_at`,
+`scheduled_at`, `due`, `stale`, and `attempts` -- all real fields
+`authorize_and_get_task` (WP-116/WP-124/WP-125) already computed, none
+of it previously surfaced over HTTP. `POST /api/tasks/<task_id>/recover`
+reuses `kernel.tasks.authorize_and_recover_task` (WP-126) completely
+unmodified -- the exact same function `jarvis task recover` already
+calls. Mirrors `POST .../cancel`'s own shape: no server-side goal
+lookup needed, since `authorize_and_recover_task` already does its own
+lookup, status check, and staleness check internally. The frontend
+surfaces a real "Recover" button only once `pollTaskStatus` observes a
+task genuinely reported `stale: true` -- never speculatively, and
+never for a task that is merely old but still genuinely progressing.
 """
 
 from __future__ import annotations
@@ -187,6 +201,7 @@ from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
     authorize_and_cancel_task,
     authorize_and_get_task,
+    authorize_and_recover_task,
     authorize_and_retry_task,
     authorize_and_run_task,
 )
@@ -224,6 +239,11 @@ _TASK_RETRY_PATH_SUFFIX = "/retry"
 """POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- retries an already-"failed"
 task (WP-123), reusing kernel.tasks.authorize_and_retry_task (WP-121) completely
 unmodified -- the exact same function `jarvis task retry` already calls."""
+
+_TASK_RECOVER_PATH_SUFFIX = "/recover"
+"""POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- recovers a stale "running"
+task (WP-130), reusing kernel.tasks.authorize_and_recover_task (WP-126) completely
+unmodified -- the exact same function `jarvis task recover` already calls."""
 
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
@@ -654,11 +674,16 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                 "goal": data.get("goal"),
                 "status": data.get("status"),
                 "reason": data.get("reason"),
+                "updated_at": data.get("updated_at"),
+                "scheduled_at": data.get("scheduled_at"),
+                "due": get_outcome.due,
+                "stale": get_outcome.stale,
+                "attempts": data.get("attempts"),
             },
         )
 
     def do_POST(self) -> None:
-        """Handle command/run/cancel/retry task POSTs (WP-108/WP-112/WP-119/WP-123). Never crashes the server."""  # noqa: E501
+        """Handle command/run/cancel/retry/recover task POSTs (WP-108/WP-112/WP-119/WP-123/WP-130). Never crashes the server."""  # noqa: E501
         if self.path == "/api/command":
             self._handle_post_command()
             return
@@ -679,6 +704,12 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         ):
             task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_RETRY_PATH_SUFFIX)]
             self._handle_retry_task(task_id)
+            return
+        if self.path.startswith(_TASK_STATUS_PATH_PREFIX) and self.path.endswith(
+            _TASK_RECOVER_PATH_SUFFIX
+        ):
+            task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_RECOVER_PATH_SUFFIX)]
+            self._handle_recover_task(task_id)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
 
@@ -881,6 +912,53 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                 "retried": retry_outcome.retried,
                 "status": retry_outcome.status,
                 "reason": retry_outcome.reason,
+            },
+        )
+
+    def _handle_recover_task(self, task_id: str) -> None:
+        """Handle `POST /api/tasks/<task_id>/recover` (WP-130) -- reuses authorize_and_recover_task unmodified.
+
+        Mirrors `_handle_cancel_task`'s own shape exactly: no
+        server-side goal lookup is needed here either, since
+        `authorize_and_recover_task` (WP-126) already does its own
+        lookup, "running"-only status check, and staleness check
+        internally. Never runs a plan, so the narrower
+        `_HANDLED_ROUTING_ERRORS` tuple `_handle_cancel_task` uses
+        applies here too, not the wider `_HANDLED_TASK_RUN_ERRORS`.
+        """  # noqa: E501
+        if not task_id:
+            self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+            return
+
+        config = self.server.jarvis_config
+        try:
+            recover_outcome = authorize_and_recover_task(
+                task_id,
+                physical_confirmation_available=config.physical_confirmation_available,
+                remote_confirmation_available=config.remote_confirmation_available,
+                chain_path=config.chain_path,
+                database_path=config.database_path,
+                event_bus=self.server.event_bus,
+            )
+        except _HANDLED_ROUTING_ERRORS as exc:
+            _logger.warning("ui_server: recovering task %s failed: %s", task_id, exc)
+            self._send_json(HTTPStatus.BAD_REQUEST, {"type": "error", "message": str(exc)})
+            return
+        except Exception:
+            _logger.exception("ui_server: unexpected internal error recovering task %s", task_id)
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "An unexpected internal error occurred."},
+            )
+            return
+
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "task_id": task_id,
+                "granted": recover_outcome.decision.granted,
+                "recovered": recover_outcome.recovered,
+                "reason": recover_outcome.reason,
             },
         )
 

@@ -67,6 +67,7 @@ from jarvis.kernel.router import RouteOutcome
 from jarvis.kernel.tasks import (
     TaskCancelOutcome,
     TaskGetOutcome,
+    TaskRecoverOutcome,
     TaskRetryOutcome,
     TaskRunOutcome,
     authorize_and_create_task,
@@ -478,6 +479,31 @@ def test_get_task_status_recovers_a_real_task_created_outside_this_http_request(
     assert data["goal"] == "a real, independently-created task"
     assert data["status"] == "created"
     assert data["reason"] is None
+
+
+def test_get_task_status_includes_updated_at_scheduled_at_due_stale_and_attempts(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """WP-130: real, previously-computed fields (WP-116/WP-124/WP-125) now reach the browser."""
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a real task whose full status is inspected",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    resp = urllib.request.urlopen(f"{base_url}/api/tasks/{create_outcome.task_id}", timeout=5)
+    data = json.loads(resp.read())
+
+    assert resp.status == HTTPStatus.OK
+    assert data["updated_at"] is not None
+    assert data["scheduled_at"] is None
+    assert data["due"] is False
+    assert data["stale"] is False
+    assert data["attempts"] == []
 
 
 def test_get_task_status_reports_a_clean_500_for_a_malformed_stored_record(
@@ -943,6 +969,155 @@ def test_post_retry_task_never_leaks_a_traceback_on_an_unexpected_error(
         "jarvis.cli.ui_server.authorize_and_retry_task", failing_authorize_and_retry_task
     ):
         status, data = _post_retry(base_url, "task:1")
+
+    assert status == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert data["type"] == "error"
+    assert "boom" not in str(data["message"])
+
+
+# ---------------------------------------------------------------------------
+# WP-130: POST /api/tasks/<task_id>/recover -- recovers a stale "running" task
+# ---------------------------------------------------------------------------
+
+
+class _FixedClock:
+    """A real ClockPort fixed to one, deliberately ancient instant -- always stale."""
+
+    def __init__(self, when: datetime) -> None:
+        self._when = when
+
+    def now(self) -> datetime:
+        return self._when
+
+
+def _post_recover(base_url: str, task_id: str) -> tuple[int, dict[str, object]]:
+    req = urllib.request.Request(f"{base_url}/api/tasks/{task_id}/recover", data=b"", method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_post_recover_task_reports_not_found_for_an_unknown_task_id_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """Mirrors /cancel: the real lookup happens inside authorize_and_recover_task itself."""
+    base_url, _server = running_server
+
+    status, data = _post_recover(base_url, "no-such-task")
+
+    assert status == HTTPStatus.OK
+    assert data["recovered"] is False
+    assert data["reason"] == "No task found for this identifier."
+
+
+def test_post_recover_task_returns_404_for_an_empty_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    status, data = _post_recover(base_url, "")
+
+    assert status == HTTPStatus.NOT_FOUND
+    assert data["type"] == "error"
+
+
+def test_post_recover_task_real_round_trip_against_a_real_stale_running_task(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A real, independently-created-then-stale task is really recovered -- nothing here is mocked."""  # noqa: E501
+    base_url, server = running_server
+    chain_path = server.jarvis_config.chain_path
+    database_path = tmp_path / "memory.sqlite3"
+    server.jarvis_config = UiServerConfig(
+        chain_path=chain_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=database_path,
+    )
+    create_outcome = authorize_and_create_task(
+        "a real task whose owner crashes",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert create_outcome.task_id is not None
+    ancient = datetime(2000, 1, 1, tzinfo=UTC)
+    update_task_status(
+        create_outcome.task_id,
+        "a real task whose owner crashes",
+        "running",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=None,
+        clock=_FixedClock(ancient),
+        id_port=None,
+    )
+
+    status, data = _post_recover(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.OK
+    assert data["task_id"] == create_outcome.task_id
+    assert data["granted"] is True
+    assert data["recovered"] is True
+    assert data["reason"] is None
+
+
+def test_post_recover_task_reports_a_real_refusal_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+    fake_outcome = TaskRecoverOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        recovered=False,
+        reason=(
+            "Task is 'running' but has not exceeded the staleness threshold "
+            "(1800s); not eligible for recovery."
+        ),
+    )
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_recover_task", return_value=fake_outcome):
+        status, data = _post_recover(base_url, "task:still-active")
+
+    assert status == HTTPStatus.OK
+    assert data["recovered"] is False
+    assert "not eligible for recovery" in str(data["reason"])
+
+
+def test_post_recover_task_reports_a_handled_kernel_error_cleanly(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_recover_task(*_args: object, **_kwargs: object) -> TaskRecoverOutcome:
+        raise MemoryRecordNotFoundError("task:gone")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_recover_task", failing_authorize_and_recover_task
+    ):
+        status, data = _post_recover(base_url, "task:gone")
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert data["type"] == "error"
+
+
+def test_post_recover_task_never_leaks_a_traceback_on_an_unexpected_error(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_recover_task(*_args: object, **_kwargs: object) -> TaskRecoverOutcome:
+        raise RuntimeError("boom, unexpected")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_recover_task", failing_authorize_and_recover_task
+    ):
+        status, data = _post_recover(base_url, "task:1")
 
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert data["type"] == "error"

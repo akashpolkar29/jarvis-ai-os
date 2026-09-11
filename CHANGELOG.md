@@ -176,6 +176,19 @@ replacement for either.
   a new regression test, `scheduled_at` surviving stale-task recovery
   (WP-126). No code change beyond the test. See
   `docs/architecture/wp128-scheduled-task-recovery-interactions.md`.
+- WP-130: `jarvis ui`'s `GET /api/tasks/<task_id>` now also returns
+  `updated_at`/`scheduled_at`/`due`/`stale`/`attempts` -- all real
+  fields the kernel already computed, none previously surfaced over
+  HTTP. `POST /api/tasks/<task_id>/recover` reuses
+  `authorize_and_recover_task` (WP-126) completely unmodified,
+  mirroring `/cancel`'s shape. The frontend's status-change messages
+  now also show the real failure reason and attempt count. A
+  "Recover" button was investigated and deliberately not added to the
+  frontend -- the poll loop's own ~2-minute ceiling ends long before
+  WP-116's 30-minute staleness threshold could ever elapse within a
+  live session, so it could never practically fire. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp130-ui-task-recovery-history.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

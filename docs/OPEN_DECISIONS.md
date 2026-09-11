@@ -1527,6 +1527,21 @@ missing regression test found and added:
 `docs/architecture/wp128-scheduled-task-recovery-interactions.md` for
 the full account.
 
+## 38. ~~Task recovery/history visibility in the UI~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-130**. `GET /api/tasks/<task_id>` now returns
+`updated_at`/`scheduled_at`/`due`/`stale`/`attempts` (all already
+computed by the kernel); `POST /api/tasks/<task_id>/recover` reuses
+`authorize_and_recover_task` (WP-126) completely unmodified, mirroring
+`/cancel`'s shape. A frontend "Recover" button was investigated and
+deliberately not added -- the poll loop's own ~2-minute ceiling ends
+long before the 30-minute staleness threshold could elapse within a
+live session, so it could never practically fire; inventing it would
+have been dead code, not a real feature. No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp130-ui-task-recovery-history.md` for the full
+account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
