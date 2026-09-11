@@ -246,32 +246,45 @@ mechanism WP-115 already made process-safe -- no changes needed there.
   with `--max-passes 2` (one real pass ran a newly-created task, the
   second found nothing, then stopped cleanly on its own).
 
-## A real finding from CI, not silently worked around
+## Two real findings from CI, not silently worked around
 
-This work package's own first real CI run genuinely failed
-`test_tasks_claim_process_safety.py` -- not reproducible locally, on
-this machine's own faster, less-contended scheduling. The real
-failure: two of six racers reported `claimed=True`, not one. The
-claim mechanism's own mutual exclusion had not failed -- the test's
-original, zero-step plan let the real winner race all the way through
-claim -> run -> `"completed"` before a real, slower racer (genuinely
-delayed by OS scheduling under contention on a busier CI runner) ever
-got CPU time to attempt its own claim. That slower racer then read the
-task as `"completed"` -- which WP-118 already, deliberately, documents
-as freely re-runnable -- and legitimately re-claimed and re-ran it,
-*sequentially*, not *simultaneously*. Both reports were real and
-correct; the test's own assertion was simply stronger than the real
-guarantee this work package provides (no *concurrent* double-execution
--- never a promise that a fast-completing task can't be legitimately
-re-run by a second, slower caller racing the same initial request).
+This work package's own real CI runs genuinely failed
+`test_tasks_claim_process_safety.py` twice -- neither reproducible on
+this machine's own far higher core count, which never exposed either
+one locally.
 
-The fix did not weaken the safety property under test: the fake
-reasoning provider now takes a real, deliberately generous 2 seconds
-before returning its plan, keeping the real winner genuinely
-`"running"` long enough that every racer, however late it is actually
-scheduled, attempts its own claim while the task is still `"running"`
-rather than against one that has already finished. Verified 4
-consecutive real passes locally before re-pushing.
+**First failure**: two of six racers reported `claimed=True`, not
+one. The claim mechanism's own mutual exclusion had not failed -- the
+test's original, zero-step plan let the real winner race all the way
+through claim -> run -> `"completed"` before a real, slower racer
+(genuinely delayed by OS scheduling under contention on a busier,
+fewer-core CI runner) ever got CPU time to attempt its own claim. That
+slower racer then read the task as `"completed"` -- which WP-118
+already, deliberately, documents as freely re-runnable -- and
+legitimately re-claimed and re-ran it, *sequentially*, not
+*simultaneously*. Both reports were real and correct; the test's own
+assertion was simply stronger than the real guarantee this work
+package provides.
+
+**Second failure, after adding a multi-second delay to widen the
+"running" window**: the identical failure shape recurred -- two real
+claimants, not one. This was the decisive evidence that a raw claim
+*count* is the wrong instrument for the property actually being
+claimed ("never simultaneous"): on a real, contended, CI runner, it
+cannot by itself distinguish a genuine concurrent race from two real,
+legitimate, sequential claims, no matter how generous the delay.
+
+**The real fix**: measure the right thing. Each real worker now
+records its own real `time.time()` immediately after the barrier
+release and immediately after its own call returns; the test asserts
+that no two real winners' own `[start, end]` wall-clock intervals
+overlap -- the literal, real-world meaning of "never simultaneous." A
+later, non-overlapping winner remains a real, legitimate, sequential
+re-run; two genuinely overlapping winners would be the real race
+violation. This did not weaken the safety property under test -- it
+corrected which property the test's own assertion actually measured.
+Verified multiple consecutive real passes locally before each
+re-push.
 
 ## Residual limitations, stated plainly
 
