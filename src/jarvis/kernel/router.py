@@ -129,6 +129,7 @@ from jarvis.kernel.intent import (
     resolve_intent,
 )
 from jarvis.kernel.tasks import (
+    TaskListOutcome,
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
@@ -350,19 +351,37 @@ would otherwise collide on the identical, real `memory.get`/`memory.retrieve` ca
 
 TASK_LIST_COMMAND_LABEL = CapabilityId("task.list")
 """See :data:`TASK_STATUS_COMMAND_LABEL` -- identical reasoning, for `authorize_and_list_tasks`
-(`memory.retrieve`, `Tier.ALLOW`)."""
+(`memory.retrieve`, `Tier.ALLOW`). Also used for the WP-136 "list <status> tasks" filtered
+variant -- the real authorization is identical either way, only the `status` argument differs."""
+
+TASK_LIST_SCHEDULED_COMMAND_LABEL = CapabilityId("task.list_scheduled")
+"""A real, router-only label (WP-136) for "list scheduled tasks". "Scheduled" is not itself a
+real task status (a scheduled task is any `"created"` task that also has a real `scheduled_at`,
+WP-122) -- this is a distinct label because the real authorization still succeeds
+(`authorize_and_list_tasks(status="created")`) but the router then applies one further, local,
+read-only filter (`scheduled_at is not None`) before returning -- not something
+`authorize_and_list_tasks` itself does, so this is not simply `TASK_LIST_COMMAND_LABEL` with a
+different argument."""
 
 _TASK_STATUS_COMMAND = "task status"
 """Mirrors `resolve_intent()`'s own "read <path>" shape exactly -- everything after this fixed
 prefix, verbatim, is the real task id."""
 
-_TASK_LIST_COMMAND = "list tasks"
-"""A single, fixed, exact-match, zero-argument command -- lists every real task, unfiltered
-(`authorize_and_list_tasks(status=None)`). Deliberately no "list <status> tasks" filtered
-variant in this first pass -- a real, separate, small addition, not built speculatively."""
+_TASK_LIST_STATUS_WORDS = frozenset({"created", "running", "completed", "failed", "cancelled"})
+"""The real, reachable task statuses (WP-136) -- deliberately excludes `"waiting_approval"`
+(`kernel.tasks.VALID_TASK_STATUSES`'s own reserved, never-yet-produced state; see that
+module's docstring) since no real command phrase for it could ever match anything."""
+
+_LIST_TASKS_PREFIX = "list "
+_LIST_TASKS_SUFFIX = " tasks"
+"""Together with :data:`_LIST_TASKS_PREFIX`, matches "list tasks" (bare), "list <status>
+tasks" (WP-136), and "list scheduled tasks" (WP-136) as one real, generalized shape --
+not three separate fixed phrases."""
 
 
-def _resolve_task_command(text: str) -> ResolvedIntent | UnrecognizedIntent | None:
+def _resolve_task_command(  # noqa: PLR0911 -- one return per real, distinct grammar outcome
+    text: str,
+) -> ResolvedIntent | UnrecognizedIntent | None:
     """Typed-router-only grammar for task status/list (WP-133).
 
     Returns `None` if `text` matches neither trigger at all -- the
@@ -393,10 +412,25 @@ def _resolve_task_command(text: str) -> ResolvedIntent | UnrecognizedIntent | No
             capability_id=TASK_STATUS_COMMAND_LABEL,
             arguments=Tainted({"task_id": task_id}, Provenance.user()),
         )
-    if lowered == _TASK_LIST_COMMAND:
-        return ResolvedIntent(
-            capability_id=TASK_LIST_COMMAND_LABEL, arguments=Tainted({}, Provenance.user())
-        )
+    if lowered.startswith(_LIST_TASKS_PREFIX) and lowered.endswith(_LIST_TASKS_SUFFIX):
+        middle = lowered[len(_LIST_TASKS_PREFIX) : -len(_LIST_TASKS_SUFFIX)].strip()
+        if not middle:
+            return ResolvedIntent(
+                capability_id=TASK_LIST_COMMAND_LABEL, arguments=Tainted({}, Provenance.user())
+            )
+        if middle == "scheduled":
+            return ResolvedIntent(
+                capability_id=TASK_LIST_SCHEDULED_COMMAND_LABEL,
+                arguments=Tainted({}, Provenance.user()),
+            )
+        if middle in _TASK_LIST_STATUS_WORDS:
+            return ResolvedIntent(
+                capability_id=TASK_LIST_COMMAND_LABEL,
+                arguments=Tainted({"status": middle}, Provenance.user()),
+            )
+        # A real "list ___ tasks" shape matched, but ___ isn't a real, reachable status
+        # or "scheduled" -- terminal UNKNOWN, never a silent guess.
+        return UnrecognizedIntent()
     return None
 
 
@@ -486,7 +520,10 @@ def _route_deterministically(  # noqa: PLR0911 -- one return per real, distinct 
                 original_input=text,
                 confidence=0.0,
                 source="deterministic",
-                detail=('Recognized this as a "task status" command, but no task id followed it.'),
+                detail=(
+                    "Recognized this as a task status/list command, but could not determine "
+                    "the rest (e.g. a missing task id, or an unrecognized status word)."
+                ),
             ),
             False,
         )
@@ -768,7 +805,10 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
         route.kind == RouteKind.DETERMINISTIC_COMMAND
         and route.capability_id == TASK_LIST_COMMAND_LABEL
     ):
+        arguments = route.arguments.value if route.arguments is not None else {}
+        raw_status = arguments.get("status")
         list_outcome = authorize_and_list_tasks(
+            status=str(raw_status) if raw_status is not None else None,
             physical_confirmation_available=physical_confirmation_available,
             remote_confirmation_available=remote_confirmation_available,
             chain_path=chain_path,
@@ -781,6 +821,39 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
             route=route,
             decision=list_outcome.decision,
             execution_result=list_outcome,
+            task_id=None,
+        )
+
+    if (
+        route.kind == RouteKind.DETERMINISTIC_COMMAND
+        and route.capability_id == TASK_LIST_SCHEDULED_COMMAND_LABEL
+    ):
+        list_outcome = authorize_and_list_tasks(
+            status="created",
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=real_clock,
+            id_port=id_port,
+        )
+        scheduled_records = tuple(
+            record
+            for record in list_outcome.records
+            if isinstance(record.value.value, dict) and record.value.value.get("scheduled_at")
+        )
+        scheduled_ids = {record.identifier for record in scheduled_records}
+        filtered_outcome = TaskListOutcome(
+            decision=list_outcome.decision,
+            records=scheduled_records,
+            stale_task_ids=list_outcome.stale_task_ids & scheduled_ids,
+            due_task_ids=list_outcome.due_task_ids & scheduled_ids,
+        )
+        return RouteOutcome(
+            route=route,
+            decision=filtered_outcome.decision,
+            execution_result=filtered_outcome,
             task_id=None,
         )
 

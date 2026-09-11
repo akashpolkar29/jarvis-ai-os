@@ -37,6 +37,7 @@ from jarvis.kernel.tasks import (
     TaskListOutcome,
     authorize_and_create_task,
     authorize_and_get_task,
+    authorize_and_schedule_task,
 )
 
 if TYPE_CHECKING:
@@ -273,6 +274,78 @@ async def test_list_tasks_command_executes_for_real_against_real_tasks(tmp_path:
     assert isinstance(outcome.execution_result, TaskListOutcome)
     identifiers = {record.identifier for record in outcome.execution_result.records}
     assert create_outcome.task_id in identifiers
+
+
+async def test_list_status_tasks_command_filters_for_real(tmp_path: Path) -> None:
+    """WP-136: "list failed tasks" only returns real, genuinely-failed tasks."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    created_outcome = authorize_and_create_task(
+        "a real goal that stays created",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert created_outcome.task_id is not None
+
+    outcome = await authorize_and_route(
+        "list created tasks",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+
+    assert outcome.route.capability_id == CapabilityId("task.list")
+    assert isinstance(outcome.execution_result, TaskListOutcome)
+    identifiers = {record.identifier for record in outcome.execution_result.records}
+    assert identifiers == {created_outcome.task_id}
+
+
+async def test_list_scheduled_tasks_command_filters_for_real(tmp_path: Path) -> None:
+    """WP-136: "list scheduled tasks" only returns real, genuinely-scheduled tasks."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    scheduled_outcome = authorize_and_create_task(
+        "a real goal that gets scheduled",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    unscheduled_outcome = authorize_and_create_task(
+        "a real goal that never gets scheduled",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert scheduled_outcome.task_id is not None
+    assert unscheduled_outcome.task_id is not None
+    authorize_and_schedule_task(
+        scheduled_outcome.task_id,
+        "2026-09-12T09:00:00+00:00",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+
+    outcome = await authorize_and_route(
+        "list scheduled tasks",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+
+    assert outcome.route.capability_id == CapabilityId("task.list_scheduled")
+    assert outcome.decision is not None
+    assert outcome.decision.granted is True
+    assert isinstance(outcome.execution_result, TaskListOutcome)
+    identifiers = {record.identifier for record in outcome.execution_result.records}
+    assert identifiers == {scheduled_outcome.task_id}
 
 
 async def test_deterministic_routing_tolerates_can_you_prefix_and_trailing_question_mark(
@@ -823,6 +896,32 @@ def test_route_deterministically_resolves_list_tasks() -> None:
     assert route.capability_id == CapabilityId("task.list")
     assert route.arguments is not None
     assert route.arguments.value == {}
+
+
+@pytest.mark.parametrize("status", ["created", "running", "completed", "failed", "cancelled"])
+def test_route_deterministically_resolves_list_status_tasks(status: str) -> None:
+    route = route_deterministically(f"list {status} tasks")
+
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert route.capability_id == CapabilityId("task.list")
+    assert route.arguments is not None
+    assert route.arguments.value == {"status": status}
+
+
+def test_route_deterministically_resolves_list_scheduled_tasks() -> None:
+    route = route_deterministically("list scheduled tasks")
+
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert route.capability_id == CapabilityId("task.list_scheduled")
+    assert route.arguments is not None
+    assert route.arguments.value == {}
+
+
+def test_route_deterministically_list_unrecognized_word_tasks_is_unknown() -> None:
+    """A real "list ___ tasks" shape matched, but ___ isn't a real status -- never guessed."""
+    route = route_deterministically("list waiting_approval tasks")
+
+    assert route.kind == RouteKind.UNKNOWN
 
 
 def test_route_deterministically_task_status_does_not_collide_with_recall() -> None:

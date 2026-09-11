@@ -1573,6 +1573,19 @@ new registered `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp133-deterministic-task-commands.md` for the full
 account.
 
+## 41. ~~Task list status filtering via the router~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-136**. Generalizes WP-133's bare `"list tasks"`
+into `"list <status> tasks"`/`"list scheduled tasks"`, reusing
+`authorize_and_list_tasks`'s own existing `status` parameter directly
+for the five real statuses; "scheduled" (not a real status) applies
+one further, local, read-only filter over the same real result via a
+second, distinct, unregistered router label (`task.list_scheduled`).
+No new kernel function, no new registered `CapabilityId`/`Effect`/
+`Tier`, no ADR, no voice grammar. See
+`docs/architecture/wp136-task-list-status-filter.md` for the full
+account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

@@ -210,6 +210,15 @@ replacement for either.
   (ADR-0062); they remain CLI-only. No voice grammar. No new
   registered `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp133-deterministic-task-commands.md`.
+- WP-136: `jarvis do "list failed tasks"`/`"list running tasks"`/
+  `"list scheduled tasks"` (and the other three real statuses) now
+  work, generalizing WP-133's own bare `"list tasks"` into one real
+  grammar shape. Status-filtered variants reuse
+  `authorize_and_list_tasks`'s own existing `status` parameter
+  directly; "scheduled" (not a real status) applies one further,
+  local, read-only filter over the same real result. No new
+  registered `CapabilityId`/`Effect`/`Tier`, no ADR, no voice
+  grammar. See `docs/architecture/wp136-task-list-status-filter.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check
