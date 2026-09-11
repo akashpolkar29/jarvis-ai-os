@@ -190,22 +190,33 @@ and its own sibling finding already named:
   a genuinely different property from file permissions and was not
   part of Decision 6 -- it closes a separate, sibling gap this same
   document already named.
-- **The cross-process race** between two legitimate JARVIS processes
-  saving the same file simultaneously -- unrelated to file permissions
-  or atomicity, still open; this document's own sibling finding.
-  Atomicity guarantees each individual `save()` call is all-or-nothing;
-  it says nothing about which of two *concurrent* calls targeting the
-  same path wins -- whichever atomic replace lands last still
-  completely replaces the other's whole, valid file, silently
-  discarding the other writer's own newly-appended record. A real fix
-  needs file locking or a real `AuditStoragePort` contract change
-  (e.g. an append-only format), a genuine architecture decision, not
-  built here.
+- ~~The cross-process race~~ -- **CLOSED 2026-09-11 (WP-115)**: two
+  legitimate JARVIS processes racing to `save()` the same file no
+  longer silently discard one writer's new record. `save()` now
+  re-reads the file's *current* disk content under a real,
+  cross-process `fcntl.flock()`, takes only the caller's own genuinely
+  new records, and re-parents each onto the disk's current tail via
+  `AuditChain.append()` before writing -- proven directly by real
+  `multiprocessing.Process` tests (`tests/unit/test_audit_storage_process_safety.py`).
+  See `docs/architecture/audit-chain-process-safety.md` for the full
+  account. **This closes the lost-update race between legitimate
+  processes only** -- it is not, and was never intended to be, a
+  defense against a privileged adversary (or the file's own legitimate
+  owner) deliberately replacing the whole file with a freshly
+  self-consistent but fabricated history. That is the separate,
+  still-open "wholesale file replacement" gap named earlier in this
+  document (the four numbered options) -- WP-115 does not touch it,
+  and no option among those four has been chosen beyond option 1
+  (file permissions, Decision 6 above, which explicitly does not close
+  it either).
 
-Three of the four real gaps are now closed, one remains an open,
-accepted limitation of the current persistence format -- this
-decision, the 2026-09-07 timestamp addition, and the 2026-09-08
-atomic-write fix together close three of four, not all four, and this
-is recorded here precisely so a future reader does not mistake
-"progress was made on audit-chain integrity" for "every audit-chain
-integrity gap is now closed."
+All four of the gaps this decision's own "does and does not close"
+list originally enumerated are now closed (file permissions, the
+timestamp field, atomicity, and the cross-process race). This does
+**not** mean audit-chain integrity is fully solved: the earlier,
+separate "wholesale file replacement by a privileged adversary or the
+file's own owner" gap (options 1-4 above) remains open -- only option
+1 has been applied, and it was already documented as insufficient
+against that specific threat. A future reader should not mistake "the
+four originally-tracked gaps are closed" for "every audit-chain
+integrity gap is closed" -- they are two different lists.
