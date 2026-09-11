@@ -75,7 +75,7 @@ optional email/calendar connection flags; and the audit chain's
 real cross-process lost-write race (item 5, 2026-09-11, WP-115),
 closed via a real `fcntl.flock()`-protected re-read-and-merge inside
 `save()`, proven by real `multiprocessing.Process` tests -- no
-`AuditStoragePort` contract change, no new dependency. All items 1-26
+`AuditStoragePort` contract change, no new dependency. All items 1-27
 below are resolved, decided, or built -- nothing in this index remains
 open as of 2026-09-11 (a real, separate, narrower residual limitation
 of item 5's own fix -- a privileged adversary fabricating a wholesale
@@ -90,7 +90,10 @@ status mutation; and real task cancellation (item 26, 2026-09-11,
 WP-117), the first code path to ever reach `"cancelled"` -- letting a
 human retire a `"created"` task they no longer want run, or a stale
 `"running"` one WP-116 can only report, never interrupting any real
-in-flight execution (there is none to interrupt in this architecture).
+in-flight execution (there is none to interrupt in this architecture);
+and a real fix closing the one gap item 26 itself opened (item 27,
+2026-09-11, WP-118) -- `authorize_and_run_task` now refuses to
+silently resume a `"cancelled"` task.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1165,6 +1168,31 @@ never update it again on its own.
 `jarvis task cancel <task_id>` is the new CLI entry point, alongside
 `create`/`run`/`status`/`list`. No voice grammar. See
 `docs/architecture/task-cancellation.md` for the full account.
+
+## 27. ~~`task run` silently resuming an already-cancelled task~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-118**. A real gap item 26 (WP-117) itself opened:
+before WP-117, no task could reach `"cancelled"`, so
+`authorize_and_run_task`'s own unconditional transition to `"running"`
+(it never checked the task's prior status) was harmless. The moment
+`"cancelled"` became real, that same behavior became a genuine
+correctness bug -- `jarvis task run <id> <goal>` called directly on a
+task a human had just cancelled would silently resume it, completely
+undoing the cancellation with no indication anything unusual had
+happened.
+
+`authorize_and_run_task` now looks up the task's current record first
+(the identical, unmodified `memory.get` lookup `authorize_and_cancel_task`
+already uses) and refuses to run a `"cancelled"` task, returning its
+real current status and a reason, attempting no "running" transition,
+no plan execution, and publishing no event. Deliberately narrow: a
+`"completed"`/`"failed"` task remains freely re-runnable -- legitimate
+retry behavior, not a gap, unchanged by this fix. No CLI change
+needed -- the existing `task run` print path already passes
+`status`/`reason` through generically. No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/run-refuses-cancelled-task.md` for the full
+account.
 
 ## Maintaining this index
 

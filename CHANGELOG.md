@@ -77,6 +77,16 @@ replacement for either.
 
 ### Fixed
 
+- WP-118: `authorize_and_run_task` no longer silently resumes an
+  already-`"cancelled"` task -- a real gap WP-117 itself opened (before
+  it, no task could reach `"cancelled"`, so the missing status check
+  was harmless). `jarvis task run <id> <goal>` on a cancelled task now
+  refuses, returning `status="cancelled"` with a real reason, never
+  attempting the "running" transition or any plan execution. A
+  `"completed"`/`"failed"` task remains freely re-runnable by design.
+  No new `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/run-refuses-cancelled-task.md`.
+
 - WP-115: the audit chain's real cross-process lost-write race --
   two independent processes racing to save the same `--chain-path`
   file no longer silently discard either one's own record.

@@ -433,6 +433,22 @@ it.
   `jarvis task cancel <task_id>` is the new CLI entry point. See
   `docs/architecture/task-cancellation.md` and
   `docs/OPEN_DECISIONS.md` item 26.
+  **Updated 2026-09-11 (WP-118)**: closes the one real gap WP-117
+  itself opened — before it, no task could reach `"cancelled"`, so
+  `authorize_and_run_task`'s own unconditional transition to
+  `"running"` (no prior-status check) was harmless. The moment
+  `"cancelled"` became real, `jarvis task run <id> <goal>` called
+  directly on a cancelled task would silently resume it, completely
+  undoing the cancellation. `authorize_and_run_task` now looks up the
+  task's current record first (the identical `memory.get` lookup
+  `authorize_and_cancel_task` already uses) and refuses to run a
+  `"cancelled"` task, returning `status="cancelled"` with a real
+  reason, attempting no transition, no plan execution, no event. A
+  `"completed"`/`"failed"` task remains freely re-runnable by design —
+  legitimate retry behavior, not a gap. No CLI change needed, no new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/run-refuses-cancelled-task.md` and
+  `docs/OPEN_DECISIONS.md` item 27.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
