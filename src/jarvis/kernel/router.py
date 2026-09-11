@@ -129,10 +129,10 @@ from jarvis.kernel.intent import (
     resolve_intent,
 )
 from jarvis.kernel.tasks import (
-    TaskListOutcome,
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
+    filter_scheduled_tasks,
 )
 
 if TYPE_CHECKING:
@@ -838,18 +838,7 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
             clock=real_clock,
             id_port=id_port,
         )
-        scheduled_records = tuple(
-            record
-            for record in list_outcome.records
-            if isinstance(record.value.value, dict) and record.value.value.get("scheduled_at")
-        )
-        scheduled_ids = {record.identifier for record in scheduled_records}
-        filtered_outcome = TaskListOutcome(
-            decision=list_outcome.decision,
-            records=scheduled_records,
-            stale_task_ids=list_outcome.stale_task_ids & scheduled_ids,
-            due_task_ids=list_outcome.due_task_ids & scheduled_ids,
-        )
+        filtered_outcome = filter_scheduled_tasks(list_outcome)
         return RouteOutcome(
             route=route,
             decision=filtered_outcome.decision,

@@ -1616,6 +1616,17 @@ redesign needed, since `run_pending_tasks_once`/
 `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp139-worker-dry-run.md` for the full account.
 
+## 45. ~~Scheduler inspection~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-140**. `jarvis task list --scheduled-only`, plus
+a real, small refactor: `kernel.tasks.filter_scheduled_tasks` is a new
+shared, pure function extracted from WP-136's own `"list scheduled
+tasks"` router command (which now calls it too, instead of its own
+inlined duplicate). Mutually exclusive with `--status`. No new
+scheduler, no recurrence, no new `CapabilityId`/`Effect`/`Tier`, no
+ADR. See `docs/architecture/wp140-scheduler-inspection.md` for the
+full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

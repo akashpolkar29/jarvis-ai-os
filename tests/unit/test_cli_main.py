@@ -3026,6 +3026,68 @@ def test_task_list_subcommand_prints_each_task(
     assert "task:1: goal='a goal' status=completed" in captured.out
 
 
+def test_task_list_scheduled_only_filters_to_real_scheduled_tasks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-140: --scheduled-only requests status="created" and applies the real, shared filter."""
+    received: list[str | None] = []
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        received.append(status)
+
+        def _record(identifier: str, scheduled_at: str | None) -> MemoryRecord:
+            return MemoryRecord(
+                identifier=identifier,
+                value=Tainted(
+                    {
+                        "kind": "task",
+                        "goal": identifier,
+                        "status": "created",
+                        "reason": None,
+                        "created_at": "2026-09-09T00:00:00+00:00",
+                        "updated_at": "2026-09-09T00:00:00+00:00",
+                        "scheduled_at": scheduled_at,
+                    },
+                    Provenance.user(),
+                ),
+                written_at=datetime(2026, 9, 9, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        return TaskListOutcome(
+            decision=_make_decision(granted=True, capability_id="memory.retrieve"),
+            records=(
+                _record("task:scheduled", "2026-09-12T09:00:00+00:00"),
+                _record("task:unscheduled", None),
+            ),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        ["task", "list", "--scheduled-only", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["created"]
+    assert exit_code == 0
+    assert "task:scheduled" in captured.out
+    assert "task:unscheduled" not in captured.out
+
+
+def test_task_list_status_and_scheduled_only_are_mutually_exclusive() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "list", "--status", "failed", "--scheduled-only"])
+
+
 def test_task_status_subcommand_prints_a_stale_warning_when_the_kernel_reports_one(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

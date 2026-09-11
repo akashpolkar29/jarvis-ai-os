@@ -1188,6 +1188,48 @@ def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function p
     )
 
 
+def filter_scheduled_tasks(outcome: TaskListOutcome) -> TaskListOutcome:
+    """Narrow a real `TaskListOutcome` to only its genuinely-scheduled records (WP-140).
+
+    A pure, read-only, local filter -- performs no I/O of its own,
+    calls no `authorize_and_*` function, and involves no real
+    authorization decision beyond the one `outcome` itself already
+    carries (its own `decision` is passed straight through unchanged).
+    "Scheduled" is not itself a real task status (a scheduled task is
+    any `"created"` task that also has a real `scheduled_at`, WP-122)
+    -- callers are expected to have already called
+    :func:`authorize_and_list_tasks` with ``status="created"`` for
+    this to be meaningful; a record whose own status is not
+    `"created"` is filtered out here regardless, since `scheduled_at`
+    is preserved (not cleared) through every later transition
+    (WP-122's own "survives" guarantee) and would otherwise show up
+    here as a false positive.
+
+    Shared by `kernel.router`'s own `"list scheduled tasks"` command
+    (WP-136) and `jarvis task list --scheduled-only` (WP-140) --
+    written once, not duplicated between the two real callers.
+
+    Returns:
+        A new `TaskListOutcome` with `records`/`stale_task_ids`/
+        `due_task_ids` all narrowed to the same real subset;
+        `decision` is `outcome.decision`, unchanged.
+    """
+    scheduled_records = tuple(
+        record
+        for record in outcome.records
+        if isinstance(record.value.value, dict)
+        and record.value.value.get("status") == "created"
+        and record.value.value.get("scheduled_at")
+    )
+    scheduled_ids = {record.identifier for record in scheduled_records}
+    return TaskListOutcome(
+        decision=outcome.decision,
+        records=scheduled_records,
+        stale_task_ids=outcome.stale_task_ids & scheduled_ids,
+        due_task_ids=outcome.due_task_ids & scheduled_ids,
+    )
+
+
 _CANCELLABLE_STATUSES = frozenset({"created", "running"})
 """The only two real statuses authorize_and_cancel_task() will transition out of.
 

@@ -227,6 +227,13 @@ replacement for either.
   `--poll-interval-seconds`. No change to
   `kernel.worker.run_pending_tasks_once` itself. See
   `docs/architecture/wp139-worker-dry-run.md`.
+- WP-140: `jarvis task list --scheduled-only` -- reuses a new, shared,
+  pure `kernel.tasks.filter_scheduled_tasks` function, extracted from
+  WP-136's own `"list scheduled tasks"` router command (which now
+  calls the identical, single implementation instead of its own
+  inlined copy). Mutually exclusive with `--status`. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR, no second scheduler. See
+  `docs/architecture/wp140-scheduler-inspection.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

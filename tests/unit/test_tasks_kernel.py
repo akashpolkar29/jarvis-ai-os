@@ -42,6 +42,7 @@ from jarvis.kernel.tasks import (
     authorize_and_run_task,
     authorize_and_schedule_task,
     derive_result_status,
+    filter_scheduled_tasks,
     update_task_status,
 )
 
@@ -1946,3 +1947,73 @@ async def test_get_reports_due_false_for_a_scheduled_task_that_already_ran(
     get_outcome = _get(tmp_path, create_outcome.task_id)
 
     assert get_outcome.due is False
+
+
+def test_filter_scheduled_tasks_keeps_only_created_tasks_with_a_real_scheduled_at(
+    tmp_path: Path,
+) -> None:
+    """WP-140: the real, shared filter both kernel.router and jarvis task list reuse."""
+    id_port = _SequentialIdPort()
+    scheduled = _create(tmp_path, "a scheduled goal", id_port=id_port)
+    unscheduled = _create(tmp_path, "an unscheduled goal", id_port=id_port)
+    completed = _create(tmp_path, "a completed goal", id_port=id_port)
+    assert scheduled.task_id is not None
+    assert unscheduled.task_id is not None
+    assert completed.task_id is not None
+    _schedule(tmp_path, scheduled.task_id, "2026-09-12T09:00:00+00:00")
+    update_task_status(
+        completed.task_id,
+        "a completed goal",
+        "completed",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+    )
+
+    filtered = filter_scheduled_tasks(list_outcome)
+
+    assert {record.identifier for record in filtered.records} == {scheduled.task_id}
+    assert filtered.decision is list_outcome.decision
+
+
+def test_filter_scheduled_tasks_narrows_stale_and_due_ids_too(tmp_path: Path) -> None:
+    id_port = _SequentialIdPort()
+    scheduled = _create(tmp_path, "a due, scheduled goal", id_port=id_port)
+    assert scheduled.task_id is not None
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+    _schedule(tmp_path, scheduled.task_id, (_NOW - timedelta(hours=1)).isoformat())
+    stale_running = _create(tmp_path, "a stale, unscheduled goal", id_port=id_port)
+    assert stale_running.task_id is not None
+    _set_running_at(tmp_path, stale_running.task_id, "a stale, unscheduled goal", _NOW)
+
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(past_threshold),
+        id_port=id_port,
+    )
+    assert scheduled.task_id in list_outcome.due_task_ids
+    assert stale_running.task_id in list_outcome.stale_task_ids
+
+    filtered = filter_scheduled_tasks(list_outcome)
+
+    assert filtered.due_task_ids == {scheduled.task_id}
+    assert filtered.stale_task_ids == frozenset()

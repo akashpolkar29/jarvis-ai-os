@@ -256,6 +256,7 @@ from jarvis.kernel.tasks import (
     authorize_and_retry_task,
     authorize_and_run_task,
     authorize_and_schedule_task,
+    filter_scheduled_tasks,
 )
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.kernel.worker import run_pending_tasks_once
@@ -731,11 +732,21 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     list_parser = task_subparsers.add_parser(
         "list", help="List real tasks, optionally filtered by status."
     )
-    list_parser.add_argument(
+    list_filter_group = list_parser.add_mutually_exclusive_group()
+    list_filter_group.add_argument(
         "--status",
         default=None,
         choices=VALID_TASK_STATUSES,
         help="Only show tasks with this exact status.",
+    )
+    list_filter_group.add_argument(
+        "--scheduled-only",
+        action="store_true",
+        help=(
+            "Only show real, currently-scheduled tasks -- a 'created' task with a real "
+            "scheduled_at. Mutually exclusive with --status, since a scheduled task is "
+            "always 'created'."
+        ),
     )
     _add_common_flags(list_parser)
 
@@ -2187,11 +2198,13 @@ def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
         )
 
     list_outcome = authorize_and_list_tasks(
-        status=args.status,
+        status="created" if args.scheduled_only else args.status,
         physical_confirmation_available=args.physical_confirmation_available,
         remote_confirmation_available=args.remote_confirmation_available,
         chain_path=args.chain_path,
     )
+    if args.scheduled_only:
+        list_outcome = filter_scheduled_tasks(list_outcome)
     return _CommandOutcome(
         list_outcome.decision,
         "task list",
