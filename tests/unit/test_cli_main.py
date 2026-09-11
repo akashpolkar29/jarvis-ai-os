@@ -2832,6 +2832,118 @@ def test_task_status_subcommand_prints_a_found_record(
     assert received == ["task:1"]
     assert exit_code == 0
     assert "task:1: goal='continue the LiDAR project' status=completed" in captured.out
+    assert "updated_at: 2026-09-09T00:05:00+00:00" in captured.out
+
+
+def test_task_status_subcommand_prints_attempt_history_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-124: WP-121's durable `attempts` history is now surfaced, not just the final status."""
+
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "failed",
+                    "reason": "a real, second failure",
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:20:00+00:00",
+                    "attempts": [
+                        {
+                            "attempt": 1,
+                            "started_at": "2026-09-09T00:00:00+00:00",
+                            "ended_at": "2026-09-09T00:05:00+00:00",
+                            "status": "cancelled",
+                            "reason": None,
+                        },
+                        {
+                            "attempt": 2,
+                            "started_at": "2026-09-09T00:15:00+00:00",
+                            "ended_at": "2026-09-09T00:20:00+00:00",
+                            "status": "failed",
+                            "reason": "a real, second failure",
+                        },
+                    ],
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "attempts (2):" in captured.out
+    assert "#1 cancelled 2026-09-09T00:00:00+00:00 -> 2026-09-09T00:05:00+00:00" in captured.out
+    assert "#2 failed 2026-09-09T00:15:00+00:00 -> 2026-09-09T00:20:00+00:00" in captured.out
+    assert "reason: a real, second failure" in captured.out
+    # Attempt #1 has no reason -- no "reason:" line should follow its own summary line.
+    lines = captured.out.splitlines()
+    attempt_1_index = next(i for i, line in enumerate(lines) if "#1 cancelled" in line)
+    assert "reason:" not in lines[attempt_1_index + 1]
+
+
+def test_task_status_subcommand_prints_no_attempts_section_when_there_are_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A backward-compatible, pre-WP-121 record has no `attempts` key at all -- no crash, no section."""  # noqa: E501
+
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "created",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "attempts" not in captured.out
 
 
 def test_task_status_subcommand_reports_nothing_found(
@@ -3045,8 +3157,10 @@ def test_task_list_subcommand_prints_a_stale_warning_only_for_the_stale_task_id(
     lines = captured.out.splitlines()
     stale_index = next(i for i, line in enumerate(lines) if line.startswith("task:stale:"))
     fresh_index = next(i for i, line in enumerate(lines) if line.startswith("task:fresh:"))
-    assert "may have crashed" in lines[stale_index + 1]
-    assert fresh_index == len(lines) - 1 or "may have crashed" not in lines[fresh_index + 1]
+    stale_block = lines[stale_index:fresh_index]
+    fresh_block = lines[fresh_index:]
+    assert any("may have crashed" in line for line in stale_block)
+    assert not any("may have crashed" in line for line in fresh_block)
 
 
 def test_task_cancel_subcommand_reports_a_granted_cancellation(

@@ -2750,6 +2750,14 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
     ``jarvis.kernel.tasks._is_stale_running``) -- never derived here,
     always computed by the kernel layer from the record's own
     ``updated_at`` against a real clock, then passed straight through.
+
+    **WP-124**: also surfaces ``updated_at`` (when this record last
+    genuinely changed -- WP-2's own "when it last changed" ask) and a
+    compact rendering of WP-121's own durable ``attempts`` history
+    (every concluded execution attempt, not just the current one) --
+    both already stored on every real task record, neither previously
+    printed anywhere. Purely additive presentation: no new stored
+    field, no change to `TaskGetOutcome`/`TaskListOutcome`'s own shape.
     """
     data = record.value.value
     if not isinstance(data, dict):
@@ -2760,6 +2768,19 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
         print(f"    reason: {data.get('reason')}")
     if data.get("scheduled_at") is not None:
         print(f"    scheduled_at: {data.get('scheduled_at')}")
+    print(f"    updated_at: {data.get('updated_at')}")
+    attempts = data.get("attempts")
+    if isinstance(attempts, list) and attempts:
+        print(f"    attempts ({len(attempts)}):")
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            print(
+                f"      #{attempt.get('attempt')} {attempt.get('status')} "
+                f"{attempt.get('started_at')} -> {attempt.get('ended_at')}"
+            )
+            if attempt.get("reason") is not None:
+                print(f"          reason: {attempt.get('reason')}")
     if stale:
         print(
             "    warning: no status update in over "

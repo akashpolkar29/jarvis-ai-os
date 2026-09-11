@@ -129,6 +129,12 @@ replacement for either.
   response, a later status poll, or a prior retry that failed again)
   -- never speculatively at task creation. No new `CapabilityId`/
   `Effect`/`Tier`, no ADR. See `docs/architecture/wp123-retry-from-ui.md`.
+- WP-124: `jarvis task status`/`jarvis task list` now print a task's
+  `updated_at` and a compact rendering of WP-121's own durable
+  `attempts` history -- both already stored on every real task record,
+  neither previously surfaced. Purely additive presentation; no new
+  stored field, no ADR. See
+  `docs/architecture/wp124-task-observability-presentation.md`.
 
 ### Fixed
 

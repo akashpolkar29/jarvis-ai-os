@@ -1456,6 +1456,18 @@ poll, or a prior retry that failed again -- never speculatively at
 task creation. No new `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp123-retry-from-ui.md` for the full account.
 
+## 33. ~~Task progress / attempt-history presentation~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-124**. `jarvis task status`/`jarvis task list`
+never surfaced a task's own `updated_at` (when it last changed) or
+WP-121's own durable `attempts` history (every concluded attempt, not
+just the current terminal one) -- both already stored on every real
+task record. Purely additive presentation in `_print_one_task_record`
+(mirrors `jarvis project status`'s own existing `updated_at` line);
+no new stored field, no kernel change, no ADR. See
+`docs/architecture/wp124-task-observability-presentation.md` for the
+full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
