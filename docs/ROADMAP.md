@@ -415,6 +415,24 @@ it.
   mutation was added. No new `CapabilityId`/`Effect`/`Tier`, no ADR.
   See `docs/architecture/stale-running-task-detection.md` and
   `docs/OPEN_DECISIONS.md` item 25.
+  **Updated 2026-09-11 (WP-117)**: real task cancellation, the first
+  code path to ever reach the long-reserved `"cancelled"` status.
+  `authorize_and_cancel_task` reuses `authorize_and_get_task` (the
+  lookup) and `update_task_status` (the identical `memory.update`
+  transition every other status change already uses, ADR-0063)
+  completely unmodified — no new `CapabilityId`/`Effect`/`Tier`, no
+  ADR. Only a `"created"` or `"running"` task may be cancelled; a
+  terminal-status task is refused with a real reason naming its
+  current status. A real, deliberate, narrow semantic, stated
+  precisely: cancelling a `"running"` task does not interrupt any
+  real, in-flight execution — there is none to interrupt in this
+  architecture (`authorize_and_run_task` runs synchronously to
+  completion in one call; `jarvis ui`'s own server is deliberately
+  single-threaded, WP-108). It lets a human retire a `"created"` task
+  nobody wants run, or a stale `"running"` one WP-116 can only report.
+  `jarvis task cancel <task_id>` is the new CLI entry point. See
+  `docs/architecture/task-cancellation.md` and
+  `docs/OPEN_DECISIONS.md` item 26.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

@@ -65,6 +65,15 @@ replacement for either.
   apart from a genuinely slow one. No new `CapabilityId`/`Effect`/
   `Tier`, no ADR. See
   `docs/architecture/stale-running-task-detection.md`.
+- WP-117: real task cancellation -- `jarvis task cancel <task_id>`,
+  the first code path to ever reach the long-reserved `"cancelled"`
+  status. Reuses `authorize_and_get_task`/`update_task_status`
+  (`memory.update`, ADR-0063) completely unmodified. Only a `"created"`
+  or `"running"` task may be cancelled; a terminal-status task is
+  refused with a real reason. Does not interrupt any in-flight
+  execution -- there is none to interrupt in this architecture. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/task-cancellation.md`.
 
 ### Fixed
 

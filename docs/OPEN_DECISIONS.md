@@ -75,7 +75,7 @@ optional email/calendar connection flags; and the audit chain's
 real cross-process lost-write race (item 5, 2026-09-11, WP-115),
 closed via a real `fcntl.flock()`-protected re-read-and-merge inside
 `save()`, proven by real `multiprocessing.Process` tests -- no
-`AuditStoragePort` contract change, no new dependency. All items 1-25
+`AuditStoragePort` contract change, no new dependency. All items 1-26
 below are resolved, decided, or built -- nothing in this index remains
 open as of 2026-09-11 (a real, separate, narrower residual limitation
 of item 5's own fix -- a privileged adversary fabricating a wholesale
@@ -86,7 +86,11 @@ stale-running-task detection (item 25, 2026-09-11, WP-116) --
 `jarvis task status`/`list` now surface a task still `"running"` more
 than 30 minutes after its own last `updated_at` as stale, a real,
 derived, ephemeral signal computed at read time, never an automatic
-status mutation.
+status mutation; and real task cancellation (item 26, 2026-09-11,
+WP-117), the first code path to ever reach `"cancelled"` -- letting a
+human retire a `"created"` task they no longer want run, or a stale
+`"running"` one WP-116 can only report, never interrupting any real
+in-flight execution (there is none to interrupt in this architecture).
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1130,6 +1134,37 @@ read-only visibility on top of `memory.get`/`memory.retrieve`'s own
 already-classified, unmodified authorization path. See
 `docs/architecture/stale-running-task-detection.md` for the full
 account.
+
+## 26. ~~Task cancellation semantics~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-117**. Closes the other half of the gap item 25
+(WP-116) could only surface, not act on, and is itself the first real
+code path ever to reach the long-reserved `"cancelled"` status in
+`VALID_TASK_STATUSES`. Also one of the overnight session's own
+explicitly named Priority 2 candidates.
+
+`authorize_and_cancel_task(task_id, ...)` reuses
+`authorize_and_get_task` (the lookup) and `update_task_status` (the
+identical `memory.update` transition every other status change
+already uses, ADR-0063) completely unmodified -- no new
+`CapabilityId`/`Effect`/`Tier`, no ADR. Only a task currently
+`"created"` or `"running"` may be cancelled; a task already
+`"completed"`/`"failed"`/`"cancelled"` is refused with a real reason
+naming its current status, never silently accepted.
+
+**A real, deliberate, narrow semantic, stated precisely**: cancelling
+a `"running"` task does not interrupt any real, in-flight execution --
+there is none to interrupt in this architecture (`authorize_and_run_task`
+runs synchronously to completion in one call; `jarvis ui`'s own server
+is deliberately single-threaded, WP-108). What it actually does is let
+a human retire a task's own stored status by hand -- most usefully for
+a `"created"` task nobody wants run, or a `"running"` task whose
+owning process has already died (item 25's own stale signal) and will
+never update it again on its own.
+
+`jarvis task cancel <task_id>` is the new CLI entry point, alongside
+`create`/`run`/`status`/`list`. No voice grammar. See
+`docs/architecture/task-cancellation.md` for the full account.
 
 ## Maintaining this index
 
