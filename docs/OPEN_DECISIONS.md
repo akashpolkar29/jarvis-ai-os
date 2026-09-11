@@ -99,11 +99,20 @@ item 26 (item 28, 2026-09-11, WP-119) -- `jarvis ui` gained a real
 `authorize_and_cancel_task` completely unmodified; and a real,
 process-safe background worker (item 29, 2026-09-11, WP-120) --
 `jarvis task worker` discovers every real "created" task and claims
-one at a time through a new, real, `BEGIN IMMEDIATE`-based
-compare-and-swap primitive inside `authorize_and_run_task`'s own
-"created" -> "running" transition, proven by real `multiprocessing.Process`
-tests that two independent processes can never both execute the same
-task.
+one at a time through a new, real, process-safe compare-and-swap
+primitive inside `authorize_and_run_task`'s own "created" -> "running"
+transition (initially `BEGIN IMMEDIATE`-based, replaced with
+`fcntl.flock()` after a real CI run exposed both an insufficient lock
+and, separately, a real "running" -> "running" CAS re-claim bug that
+was the actual root cause -- see item 29's own full account below),
+proven by real `multiprocessing.Process` tests that two independent
+processes can never both execute the same task; and a real, explicit
+task-retry verb plus durable execution history (item 30, 2026-09-11,
+WP-121) -- `jarvis task retry <task_id>` permits retrying only a
+`"failed"` task and delegates unmodified to `authorize_and_run_task`,
+automatically inheriting item 29's own claim protection with zero new
+locking code, while every task record gained a real, additive,
+backward-compatible `"attempts"` history field.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1241,15 +1250,34 @@ claiming the same task simultaneously.
 
 **The claim mechanism**: a new, real, process-safe compare-and-swap
 primitive, `MemoryWritePort.compare_and_update_value` (`SqliteMemoryAdapter`,
-using SQLite's own `BEGIN IMMEDIATE` write lock, empirically verified
-across real, separate OS processes) and its composition-root
-counterpart `kernel.memory.authorize_and_compare_and_update` (reusing
+empirically verified across real, separate OS processes) and its
+composition-root counterpart `kernel.memory.authorize_and_compare_and_update`
+(reusing
 `memory.update`'s own, already-classified authorization path
 unmodified). `authorize_and_run_task`'s own "created" -> "running"
 transition is the one, narrow place this is used (`update_task_status(...,
 atomic=True)`) -- every other real status transition in
 `kernel.tasks` keeps its original, unconditional blind-write behavior,
 since only this one transition has a genuine claim race to close.
+
+**Real, documented correction (same day)**: the lock underneath
+`compare_and_update_value` was initially SQLite's own `BEGIN IMMEDIATE`
+write lock. A real CI run then reproduced two real processes both
+reporting a successful claim even with that lock in place -- not a
+locking failure, but a real, separate "running" -> "running" CAS
+re-claim logic bug (a slower racer's own `expected_value`, read before
+it acquired anything, legitimately matched what was already on disk,
+since nothing else had changed in between). The lock itself was
+replaced with `fcntl.flock()` on a dedicated sibling lock file (the
+same, already-proven WP-115 mechanism) to rule out a locking
+explanation first; the real bug was then found by forcing local CPU
+contention with `taskset -c 0,1` (reproducing the CI-only failure for
+the first time on this development machine) and fixed by refusing any
+"running" -> "running" transition outright inside
+`update_task_status`. See
+`docs/architecture/wp120-background-worker.md`'s own "Four real
+findings from CI, not silently worked around" section for the full,
+chronological account.
 
 **The worker**: `jarvis.kernel.worker.run_pending_tasks_once` discovers
 every `"created"` task and delegates each to the exact, unmodified
@@ -1268,6 +1296,61 @@ all completely unchanged, reused as-is. Proven by real
 processes can never both execute the same task. No new
 `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp120-background-worker.md` for the full account.
+
+## 30. ~~Safe task retry + durable execution history~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-121**. Closes the real gap left by WP-120: once a
+task fails, nothing distinguished "retry this specific failed task" as
+its own explicit action from the generic `jarvis task run` verb also
+used for a brand-new task's first attempt, and nothing durably
+recorded what happened across multiple attempts beyond the record's
+own final `status`/`reason` pair.
+
+**Retry semantics**: `authorize_and_retry_task` permits retrying only
+a task currently `"failed"` (`_RETRYABLE_STATUSES = frozenset({"failed"})`)
+-- deliberately narrower than `jarvis task run`'s own existing
+"completed"/"failed" re-run permissiveness (WP-118's own documented
+scope). A `"completed"` task has nothing to retry (`task run` remains
+correct for a caller that wants to re-run one anyway); a `"cancelled"`
+task is never retried, mirroring WP-118's identical guard for ordinary
+`run`. Once permitted, it delegates directly, unmodified, to
+`authorize_and_run_task` -- no second execution path, no new
+authorization concept.
+
+**Concurrency protection, for free**: because retry delegates to the
+exact, unmodified `authorize_and_run_task`, it is automatically
+protected by WP-120's own, already-hardened process-safe claim
+mechanism (including the "running" -> "running" re-claim refusal that
+closed WP-120's own real CI race) -- zero new locking code was
+written. Proven directly by a new, real `multiprocessing.Process`
+test mirroring WP-120's own headline proof: `_WORKER_COUNT` genuinely
+independent OS processes race to retry the same, already-failed task;
+no two real winners' own measured wall-clock windows ever overlap, run
+repeatedly under `taskset -c 0,1` (the same adversarial-contention
+technique that originally exposed WP-120's real bug) with zero
+flakiness.
+
+**Execution history**: every task record gained a real, additive
+`"attempts"` field -- one entry per concluded "running" -> terminal
+transition, appended, never replacing an earlier entry, so a retry's
+own new attempt never destroys the original failure's record.
+Deliberately the smallest durable representation, not an
+event-sourcing framework and not a duplicate of the existing
+`EventBus` (WP-111) -- the bus is transient, in-process notification;
+`"attempts"` is the real, durable, queryable record. Backward
+compatible: a pre-WP-121 record has no `"attempts"` key at all, proven
+directly against a real, hand-built legacy record that still loads,
+runs, and gains a correct first attempt entry.
+
+**Entry point**: `jarvis task retry <task_id>` (CLI only). No voice
+grammar (matching `task cancel`'s own identical scope boundary); no
+dedicated UI button (a real, separable follow-up -- the UI's existing
+generic "Run" button would need its own new state to distinguish
+"run" from "retry" meaningfully, real, additive frontend work this
+work package's own scope did not call for building unprompted). No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp121-task-retry-and-history.md` for the full
+account.
 
 ## Maintaining this index
 

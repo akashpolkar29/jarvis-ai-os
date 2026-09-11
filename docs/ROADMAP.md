@@ -467,11 +467,20 @@ it.
   foundation, closing the gap between "a task exists, persisted" and
   "a task can safely run as a durable background job." A new, real,
   process-safe compare-and-swap primitive
-  (`MemoryWritePort.compare_and_update_value`, `SqliteMemoryAdapter`,
-  SQLite's own `BEGIN IMMEDIATE` write lock, empirically verified
-  across real, separate OS processes) protects `authorize_and_run_task`'s
-  own "created" -> "running" transition — the one real, narrow place a
-  genuine claim race existed — via
+  (`MemoryWritePort.compare_and_update_value`, `SqliteMemoryAdapter`)
+  protects `authorize_and_run_task`'s own "created" -> "running"
+  transition — the one real, narrow place a genuine claim race
+  existed. **Real, documented correction**: initially built on
+  SQLite's own `BEGIN IMMEDIATE` write lock; a real CI run then proved
+  this insufficient against the actual root cause (a real "running" ->
+  "running" CAS re-claim logic bug, not a locking failure), so the
+  lock mechanism was replaced with `fcntl.flock()` on a dedicated
+  sibling lock file (the same, already-proven WP-115 mechanism), and
+  the real bug itself was separately found and fixed the same day —
+  see `docs/architecture/wp120-background-worker.md`'s own "Four real
+  findings from CI" section for the full, chronological account. The
+  final, merged mechanism is empirically verified across real,
+  separate OS processes — via
   `kernel.memory.authorize_and_compare_and_update`, reusing
   `memory.update`'s own, already-classified authorization path
   unmodified. `jarvis.kernel.worker.run_pending_tasks_once` discovers
@@ -488,6 +497,31 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp120-background-worker.md` and
   `docs/OPEN_DECISIONS.md` item 29.
+  **Updated 2026-09-11 (WP-121)**: safe, explicit task retry + durable
+  execution history. `authorize_and_retry_task` (new) only permits
+  retrying a task currently `"failed"` — deliberately narrower than
+  `jarvis task run`'s own existing "completed"/"failed" re-run
+  permissiveness (a completed task has nothing to retry; a cancelled
+  task is never retried, mirroring WP-118's identical guard) — then
+  delegates directly, unmodified, to `authorize_and_run_task`, so it
+  is automatically protected by WP-120's own, already-hardened
+  process-safe claim mechanism with zero new locking code. Every task
+  record gained a real, additive `"attempts"` field (one entry per
+  concluded "running" → terminal transition, appended never replaced,
+  so a retry's own new attempt never destroys the original failure's
+  record) — backward-compatible with every pre-WP-121 record, which
+  has no such key at all, proven directly against a real, hand-built
+  legacy record. `jarvis task retry <task_id>` (CLI) is the new, real
+  entry point; no voice grammar, no UI button (both named as real,
+  explicit, separable follow-ups, not built unprompted). Proven by a
+  new, real `multiprocessing.Process` test mirroring WP-120's own
+  headline proof exactly — `_WORKER_COUNT` genuinely independent OS
+  processes all racing to retry the same, already-failed task, no two
+  real winners' own wall-clock windows ever overlapping, run
+  repeatedly under `taskset -c 0,1` with zero flakiness. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp121-task-retry-and-history.md` and
+  `docs/OPEN_DECISIONS.md` item 30.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

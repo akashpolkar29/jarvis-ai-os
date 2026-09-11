@@ -84,14 +84,29 @@ replacement for either.
 - WP-120: a real, process-safe background worker, `jarvis task worker`
   -- discovers every "created" task and claims-and-runs each through
   the exact, unmodified `authorize_and_run_task`. A new, real
-  compare-and-swap primitive (`MemoryWritePort.compare_and_update_value`,
-  SQLite `BEGIN IMMEDIATE`) protects the "created" -> "running"
-  transition, proven by real `multiprocessing.Process` tests that two
-  independent processes can never both execute the same task.
+  compare-and-swap primitive (`MemoryWritePort.compare_and_update_value`)
+  protects the "created" -> "running" transition -- initially built on
+  SQLite `BEGIN IMMEDIATE`, later replaced with `fcntl.flock()` on a
+  dedicated lock file after real CI runs proved `BEGIN IMMEDIATE` alone
+  insufficient against the actual root cause (a "running" -> "running"
+  CAS re-claim bug, fixed the same day -- see
+  `docs/architecture/wp120-background-worker.md`'s own "Four real
+  findings" section) -- proven by real `multiprocessing.Process` tests
+  that two independent processes can never both execute the same task.
   Foreground by default, no hidden daemonization; `--once` for one
   pass, `--max-passes` for a deterministic, scriptable continuous
   mode. No new task status, no new `CapabilityId`/`Effect`/`Tier`, no
   ADR. See `docs/architecture/wp120-background-worker.md`.
+- WP-121: `jarvis task retry <task_id>` -- a real, explicit retry verb
+  permitting only a `"failed"` task to be retried (narrower than
+  `jarvis task run`'s own existing re-run permissiveness), delegating
+  unmodified to `authorize_and_run_task` so it automatically inherits
+  WP-120's own process-safe claim protection with zero new locking
+  code. Every task record gained a real, additive, backward-compatible
+  `"attempts"` execution-history field -- one entry per concluded
+  attempt, appended, never replacing an earlier one. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp121-task-retry-and-history.md`.
 
 ### Fixed
 
