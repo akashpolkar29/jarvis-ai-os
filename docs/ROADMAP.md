@@ -574,6 +574,46 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp123-retry-from-ui.md` and
   `docs/OPEN_DECISIONS.md` item 32.
+  **Updated 2026-09-12 (WP-124 through WP-157, condensed — see each
+  work package's own `docs/architecture/wpNNN-*.md` and the matching
+  `docs/OPEN_DECISIONS.md` item for full detail, not repeated here)**:
+  thirty-four further work packages rounded out the task subsystem
+  from "core lifecycle exists" to "operable, diagnosable, and
+  reviewed," grouped by theme rather than listed individually —
+  **task lifecycle & recovery**: real, process-safe recovery of a
+  stale `"running"` task (`authorize_and_recover_task`, item 26/35),
+  closed blind-write races in cancel/schedule via the same CAS
+  primitive WP-120 already proved (item 36), and a real, live-verified
+  check that recovery/scheduling/cancellation interact correctly
+  together (item 37); **scheduling & worker operability**: due/not-due
+  visibility on `jarvis task list --scheduled-only` and in the
+  worker's own ordinary output (items 34, 45, 51), a read-only
+  `--dry-run` inspection mode (item 44), and real exit codes so a
+  script/cron caller can detect a genuine per-task error (item 39);
+  **router & CLI parity**: `jarvis do`/`jarvis ui` gained deterministic,
+  router-only `task status`/`list [status] tasks`/`list scheduled
+  tasks` grammar reusing the exact same kernel functions the CLI
+  already called, never a second execution path (items 40, 41), plus
+  a `created_at` diagnostic field and a `--status` CLI filter (items
+  33, 41, 42 — the latter found already solved); **browser safety**: a
+  full reliability re-check found no new gap beyond one already-known,
+  accepted limitation (item 54), and a real fix rejects any
+  `browser.open_page` URL whose scheme isn't `http`/`https` before
+  authorization, closing a live-confirmed local-file-read exposure
+  (item 55); **diagnostics & hygiene**: `jarvis doctor` now checks the
+  memory/task-store database (item 50), `jarvis memory retrieve`
+  prints an honest empty-result message (item 49), a `pip-audit` dev
+  dependency was formally declared (item 47), and re-checks of memory
+  search quality and the end-to-end smoke suite both found existing
+  coverage already sufficient (items 56, 57). **One real, genuinely
+  open question was raised, not decided**: whether task/job-application
+  records should keep inheriting the shared 90-day memory-retention
+  default or get their own policy (item 52) — investigated, two
+  candidate fixes rejected as decisions this work has no authority to
+  make unilaterally, left for the user. A closing architecture review
+  (item 58) confirmed all gates green and flagged `docs/ROADMAP.md`'s
+  own then-staleness (fixed by this very update) and a possible future
+  milestone tag, neither acted on unilaterally.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
