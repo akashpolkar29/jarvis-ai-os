@@ -17,6 +17,7 @@ import pytest
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.kernel.memory import (
     authorize_and_backup_memory,
+    authorize_and_compare_and_update,
     authorize_and_forget,
     authorize_and_get,
     authorize_and_pin,
@@ -273,6 +274,165 @@ def test_granted_update_of_an_unknown_identifier_raises(tmp_path: Path) -> None:
             clock=_FakeClock(),
             id_port=_SequentialIdPort(),
         )
+
+
+def test_granted_compare_and_update_applies_when_expected_matches(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        {"status": "created"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    outcome = authorize_and_compare_and_update(
+        write_outcome.identifier,
+        {"status": "created"},
+        {"status": "running"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.applied is True
+
+    get_outcome = authorize_and_get(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value == {"status": "running"}
+
+
+def test_granted_compare_and_update_does_not_apply_when_expected_does_not_match(
+    tmp_path: Path,
+) -> None:
+    """A real, honest "lost the race" outcome -- granted, but not applied, never an exception."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        {"status": "running"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    outcome = authorize_and_compare_and_update(
+        write_outcome.identifier,
+        {"status": "created"},
+        {"status": "running-again"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.applied is False
+
+    get_outcome = authorize_and_get(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value == {"status": "running"}
+
+
+def test_denied_compare_and_update_never_reaches_the_store(tmp_path: Path) -> None:
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    write_outcome = authorize_and_remember(
+        {"status": "created"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    outcome = authorize_and_compare_and_update(
+        write_outcome.identifier,
+        {"status": "created"},
+        {"status": "running"},
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert outcome.decision.granted is False
+    assert outcome.applied is False
+
+    get_outcome = authorize_and_get(
+        write_outcome.identifier,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value == {"status": "created"}
+
+
+def test_granted_compare_and_update_of_an_unknown_identifier_returns_false_not_a_raise(
+    tmp_path: Path,
+) -> None:
+    """Unlike authorize_and_update, an unknown identifier is a real, honest False, never a raise."""
+    outcome = authorize_and_compare_and_update(
+        "no-such-identifier",
+        {"status": "created"},
+        {"status": "running"},
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert outcome.decision.granted is True
+    assert outcome.applied is False
 
 
 def test_get_of_an_unknown_identifier_returns_none(tmp_path: Path) -> None:

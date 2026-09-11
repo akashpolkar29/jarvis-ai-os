@@ -313,6 +313,110 @@ def authorize_and_update(  # noqa: PLR0913 -- one per composition-function pass-
 
 
 @dataclass(frozen=True)
+class MemoryCompareAndUpdateOutcome:
+    """The result of one authorize_and_compare_and_update() call (WP-120).
+
+    Attributes:
+        decision: The real ``memory.update`` ``Decision`` -- the
+            identical authorization path :func:`authorize_and_update`
+            uses, unchanged. If not granted, ``applied`` is always
+            ``False`` -- the store was never touched at all.
+        applied: ``True`` only if the decision was granted *and* the
+            real, atomic compare-and-swap actually succeeded (the
+            stored value still matched ``expected_value`` at the
+            moment of the write). ``False`` if denied, or if granted
+            but another writer changed the record first -- a real,
+            honest "lost the race" signal, never an exception.
+    """
+
+    decision: Decision
+    applied: bool
+
+
+def authorize_and_compare_and_update(  # noqa: PLR0913 -- one per composition-function pass-through
+    identifier: str,
+    expected_value: object,
+    new_value: object,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> MemoryCompareAndUpdateOutcome:
+    """Authorize a compare-and-swap update of `identifier` to `new_value` (WP-120).
+
+    A real, process-safe counterpart to :func:`authorize_and_update`,
+    for a caller that must detect whether it is racing another writer
+    for the same record -- e.g. two independent processes both trying
+    to claim the same persisted task for execution. Authorization is
+    identical to :func:`authorize_and_update` in every respect (same
+    ``memory.update`` capability id, same ``Effect`` derived from
+    ``new_value``'s own classification) -- only the real write
+    mechanism differs: :meth:`~jarvis.adapters.memory.SqliteMemoryAdapter.compare_and_update_value`
+    instead of a blind overwrite.
+
+    Args:
+        identifier: The real, existing record's identifier to
+            conditionally update.
+        expected_value: The value the caller believes is currently
+            stored at ``identifier`` -- typically whatever it read
+            moments earlier. See
+            :meth:`~jarvis.ports.memory_write.MemoryWritePort.compare_and_update_value`
+            for the exact comparison semantics.
+        new_value: The real, new value to store at ``identifier`` if
+            the comparison succeeds -- wrapped as
+            ``Tainted(new_value, Provenance.user())``, the same
+            convention :func:`authorize_and_update` already uses.
+        physical_confirmation_available: Whether a human is physically
+            present.
+        remote_confirmation_available: As above, for remote confirmation.
+        chain_path: Where the audit chain is persisted.
+        database_path: Where the real memory store lives. Overridable
+            for tests.
+        embedding_port: Overridable for tests.
+        clock: Defaults to a real ``SystemClockAdapter``.
+        id_port: Defaults to a real ``UuidIdAdapter``. Unused by an
+            update -- ``identifier`` is already known.
+
+    Returns:
+        A ``MemoryCompareAndUpdateOutcome`` -- see its own docstring.
+    """
+    resolved_clock = clock or SystemClockAdapter()
+    tainted_new_value: Tainted[object] = Tainted(new_value, Provenance.user())
+
+    storage = JsonFileAuditStorageAdapter(chain_path)
+    chain = storage.load()
+
+    confirmation = ManualConfirmationAdapter(
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+    )
+    orchestrator = AuthorizationOrchestrator(
+        chain, build_default_registry(), confirmation=confirmation, clock=resolved_clock
+    )
+    authorizer = MemoryWriteAuthorizer(orchestrator)
+
+    decision = authorizer.authorize_update(
+        identifier, tainted_new_value, orchestrator.get_current_context()
+    )
+
+    applied = False
+    try:
+        if decision.granted:
+            adapter = _memory_adapter(database_path, embedding_port, resolved_clock, id_port)
+            applied = adapter.compare_and_update_value(
+                identifier, expected_value, tainted_new_value
+            )
+    finally:
+        storage.save(chain)
+
+    return MemoryCompareAndUpdateOutcome(decision=decision, applied=applied)
+
+
+@dataclass(frozen=True)
 class MemoryGetOutcome:
     """The result of one authorize_and_get() call.
 

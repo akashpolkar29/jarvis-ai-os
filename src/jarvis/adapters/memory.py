@@ -42,6 +42,20 @@ limitation of using ``json``, not silently hidden: round-tripping a
 Infinity floats serialize via Python's own non-standard
 ``allow_nan=True`` default -- neither is a safety concern, both are
 plain data-fidelity notes for a caller storing either.
+
+**WP-120 (2026-09-11): a real, process-safe compare-and-swap primitive.**
+``update_value`` is a blind, unconditional overwrite -- correct for
+every existing caller, which already knows it is the sole writer. It
+is unsafe for a new real need: two genuinely independent processes
+(e.g. two `jarvis task worker` instances, or a worker racing a direct
+`jarvis task run`) both trying to claim the same persisted task for
+execution. ``compare_and_update_value`` closes that gap using SQLite's
+own file-level locking (`BEGIN IMMEDIATE`, empirically verified across
+real, separate OS processes, not merely assumed from documentation --
+see its own docstring and the new process-safety test) rather than a
+new dependency or a SQLite JSON1/`json_extract` predicate. See
+``jarvis.kernel.worker``'s own module docstring for the real caller
+this exists for.
 """
 
 from __future__ import annotations
@@ -106,6 +120,23 @@ class UnsupportedMemoryValueError(Exception):
     stored here must have some real text representation derivable
     from it.
     """
+
+
+def _decode_stored_value(value_json: str | None, text: str) -> object:
+    """Decode one row's real stored value, mirroring `_row_to_record_and_embedding`'s inline logic.
+
+    A ``NULL`` ``value_json`` is a real, pre-migration row written
+    before that column existed -- ``text`` alone was, and still is,
+    that row's own real, complete value. Never re-derived from
+    ``json.loads(text)``, which would incorrectly wrap it in an extra
+    layer of quoting. Extracted as its own function (WP-120) so
+    :meth:`SqliteMemoryAdapter.compare_and_update_value` can decode a
+    freshly-read row the exact same way
+    :meth:`SqliteMemoryAdapter._row_to_record_and_embedding` already
+    does, rather than a second, separately-maintained copy of this
+    same real rule.
+    """
+    return json.loads(value_json) if value_json is not None else text
 
 
 def _cosine_similarity(a: tuple[float, ...], b: list[float]) -> float:
@@ -238,6 +269,86 @@ class SqliteMemoryAdapter:
         if cursor.rowcount == 0:
             msg = f"No memory record found with identifier {identifier!r}."
             raise MemoryRecordNotFoundError(msg)
+
+    def compare_and_update_value(
+        self, identifier: str, expected_value: object, value: Tainted[object]
+    ) -> bool:
+        """Atomically swap `identifier`'s value iff current == `expected_value` (WP-120).
+
+        **The real process-safety mechanism**: `BEGIN IMMEDIATE`
+        acquires SQLite's own write lock immediately, before reading
+        anything -- empirically verified (not merely assumed from
+        documentation) to block a second, truly independent
+        `sqlite3.connect()` to the same file from starting its own
+        write transaction until this one commits or rolls back,
+        across real, separate OS processes (see
+        `tests/unit/test_memory_adapter_process_safety.py`). The
+        current row is then re-read *inside* that lock, decoded with
+        the exact same rule `get_by_identifier` uses
+        (`_decode_stored_value`), and compared by value equality
+        against `expected_value` -- if another writer changed it since
+        the caller last read it, this comparison correctly sees that
+        writer's own, newer value, not a stale snapshot. No SQLite
+        JSON1/`json_extract` dependency: the comparison is plain
+        Python equality on the decoded value, not a SQL-level
+        predicate, so this works on any SQLite build.
+
+        The embedding for the *new* value is computed before the lock
+        is acquired -- it depends only on `value` itself, never on
+        what is currently stored, so there is no reason to hold the
+        write lock any longer than the compare-and-write itself needs.
+
+        Returns:
+            `True` if the comparison matched and the swap was
+            performed (a real commit landed). `False` if `identifier`
+            does not exist, or its current value does not equal
+            `expected_value` -- the store is left completely unchanged
+            in that case; this is a normal, expected outcome for a
+            caller racing another writer, never an error.
+
+        Raises:
+            UnsupportedMemoryValueError: If `value.value` is not
+                JSON-serializable (checked before the lock is ever
+                acquired).
+        """
+        try:
+            value_json = json.dumps(value.value)
+        except TypeError as exc:
+            msg = (
+                "SqliteMemoryAdapter only persists JSON-serializable memories "
+                "(str, int, float, bool, None, list, dict); "
+                f"got {type(value.value).__name__}."
+            )
+            raise UnsupportedMemoryValueError(msg) from exc
+        text = value.value if isinstance(value.value, str) else value_json
+        (embedding,) = self._embedding_port.embed((text,))
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                "SELECT value_json, text FROM memory_records WHERE identifier = ?", (identifier,)
+            ).fetchone()
+            if row is None or _decode_stored_value(row[0], row[1]) != expected_value:
+                self._connection.rollback()
+                return False
+            self._connection.execute(
+                "UPDATE memory_records SET text = ?, value_json = ?, embedding = ?, trust = ?, "
+                "classification = ?, sources = ? WHERE identifier = ?",
+                (
+                    text,
+                    value_json,
+                    json.dumps(embedding),
+                    int(value.provenance.trust),
+                    int(value.provenance.classification),
+                    json.dumps(sorted(value.provenance.sources)),
+                    identifier,
+                ),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        else:
+            return True
 
     def pin(self, identifier: str) -> None:
         """Set the record at ``identifier``'s ``expires_at`` to ``NULL`` (never expires).
@@ -404,11 +515,7 @@ class SqliteMemoryAdapter:
             written_at,
             expires_at,
         ) = row
-        # A NULL value_json is a real, pre-migration row written before this
-        # column existed -- text alone was, and still is, that row's own
-        # real, complete value. Never re-derived from json.loads(text),
-        # which would incorrectly wrap it in an extra layer of quoting.
-        value = json.loads(value_json) if value_json is not None else text
+        value = _decode_stored_value(value_json, text)
         provenance = Provenance(
             trust=Trust(trust),
             classification=Classification(classification),

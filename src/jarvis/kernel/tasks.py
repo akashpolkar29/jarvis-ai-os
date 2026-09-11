@@ -173,6 +173,38 @@ status and a reason, never attempting the "running" transition or any
 plan execution. Deliberately narrow: a ``"completed"``/``"failed"``
 task is still freely re-runnable -- that is legitimate retry behavior,
 not a gap, and changing it was out of this work package's own scope.
+
+**WP-120 (2026-09-11): a real, process-safe claim mechanism, closing
+the one gap every prior work package on this module left open.**
+Before this, the "created" -> "running" transition
+``authorize_and_run_task`` makes was a blind, unconditional
+read-then-write -- nothing stopped two genuinely independent callers
+(two direct ``jarvis task run`` invocations, or, with WP-120's own new
+``jarvis.kernel.worker``, two real worker processes) from both reading
+the same "created" task, both transitioning it to "running," and both
+then actually running ``planning.run_plan`` concurrently for the same
+task id. This was always a real, reachable architectural hazard, not
+merely a hypothetical one made worse by adding a worker -- a worker
+only makes the race *likely*, not newly *possible*.
+
+The fix: this one transition now passes ``atomic=True`` to
+:func:`update_task_status`, which performs a real compare-and-swap
+(:func:`~jarvis.kernel.memory.authorize_and_compare_and_update`, backed
+by :meth:`~jarvis.adapters.memory.SqliteMemoryAdapter.compare_and_update_value`'s
+own ``BEGIN IMMEDIATE``-based, empirically cross-process-verified
+lock) against the exact value this same call just read. If another
+real writer already changed the task's status in the meantime, the
+compare-and-swap fails cleanly -- ``authorize_and_run_task`` detects
+this (``claimed=False`` on the returned ``TaskRunOutcome``), re-reads
+the task's own real, current status, and returns it honestly, having
+attempted no plan execution and no further transition whatsoever.
+Every other real status transition in this module (running ->
+completed/failed, created/running -> cancelled) is deliberately left
+as the original, unconditional blind write -- only the one transition
+where a genuine claim race is possible needed this; widening it
+everywhere would have been unjustified scope, not a safety
+requirement (see ``docs/architecture/wp120-background-worker.md`` for
+the full reasoning on why this is the narrowest correct fix).
 """
 
 from __future__ import annotations
@@ -184,6 +216,7 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.identifier import UuidIdAdapter
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
+from jarvis.kernel.memory import authorize_and_compare_and_update as _authorize_and_cas_memory
 from jarvis.kernel.memory import authorize_and_get, authorize_and_recall, authorize_and_remember
 from jarvis.kernel.memory import authorize_and_update as _authorize_and_update_memory
 from jarvis.kernel.planning import authorize_and_run_plan
@@ -334,7 +367,8 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     clock: ClockPort | None,
     id_port: IdPort | None,
     event_bus: EventBus | None = None,
-) -> Decision:
+    atomic: bool = False,
+) -> tuple[Decision, bool]:
     """Update an existing task record's status in place. Reuses authorize_and_update.
 
     A real, shared helper mirroring :func:`write_task_record`'s own
@@ -351,9 +385,29 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     confirmation), preserves every field it does not itself change,
     and only then writes the merged result.
 
-    Publishes a real ``TaskStatusChanged`` to ``event_bus`` -- again,
-    only if the update was actually granted, and carrying the real
-    ``previous_status`` this same read already retrieved (never a
+    **WP-120: ``atomic``, deliberately opt-in, default ``False``.**
+    When ``True``, the write is a real compare-and-swap
+    (:func:`~jarvis.kernel.memory.authorize_and_compare_and_update`)
+    against the exact value this same call just read, rather than a
+    blind overwrite -- for the one real caller that needs to detect
+    "did I win a race against another writer" (the "created" ->
+    "running" claim transition, see
+    :func:`authorize_and_run_task`'s own docstring). Every other
+    caller leaves this at its default, unchanged, blind-write
+    behavior -- this is additive, not a change to any existing
+    transition's own real semantics.
+
+    Returns:
+        ``(decision, applied)``. ``applied`` is ``True`` iff the write
+        actually landed -- for the default, non-atomic path this is
+        simply ``decision.granted`` (a granted blind write always
+        succeeds); for the atomic path it additionally requires the
+        real compare-and-swap to have matched, so a granted-but-lost-
+        the-race attempt reports ``applied=False`` without raising.
+
+    Publishes a real ``TaskStatusChanged`` to ``event_bus`` -- only if
+    the write was both granted *and* actually applied, carrying the
+    real ``previous_status`` this same read already retrieved (never a
     second, separate guess at what it must have been).
     """
     resolved_clock = clock or SystemClockAdapter()
@@ -384,18 +438,39 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         "created_at": created_at,
         "updated_at": now,
     }
-    update_decision = _authorize_and_update_memory(
-        task_id,
-        record,
-        physical_confirmation_available=physical_confirmation_available,
-        remote_confirmation_available=remote_confirmation_available,
-        chain_path=chain_path,
-        database_path=database_path,
-        embedding_port=embedding_port,
-        clock=resolved_clock,
-        id_port=id_port,
-    )
-    if update_decision.granted:
+    if atomic:
+        if existing is None:
+            # Nothing to atomically swap against -- the most honest real
+            # answer is "this attempt did not apply," never a blind write.
+            return get_outcome.decision, False
+        cas_outcome = _authorize_and_cas_memory(
+            task_id,
+            existing,
+            record,
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=resolved_clock,
+            id_port=id_port,
+        )
+        update_decision = cas_outcome.decision
+        applied = cas_outcome.applied
+    else:
+        update_decision = _authorize_and_update_memory(
+            task_id,
+            record,
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=resolved_clock,
+            id_port=id_port,
+        )
+        applied = update_decision.granted
+    if applied:
         (event_bus or EventBus()).publish(
             TaskStatusChanged(
                 event_id=(id_port or UuidIdAdapter()).new_id(),
@@ -407,7 +482,7 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
                 timestamp=now,
             )
         )
-    return update_decision
+    return update_decision, applied
 
 
 @dataclass(frozen=True)
@@ -468,27 +543,42 @@ class TaskRunOutcome:
 
     Attributes:
         decision: The real ``Decision`` that most directly gated this
-            specific run attempt. Three real cases (WP-118 added the
-            first): the ``memory.get`` lookup's own ``Decision``
-            (always granted) if the task is currently ``"cancelled"``
-            and nothing further was attempted; the ``memory.update``
-            transition to "running" if that alone was denied (nothing
-            further was attempted, the task stays at its prior
-            status); otherwise ``planning.run_plan``'s own outer-gate
-            ``Decision``.
+            specific run attempt. Four real cases (WP-118 added the
+            first, WP-120 the fourth): the ``memory.get`` lookup's own
+            ``Decision`` (always granted) if the task is currently
+            ``"cancelled"`` and nothing further was attempted; the
+            ``memory.update``/compare-and-swap transition to "running"
+            if that alone was denied (nothing further was attempted,
+            the task stays at its prior status); the same transition's
+            own ``Decision`` if it was granted but lost a real race to
+            another claimant (WP-120 -- see ``claimed``); otherwise
+            ``planning.run_plan``'s own outer-gate ``Decision``.
         status: The task's real, final status after this call
             (``"completed"``/``"failed"``), ``"cancelled"`` if the
             task was already cancelled and this run was refused
-            (WP-118, its own stored status unchanged), or ``None`` if
+            (WP-118, its own stored status unchanged), the task's own
+            real, current, freshly-re-read status if this attempt lost
+            a claim race (WP-120 -- never fabricated), or ``None`` if
             the transition to "running" was itself denied -- the
             task's own stored status is unchanged in that case too.
-        reason: The real reason, if ``status == "failed"`` or
-            ``status == "cancelled"`` (WP-118); ``None`` otherwise.
+        reason: The real reason, if ``status == "failed"``,
+            ``status == "cancelled"`` (WP-118), or this attempt lost a
+            claim race (WP-120); ``None`` otherwise.
+        claimed: WP-120. ``True`` only if *this* call's own "running"
+            transition was the one that actually landed -- i.e. this
+            call genuinely went on to attempt (and, separately,
+            succeed or fail at) running the plan. ``False`` if the
+            task was already cancelled, the transition was denied by
+            policy, or another real claimant won the race first. A
+            worker (or any caller) processing many tasks uses this to
+            tell "I executed this one" apart from "someone else
+            already had it."
     """
 
     decision: Decision
     status: str | None
     reason: str | None
+    claimed: bool = True
 
 
 async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-function pass-through
@@ -580,10 +670,11 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
                 decision=get_outcome.decision,
                 status="cancelled",
                 reason="Task was cancelled; run refuses to resume a cancelled task.",
+                claimed=False,
             )
 
     reason: str | None = None
-    running_decision = update_task_status(
+    running_decision, claimed = update_task_status(
         task_id,
         goal,
         "running",
@@ -596,9 +687,37 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         clock=clock,
         id_port=id_port,
         event_bus=event_bus,
+        atomic=True,
     )
     if not running_decision.granted:
-        return TaskRunOutcome(decision=running_decision, status=None, reason=None)
+        return TaskRunOutcome(decision=running_decision, status=None, reason=None, claimed=False)
+    if not claimed:
+        # WP-120: granted, but a real, independent claimant (another worker,
+        # or a direct `jarvis task run`) already changed this task's status
+        # between our read and this attempt -- re-read and report its real,
+        # current status honestly, never a fabricated sentinel. Nothing past
+        # this point is attempted: no plan execution, no further transition.
+        refreshed = authorize_and_get_task(
+            task_id,
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=clock,
+            id_port=id_port,
+        )
+        refreshed_data = refreshed.record.value.value if refreshed.record is not None else None
+        current_status = refreshed_data.get("status") if isinstance(refreshed_data, dict) else None
+        return TaskRunOutcome(
+            decision=running_decision,
+            status=current_status if isinstance(current_status, str) else None,
+            reason=(
+                "This task was already claimed or changed by another process; "
+                "this run attempt did not execute anything."
+            ),
+            claimed=False,
+        )
 
     try:
         plan_decision, result = await authorize_and_run_plan(
@@ -925,7 +1044,7 @@ def authorize_and_cancel_task(  # noqa: PLR0913 -- one per composition-function 
             cancelled=False,
             reason=f"Task is already {current_status!r} and cannot be cancelled.",
         )
-    update_decision = update_task_status(
+    update_decision, _applied = update_task_status(
         task_id,
         goal,
         "cancelled",

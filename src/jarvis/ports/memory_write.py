@@ -130,6 +130,51 @@ class MemoryWritePort(Protocol):
         """
         ...
 
+    def compare_and_update_value(
+        self, identifier: str, expected_value: object, value: Tainted[object]
+    ) -> bool:
+        """Atomically replace ``identifier``'s value iff current == ``expected_value`` (WP-120).
+
+        The real, process-safe compare-and-swap primitive
+        :meth:`update_value` deliberately does not provide -- that
+        method is a blind, unconditional overwrite, which is exactly
+        right for a caller that already knows it is the sole writer
+        (most of this codebase), but is unsafe for a caller that needs
+        to detect "did I win a race against another writer," such as
+        two independent processes both trying to claim the same
+        persisted task for execution.
+
+        A real, total operation -- never raises to signal a lost race:
+        returns ``False``, not an exception, if ``identifier`` does
+        not match a real, currently-stored record, *or* if it does but
+        its current value does not equal ``expected_value`` (another
+        writer already changed it since the caller last read it). Only
+        a genuine I/O failure of the underlying store raises.
+
+        No authorization happens inside this method, matching
+        :meth:`update_value`'s own identical contract.
+
+        Args:
+            identifier: The real, existing record's identifier to
+                conditionally update.
+            expected_value: The value the caller believes is currently
+                stored at ``identifier`` -- typically whatever the
+                caller itself read moments earlier. Compared by value
+                equality (``==``), not identity, and not against the
+                record's own provenance (this primitive conditions
+                only on the stored *value*).
+            value: The real, new value to persist at ``identifier`` if
+                the comparison succeeds, with its own real provenance
+                -- as :meth:`update_value`.
+
+        Returns:
+            ``True`` if the comparison matched and the swap was
+            performed; ``False`` if it did not (lost the race, or
+            ``identifier`` does not exist) -- the store is left
+            completely unchanged in that case.
+        """
+        ...
+
     def forget(self, identifier: str) -> None:
         """Permanently delete the record at ``identifier`` from the real store.
 

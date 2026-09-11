@@ -232,6 +232,121 @@ def test_pin_raises_for_an_unknown_identifier() -> None:
         adapter.pin("mem:does-not-exist")
 
 
+def _obj_value(payload: object) -> Tainted[object]:
+    """Like `_value`, but for a non-`str` payload -- `_value` itself is typed to `str` only."""
+    return Tainted(payload, _provenance())
+
+
+def test_compare_and_update_value_succeeds_when_expected_matches(tmp_path: Path) -> None:
+    """WP-120: the common, single-process, no-contention case -- the comparison matches."""
+    adapter = _file_adapter(tmp_path / "memory.sqlite3")
+    identifier = adapter.write(_obj_value({"status": "created"}))
+
+    applied = adapter.compare_and_update_value(
+        identifier, {"status": "created"}, _obj_value({"status": "running"})
+    )
+
+    assert applied is True
+    record = adapter.get_by_identifier(identifier)
+    assert record is not None
+    assert record.value.value == {"status": "running"}
+
+
+def test_compare_and_update_value_returns_false_when_expected_does_not_match(
+    tmp_path: Path,
+) -> None:
+    """A real, honest "lost the race" signal -- never an exception, storage left untouched."""
+    adapter = _file_adapter(tmp_path / "memory.sqlite3")
+    identifier = adapter.write(_obj_value({"status": "running"}))
+
+    applied = adapter.compare_and_update_value(
+        identifier, {"status": "created"}, _obj_value({"status": "running-again"})
+    )
+
+    assert applied is False
+    record = adapter.get_by_identifier(identifier)
+    assert record is not None
+    assert record.value.value == {"status": "running"}
+
+
+def test_compare_and_update_value_returns_false_for_an_unknown_identifier() -> None:
+    adapter = _adapter()
+
+    applied = adapter.compare_and_update_value(
+        "mem:does-not-exist", {"status": "created"}, _obj_value({"status": "running"})
+    )
+
+    assert applied is False
+
+
+def test_compare_and_update_value_rejects_a_non_json_serializable_new_value() -> None:
+    """Checked before the real write lock is ever acquired -- mirrors update_value's own rule."""
+    adapter = _adapter()
+    identifier = adapter.write(_obj_value({"status": "created"}))
+
+    class _NotJsonSerializable:
+        pass
+
+    with pytest.raises(UnsupportedMemoryValueError):
+        adapter.compare_and_update_value(
+            identifier, {"status": "created"}, Tainted(_NotJsonSerializable(), _provenance())
+        )
+
+
+def test_compare_and_update_value_rolls_back_and_reraises_on_a_real_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real, simulated mid-write crash leaves the original value untouched, and releases the lock.
+
+    Mirrors `test_audit_storage_adapter.py`'s own established
+    "simulate a crash partway through, then confirm the original
+    content survives" pattern.
+    """
+    adapter = _file_adapter(tmp_path / "memory.sqlite3")
+    identifier = adapter.write(_obj_value({"status": "created"}))
+    real_connection = adapter._connection
+
+    class _FailingOnUpdateConnection:
+        """A thin proxy delegating everything to the real connection, except one UPDATE call.
+
+        `sqlite3.Connection.execute` is a read-only instance attribute
+        (a C-level slot) -- it cannot be monkeypatched directly on a
+        real connection object, so this wraps the whole connection
+        instead, matching the only real way to intercept one specific
+        call.
+        """
+
+        def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+            if sql.startswith("UPDATE"):
+                msg = "simulated mid-write crash"
+                raise sqlite3.OperationalError(msg)
+            return real_connection.execute(sql, parameters)  # type: ignore[arg-type]
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(real_connection, name)
+
+    monkeypatch.setattr(adapter, "_connection", _FailingOnUpdateConnection())
+
+    with pytest.raises(sqlite3.OperationalError):
+        adapter.compare_and_update_value(
+            identifier, {"status": "created"}, _obj_value({"status": "running"})
+        )
+
+    monkeypatch.undo()
+    record = adapter.get_by_identifier(identifier)
+    assert record is not None
+    assert record.value.value == {"status": "created"}
+
+    # The lock must have been genuinely released by the rollback -- a fresh,
+    # real, independent connection can immediately write without blocking.
+    second_connection = sqlite3.connect(tmp_path / "memory.sqlite3", timeout=1.0)
+    try:
+        second_connection.execute("BEGIN IMMEDIATE")
+        second_connection.rollback()
+    finally:
+        second_connection.close()
+
+
 def test_sweep_expired_deletes_an_expired_unpinned_record_from_real_storage(
     tmp_path: Path,
 ) -> None:

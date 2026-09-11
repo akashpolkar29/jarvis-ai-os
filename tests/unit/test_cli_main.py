@@ -90,6 +90,7 @@ from jarvis.kernel.tasks import (
     TaskListOutcome,
     TaskRunOutcome,
 )
+from jarvis.kernel.worker import WorkerPassOutcome, WorkerTaskOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -3121,6 +3122,135 @@ def test_task_cancel_subcommand_reports_a_refused_cancellation_with_its_reason(
 def test_task_cancel_subcommand_requires_task_id() -> None:
     with pytest.raises(SystemExit):
         main(["task", "cancel"])
+
+
+def test_task_worker_once_reports_a_claimed_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[bool, bool]] = []
+
+    async def fake_run_pending_tasks_once(
+        *,
+        physical_confirmation_available: bool,
+        remote_confirmation_available: bool,
+        chain_path: Path,  # noqa: ARG001
+    ) -> WorkerPassOutcome:
+        received.append((physical_confirmation_available, remote_confirmation_available))
+        return WorkerPassOutcome(
+            attempted=(
+                WorkerTaskOutcome(task_id="task:1", claimed=True, status="completed", reason=None),
+            )
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "worker",
+            "--once",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [(True, False)]
+    assert exit_code == 0
+    assert "task:1 -- ran, status: completed" in captured.out
+
+
+def test_task_worker_once_reports_no_eligible_tasks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        return WorkerPassOutcome(attempted=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+
+    exit_code = main(
+        ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "no eligible" in captured.out
+
+
+def test_task_worker_once_reports_a_not_claimed_task_and_a_real_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        return WorkerPassOutcome(
+            attempted=(
+                WorkerTaskOutcome(
+                    task_id="task:lost-race", claimed=False, status="running", reason="..."
+                ),
+                WorkerTaskOutcome(
+                    task_id="task:malformed",
+                    claimed=False,
+                    status=None,
+                    reason=None,
+                    error="Malformed task record: no real string goal.",
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+
+    exit_code = main(
+        ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "task:lost-race -- not claimed (status: running)" in captured.out
+    assert "task:malformed -- error: Malformed task record" in captured.out
+
+
+_WORKER_MAX_PASSES = 3
+
+
+def test_task_worker_max_passes_stops_deterministically_with_no_real_sleep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Proves continuous mode genuinely bounds itself -- no infinite loop, no real delay."""
+    call_count = 0
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        nonlocal call_count
+        call_count += 1
+        return WorkerPassOutcome(attempted=())
+
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"].time, "sleep", sleep_calls.append)
+
+    exit_code = main(
+        [
+            "task",
+            "worker",
+            "--max-passes",
+            str(_WORKER_MAX_PASSES),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert call_count == _WORKER_MAX_PASSES
+    # one real sleep between each pass, never a trailing one after the last pass
+    assert sleep_calls == [10.0] * (_WORKER_MAX_PASSES - 1)
 
 
 def test_task_subcommand_requires_a_real_task_command() -> None:

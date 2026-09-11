@@ -32,6 +32,11 @@ class _FakeMemoryWriteAdapter:
     def update_value(self, identifier: str, value: Tainted[object]) -> None:
         pass
 
+    def compare_and_update_value(
+        self, _identifier: str, _expected_value: object, _value: Tainted[object]
+    ) -> bool:
+        return False
+
     def pin(self, identifier: str) -> None:
         pass
 
@@ -84,6 +89,7 @@ def test_an_object_missing_the_required_methods_does_not_satisfy_memory_write_po
     """The isinstance check is meaningful: it actually rejects non-conforming objects."""
 
     class NotAMemoryWriteSource:
-        """Deliberately lacks write()/pin()/sweep_expired()/forget()/backup()/restore()/wipe()."""
+        """Deliberately lacks write()/update_value()/compare_and_update_value()/pin()/
+        sweep_expired()/forget()/backup()/restore()/wipe()."""
 
     assert isinstance(NotAMemoryWriteSource(), MemoryWritePort) is False

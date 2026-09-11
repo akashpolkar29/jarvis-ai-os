@@ -158,6 +158,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,6 +255,7 @@ from jarvis.kernel.tasks import (
     authorize_and_run_task,
 )
 from jarvis.kernel.voice_loop import run_voice_loop
+from jarvis.kernel.worker import run_pending_tasks_once
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -276,9 +278,14 @@ if TYPE_CHECKING:
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
     from jarvis.domain.provenance import Tainted
+    from jarvis.kernel.worker import WorkerPassOutcome
 
 _DEFAULT_CHAIN_PATH = Path("audit_chain.json")
 _DEFAULT_UI_PORT = 8765
+_DEFAULT_WORKER_POLL_INTERVAL_SECONDS = 10.0
+"""jarvis task worker's own default sleep between continuous-mode passes (WP-120) -- short
+enough that a newly-created task is picked up promptly, long enough not to hammer the real
+SQLite store/audit chain with an authorize_and_list_tasks call many times a second."""
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -738,6 +745,40 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     cancel_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
     _add_common_flags(cancel_parser)
+
+    worker_parser = task_subparsers.add_parser(
+        "worker",
+        help=(
+            "Discover every real 'created' task and claim-and-run each through the "
+            "canonical task execution path (WP-120). Foreground by default; no hidden "
+            "daemonization."
+        ),
+    )
+    worker_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run exactly one pass over currently-eligible tasks, then exit (default: false).",
+    )
+    worker_parser.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
+        help=(
+            "Seconds to sleep between passes in continuous mode (ignored with --once); "
+            f"default: {_DEFAULT_WORKER_POLL_INTERVAL_SECONDS}."
+        ),
+    )
+    worker_parser.add_argument(
+        "--max-passes",
+        type=int,
+        default=None,
+        help=(
+            "Stop after this many passes in continuous mode (ignored with --once) -- a real, "
+            "deterministic alternative to Ctrl+C for scripted or automated runs. Unbounded "
+            "if omitted."
+        ),
+    )
+    _add_common_flags(worker_parser)
 
 
 def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1348,6 +1389,62 @@ def _run_doctor() -> int:
     for name, ok, detail in checks:
         status = "OK" if ok else "MISSING"
         print(f"[{status:>7}] {name}: {detail}")
+    return 0
+
+
+def _print_worker_pass(pass_outcome: WorkerPassOutcome) -> None:
+    """Print one real worker pass's own outcomes -- shared by --once and continuous mode."""
+    attempted = pass_outcome.attempted
+    if not attempted:
+        print("worker: no eligible ('created') tasks found.")
+        return
+    for outcome in attempted:
+        if outcome.error is not None:
+            print(f"worker: task {outcome.task_id} -- error: {outcome.error}")
+        elif not outcome.claimed:
+            print(f"worker: task {outcome.task_id} -- not claimed (status: {outcome.status})")
+        else:
+            print(f"worker: task {outcome.task_id} -- ran, status: {outcome.status}")
+
+
+def _run_task_worker(args: argparse.Namespace) -> int:
+    """Run the real background-task worker (WP-120) in the foreground until stopped.
+
+    Foreground by default, no hidden daemonization -- mirrors
+    ``_run_listen``'s own exact shape: a real, continuous loop this
+    process blocks on, stopped by a real Ctrl+C (``KeyboardInterrupt``)
+    or, deterministically, after ``--max-passes`` real passes (useful
+    for scripted/automated runs, and the mechanism this module's own
+    tests use -- never an unbounded loop inside an automated test).
+    ``--once`` is the simplest, most deterministic mode: exactly one
+    real pass, then exit, no sleep, no loop at all.
+    """
+
+    async def _one_pass() -> WorkerPassOutcome:
+        return await run_pending_tasks_once(
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+
+    if args.once:
+        _print_worker_pass(asyncio.run(_one_pass()))
+        return 0
+
+    print(
+        "Running the background task worker -- polling every "
+        f"{args.poll_interval_seconds}s. Press Ctrl+C to stop."
+    )
+    passes_run = 0
+    try:
+        while args.max_passes is None or passes_run < args.max_passes:
+            _print_worker_pass(asyncio.run(_one_pass()))
+            passes_run += 1
+            if args.max_passes is not None and passes_run >= args.max_passes:
+                break
+            time.sleep(args.poll_interval_seconds)
+    except KeyboardInterrupt:
+        print("\nStopped.")
     return 0
 
 
@@ -2798,7 +2895,7 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
             )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one early return per continuous-mode command
     """Parse argv, authorize (and maybe run) the requested command, print the outcome.
 
     Args:
@@ -2817,6 +2914,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_doctor()
     if args.command == "ui":
         return _run_ui(args)
+    if args.command == "task" and args.task_command == "worker":
+        return _run_task_worker(args)
 
     try:
         outcome = _dispatch_command(args)
