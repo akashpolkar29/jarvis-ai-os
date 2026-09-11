@@ -392,16 +392,35 @@ Error: <message>
 ## Exit codes
 
 - **`0`** — the capability was granted.
-- **`1`** — the capability was denied, **or** any of the following
-  was raised: a domain-level `JarvisError` (e.g. a tampered audit
-  chain), `NoMediaPlayerRunningError`, `MediaPlayerCommandFailedError`,
-  `PathOutsideAllowedScopeError`, any `OSError` (a missing file, a
-  directory instead of a file, a permission error), or
-  `UnicodeDecodeError` (a non-UTF-8 file).
+- **`1`** — the capability was denied, **or** a real, caught,
+  operational exception was raised while dispatching or running it
+  (a domain-level `JarvisError`, e.g. a tampered audit chain; an
+  adapter/kernel-level error such as a missing file, an out-of-scope
+  path, a malformed memory value, a not-found record, an unreachable
+  email/calendar connection, a browser/editor/window launch failure, a
+  Docker/Git command failure, a planning failure, or a corrupted
+  SQLite file). **Updated 2026-09-12 (WP-160)**: this list is
+  deliberately not exhaustive — it has already grown past 20 real
+  exception types as new capabilities were added (most recently
+  `UnsupportedUrlSchemeError`, WP-154) and will keep growing; see
+  `cli/main.py::main()`'s own `except (...)` tuple for the exact,
+  current, authoritative list, the same "see the real source for the
+  volatile exact list" pattern this document already uses for the CI
+  package list above.
+- **`2`** — argparse itself rejected the command line (a missing
+  required argument, an unrecognized flag, an invalid `type=` value
+  such as a negative `--poll-interval-seconds`) — this is argparse's
+  own standard behavior, unmodified.
 
 There is currently no exit code that distinguishes "denied" from "an
 error occurred" — both are `1`. A caller that needs to tell them apart
-today has to parse stdout/stderr.
+today has to parse stdout/stderr. `jarvis task worker` is a real,
+narrow exception to the "granted vs. denied" framing above — it is
+never itself authorized (see the `worker` row above), so its own exit
+code instead reports whether any *attempted task* had a real error
+during that run/pass (`0` otherwise, including when nothing was
+eligible or a task merely lost a claim race) — see that row's own note
+and `docs/architecture/wp132-worker-operability.md`.
 
 ## What gets audited
 

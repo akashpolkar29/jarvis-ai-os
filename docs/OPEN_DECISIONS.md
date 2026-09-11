@@ -1844,6 +1844,21 @@ and the installation path were all confirmed already accurate; no
 version bump or tag made. See
 `docs/architecture/wp159-release-readiness-audit.md`.
 
+## 60. ~~CLI UX consistency~~ -- RESOLVED/BUILT 2026-09-12 (WP-160)
+
+**Resolved/built, WP-160**. Checked help text, GRANTED/DENIED output
+format, command naming, and exit codes for real inconsistencies. Found
+one: `docs/protocol/README.md`'s "Exit codes" section named only 6
+early-era example exceptions while the real `cli/main.py::main()`
+except tuple has grown to 24 — rewritten to describe the real behavior
+generically and point at the real code as the authoritative list,
+rather than enumerating a list that will keep drifting. Also documented
+argparse's own exit code `2` and `jarvis task worker`'s distinct
+exit-code semantic (WP-132), both previously unmentioned. No CLI
+behavior changed; the two already-reviewed naming inconsistencies
+(item 4) remain the user's own accepted, left-as-is decision. See
+`docs/architecture/wp160-cli-ux-consistency.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
