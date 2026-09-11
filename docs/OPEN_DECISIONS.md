@@ -112,7 +112,14 @@ WP-121) -- `jarvis task retry <task_id>` permits retrying only a
 `"failed"` task and delegates unmodified to `authorize_and_run_task`,
 automatically inheriting item 29's own claim protection with zero new
 locking code, while every task record gained a real, additive,
-backward-compatible `"attempts"` history field.
+backward-compatible `"attempts"` history field; and deterministic
+one-time local task scheduling (item 31, 2026-09-12, WP-122) --
+`jarvis task schedule <task_id> --at <iso8601>` adds one new,
+additive `scheduled_at` field (no new task status), and the worker's
+own discovery step gained one pure, local due-time filter, with the
+real duplicate-execution protection still inherited entirely from
+item 29's own claim mechanism, proven directly by a new, dedicated,
+real multiprocessing test racing the worker itself.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1350,6 +1357,86 @@ generic "Run" button would need its own new state to distinguish
 work package's own scope did not call for building unprompted). No new
 `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp121-task-retry-and-history.md` for the full
+account.
+
+## 31. ~~Deterministic one-time local task scheduling~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-122**. A repository-wide search for scheduling
+infrastructure (`schedule`/`scheduler`/`cron`/`timer`/`due_at`/`run_at`/
+`next_run`/`interval`/`recurrence`) found none -- this is the smallest
+safe foundation letting a user explicitly schedule an already-created
+task for a future time, not a general-purpose workflow engine, not
+recurrence, not natural-language scheduling (all explicitly out of
+scope).
+
+**No new task status**: a scheduled task stays `"created"` for its
+entire wait. One new, additive, backward-compatible field,
+`scheduled_at` (a real, UTC-canonicalized ISO-8601 string, or
+`None`), is all that was added to the stored record -- `None` means
+exactly what `"created"` already meant before this work package
+existed (immediately eligible). `authorize_and_schedule_task`
+(`jarvis task schedule <task_id> --at <iso8601>`) permits scheduling
+only a task currently `"created"` -- `"failed"` is deliberately
+excluded, since scheduling must not become a back-door way to
+auto-retry a failed task (WP-121's own explicit, human-triggered
+`jarvis task retry` remains the one real way to do that). Calling it
+again on a still-`"created"` task simply overwrites the prior
+`scheduled_at` -- a real, deliberate substitute for a separate
+"unschedule" verb, investigated and not built (no genuine,
+independent use case was found that re-scheduling or
+`jarvis task cancel` did not already cover).
+
+**Timezone policy**: a small, local `_parse_aware_iso8601` (a
+deliberate duplicate of `adapters/calendar.py`'s own already-
+established real fix, not a cross-import) rejects a naive
+(timezone-less) timestamp outright; the accepted value is
+canonicalized to UTC before storage, so a later due-time comparison
+against `ClockPort.now()` (always UTC) is never a conversion
+question.
+
+**Missed-schedule policy, the simplest safe choice**: a `scheduled_at`
+at or before the current real time is due, full stop -- no catch-up
+accounting, since recurrence is out of scope and there is only ever
+one real due moment to miss. A task already executed once naturally
+leaves `"created"` status, so the worker's own, unchanged
+`"created"`-only discovery filter structurally cannot re-discover and
+re-run it -- no separate "schedule consumed" flag was added.
+
+**Worker integration, zero new locking code**: `run_pending_tasks_once`
+gained exactly one new, pure, local filter, `_is_due` -- it only
+decides which discovered tasks to *attempt*. The real
+duplicate-execution protection still comes entirely from WP-120's own,
+already-hardened claim mechanism inside `authorize_and_run_task`,
+proven directly by a new, real `multiprocessing.Process` test
+(`tests/unit/test_worker_scheduling_process_safety.py`) racing
+`run_pending_tasks_once` itself (not the raw claim primitive) across
+six genuinely independent OS processes -- no two real winners' own
+measured wall-clock windows ever overlap, run repeatedly under
+`taskset -c 0,1` with zero flakiness.
+
+**Cancellation/retry/authorization, all unaffected by construction**:
+a cancelled task's status is `"cancelled"`, already excluded from
+discovery by the existing, unchanged status filter -- no
+scheduling-specific cancellation check was needed. Retrying a
+scheduled-then-failed task delegates unmodified to
+`authorize_and_run_task`, which never consults `scheduled_at` --
+`scheduled_at` is preserved purely as historical information.
+Scheduling a task is never itself authorization for what it will
+later do -- the real confirmation flags passed to the later, separate,
+worker-triggered run are what gate that run.
+
+**Entry point**: `jarvis task schedule <task_id> --at <timestamp>`
+(CLI only; `task status`/`task list` also now print `scheduled_at`
+when present). No `jarvis task unschedule`, no UI exposure, no voice
+grammar -- each investigated and deliberately not built (see
+`docs/architecture/wp122-local-task-scheduling.md`'s own "What was
+deliberately not built" section). No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. Real, live-verified end to end
+against this development machine's own local Ollama server: a
+future-scheduled task was correctly left untouched by the worker, and
+the same task scheduled in the past was correctly discovered,
+claimed, and run through the real canonical execution path. See
+`docs/architecture/wp122-local-task-scheduling.md` for the full
 account.
 
 ## Maintaining this index

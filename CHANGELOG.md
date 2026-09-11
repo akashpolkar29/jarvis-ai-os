@@ -107,6 +107,19 @@ replacement for either.
   attempt, appended, never replacing an earlier one. No new
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp121-task-retry-and-history.md`.
+- WP-122: `jarvis task schedule <task_id> --at <iso8601>` -- real,
+  deterministic one-time local task scheduling. No new task status --
+  one new, additive, backward-compatible `scheduled_at` field;
+  scheduling only permits a task currently `"created"` (excluding
+  `"failed"`, since scheduling is not a back-door retry). A naive
+  timestamp is rejected; the accepted value is canonicalized to UTC.
+  The worker's own discovery gained one pure, local due-time filter --
+  the real duplicate-execution protection is entirely inherited from
+  WP-120's own claim mechanism, proven by a new, real
+  `multiprocessing.Process` test racing the worker itself. No
+  recurrence, no natural-language scheduling, no UI/voice exposure --
+  all explicitly out of scope. No new `CapabilityId`/`Effect`/`Tier`,
+  no ADR. See `docs/architecture/wp122-local-task-scheduling.md`.
 
 ### Fixed
 

@@ -522,6 +522,45 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp121-task-retry-and-history.md` and
   `docs/OPEN_DECISIONS.md` item 30.
+  **Updated 2026-09-12 (WP-122)**: deterministic one-time local task
+  scheduling. No new task status -- a scheduled task stays
+  `"created"`; one new, additive, backward-compatible field,
+  `scheduled_at` (a real, UTC-canonicalized ISO-8601 string, or
+  `None`), is all that changed on the stored record.
+  `authorize_and_schedule_task` (`jarvis task schedule <task_id> --at
+  <iso8601>`) permits scheduling only a `"created"` task — deliberately
+  excluding `"failed"` (scheduling is not a back-door retry; WP-121's
+  own explicit `task retry` remains the one real way to re-attempt a
+  failure) — and a naive (timezone-less) timestamp is rejected
+  outright, mirroring `adapters/calendar.py`'s own already-established
+  real timezone-correctness fix. The worker's own discovery step
+  (`jarvis.kernel.worker.run_pending_tasks_once`) gained exactly one
+  new, pure, local filter, `_is_due` — a `"created"` task with no
+  `scheduled_at` is eligible immediately, unchanged; a scheduled task
+  is only attempted once its own `scheduled_at` has passed a real
+  `ClockPort.now()`. **No second claim mechanism**: `_is_due` only
+  decides who gets to *try* — the real mutual-exclusion guarantee
+  still comes entirely from WP-120's own, already-hardened claim
+  inside `authorize_and_run_task`, proven directly by a new, real
+  `multiprocessing.Process` test racing `run_pending_tasks_once`
+  itself across six genuinely independent OS processes, no two real
+  winners' own wall-clock windows ever overlapping, run repeatedly
+  under `taskset -c 0,1` with zero flakiness. The simplest safe
+  missed-schedule policy was chosen: a `scheduled_at` at or before now
+  is simply due, executed once, whenever the worker next checks — no
+  catch-up accounting, since recurrence remains explicitly out of
+  scope. No `jarvis task unschedule` was built (re-scheduling or
+  cancelling already cover the real need); no separate "schedule
+  consumed" flag was added (the existing `"created"`-only status
+  filter already guarantees single execution for free); no UI or
+  voice exposure. Real, live-verified end to end against this
+  development machine's own local Ollama server: a future-scheduled
+  task was correctly left untouched by the worker, and the same task
+  scheduled in the past was correctly discovered, claimed, and run
+  through the real canonical execution path. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp122-local-task-scheduling.md` and
+  `docs/OPEN_DECISIONS.md` item 31.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
