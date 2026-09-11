@@ -155,6 +155,24 @@ Only ``"created"`` and ``"running"`` tasks may be cancelled -- a task
 already ``"completed"``, ``"failed"``, or ``"cancelled"`` is refused
 with a real, honest reason naming its current status, never silently
 accepted or silently ignored.
+
+**WP-118 (2026-09-11): closing the one real gap WP-117 itself opened.**
+Before WP-117, no task could ever reach ``"cancelled"``, so
+``authorize_and_run_task``'s own unconditional transition to
+``"running"`` (it never checked the task's prior status) was harmless
+-- there was no status it could silently override that mattered. The
+moment ``"cancelled"`` became real and reachable, that same
+unconditional behavior became a real bug: calling ``jarvis task run``
+directly on a task a human had just cancelled would silently resume
+it, completely undoing the cancellation with no real signal that
+anything unusual had happened. ``authorize_and_run_task`` now checks
+the task's current stored status first (the identical, unmodified
+``memory.get`` lookup ``authorize_and_cancel_task`` already uses) and
+refuses to run a ``"cancelled"`` task, returning its real current
+status and a reason, never attempting the "running" transition or any
+plan execution. Deliberately narrow: a ``"completed"``/``"failed"``
+task is still freely re-runnable -- that is legitimate retry behavior,
+not a gap, and changing it was out of this work package's own scope.
 """
 
 from __future__ import annotations
@@ -450,16 +468,22 @@ class TaskRunOutcome:
 
     Attributes:
         decision: The real ``Decision`` that most directly gated this
-            specific run attempt -- the ``memory.update`` transition to
-            "running" if that alone was denied (nothing further was
-            attempted, the task stays at its prior status); otherwise
-            ``planning.run_plan``'s own outer-gate ``Decision``.
+            specific run attempt. Three real cases (WP-118 added the
+            first): the ``memory.get`` lookup's own ``Decision``
+            (always granted) if the task is currently ``"cancelled"``
+            and nothing further was attempted; the ``memory.update``
+            transition to "running" if that alone was denied (nothing
+            further was attempted, the task stays at its prior
+            status); otherwise ``planning.run_plan``'s own outer-gate
+            ``Decision``.
         status: The task's real, final status after this call
-            (``"completed"``/``"failed"``), or ``None`` if the
-            transition to "running" was itself denied -- the task's
-            own stored status is unchanged in that case.
-        reason: The real reason, if ``status == "failed"``; ``None``
-            otherwise.
+            (``"completed"``/``"failed"``), ``"cancelled"`` if the
+            task was already cancelled and this run was refused
+            (WP-118, its own stored status unchanged), or ``None`` if
+            the transition to "running" was itself denied -- the
+            task's own stored status is unchanged in that case too.
+        reason: The real reason, if ``status == "failed"`` or
+            ``status == "cancelled"`` (WP-118); ``None`` otherwise.
     """
 
     decision: Decision
@@ -534,6 +558,30 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
             task's own stored status at "running" permanently -- see
             this module's own docstring for the full account.
     """
+    get_outcome = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    if get_outcome.record is not None:
+        existing_data = get_outcome.record.value.value
+        current_status = existing_data.get("status") if isinstance(existing_data, dict) else None
+        if current_status == "cancelled":
+            # WP-118: a cancelled task must never be silently resumed by a
+            # direct `run` call -- see the module docstring's own WP-118
+            # section. Nothing past this point is attempted: no "running"
+            # transition, no plan execution.
+            return TaskRunOutcome(
+                decision=get_outcome.decision,
+                status="cancelled",
+                reason="Task was cancelled; run refuses to resume a cancelled task.",
+            )
+
     reason: str | None = None
     running_decision = update_task_status(
         task_id,

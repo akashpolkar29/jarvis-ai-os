@@ -824,3 +824,49 @@ def test_cancel_refused_for_a_terminal_status_publishes_no_event(tmp_path: Path)
 
     assert outcome.cancelled is False
     assert published == []
+
+
+async def test_run_refuses_to_resume_an_already_cancelled_task(tmp_path: Path) -> None:
+    """WP-118: the real gap WP-117 itself opened -- run must not silently undo a cancel."""
+    create_outcome = _create(tmp_path, "a goal a human gave up on")
+    assert create_outcome.task_id is not None
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+    assert cancel_outcome.cancelled is True
+
+    run_outcome = await _run(tmp_path, create_outcome.task_id, "a goal a human gave up on", "[]")
+
+    assert run_outcome.status == "cancelled"
+    assert run_outcome.reason == "Task was cancelled; run refuses to resume a cancelled task."
+    assert run_outcome.decision.granted is True  # the memory.get lookup, always Tier.ALLOW
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "cancelled"  # type: ignore[index]
+
+
+async def test_run_publishes_no_status_changed_event_for_an_already_cancelled_task(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    _cancel(tmp_path, create_outcome.task_id)
+    published: list[TaskStatusChanged] = []
+    bus = EventBus()
+    bus.subscribe(TaskStatusChanged, published.append)
+
+    await _run(tmp_path, create_outcome.task_id, "a goal", "[]", event_bus=bus)
+
+    assert published == []
+
+
+async def test_run_still_works_normally_on_a_task_that_was_never_cancelled(
+    tmp_path: Path,
+) -> None:
+    """The new WP-118 lookup must not change behavior for the ordinary, non-cancelled path."""
+    create_outcome = _create(tmp_path, "a trivial goal")
+    assert create_outcome.task_id is not None
+
+    run_outcome = await _run(tmp_path, create_outcome.task_id, "a trivial goal", "[]")
+
+    assert run_outcome.status == "completed"
+    assert run_outcome.reason is None
