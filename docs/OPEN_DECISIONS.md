@@ -1807,6 +1807,24 @@ argument-level correctness), a class of bug either present or absent
 for the whole package, not per-subcommand. No code changed. See
 `docs/architecture/wp156-e2e-smoke-suite-recheck.md`.
 
+## 58. `docs/ROADMAP.md` staleness (WP-124 through WP-156 not reflected) -- flagged, not fixed
+
+**Investigated, WP-157**, the closing review of this session's own
+10-work-package queue. `docs/ROADMAP.md`'s own real, work-package-level
+entries stop at WP-123 -- everything since (the task lifecycle's
+cancel/retry/schedule/recover/worker verbs, `jarvis ui`'s task/event
+wiring, the typed router, and this queue's own ten work packages) is
+individually documented in its own `docs/architecture/wpNNN-*.md` file
+and in `CHANGELOG.md`, but not reflected in the roadmap itself. Not
+fixed here -- a full catch-up covering 30+ work packages is real,
+substantive documentation work in its own right, flagged as the first,
+smallest-risk candidate for a future work package rather than
+attempted hastily inside a review pass. See
+`docs/architecture/wp157-architecture-review-and-next-queue.md` for
+the full review, including a proposed next-queue ordering and a
+(not-acted-on) recommendation that a new milestone tag may be
+warranted given 72 real commits since `v0.9.0`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
