@@ -2904,6 +2904,142 @@ def test_task_list_subcommand_prints_each_task(
     assert "task:1: goal='a goal' status=completed" in captured.out
 
 
+def test_task_status_subcommand_prints_a_stale_warning_when_the_kernel_reports_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "running",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record, stale=True)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "task:1: goal='a goal' status=running" in captured.out
+    assert "may have crashed or been interrupted" in captured.out
+
+
+def test_task_status_subcommand_prints_no_stale_warning_when_the_kernel_reports_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "running",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record, stale=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "may have crashed" not in captured.out
+
+
+def test_task_list_subcommand_prints_a_stale_warning_only_for_the_stale_task_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+
+        def _record(identifier: str) -> MemoryRecord:
+            return MemoryRecord(
+                identifier=identifier,
+                value=Tainted(
+                    {
+                        "kind": "task",
+                        "goal": identifier,
+                        "status": "running",
+                        "reason": None,
+                        "created_at": "2026-09-09T00:00:00+00:00",
+                        "updated_at": "2026-09-09T00:00:00+00:00",
+                    },
+                    Provenance.user(),
+                ),
+                written_at=datetime(2026, 9, 9, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        return TaskListOutcome(
+            decision=decision,
+            records=(_record("task:stale"), _record("task:fresh")),
+            stale_task_ids=frozenset({"task:stale"}),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(["task", "list", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    lines = captured.out.splitlines()
+    stale_index = next(i for i, line in enumerate(lines) if line.startswith("task:stale:"))
+    fresh_index = next(i for i, line in enumerate(lines) if line.startswith("task:fresh:"))
+    assert "may have crashed" in lines[stale_index + 1]
+    assert fresh_index == len(lines) - 1 or "may have crashed" not in lines[fresh_index + 1]
+
+
 def test_task_subcommand_requires_a_real_task_command() -> None:
     with pytest.raises(SystemExit):
         main(["task"])

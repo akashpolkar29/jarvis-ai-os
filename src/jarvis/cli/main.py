@@ -245,6 +245,7 @@ from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.project import authorize_and_get_project_status, authorize_and_start_project
 from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
+    STALE_RUNNING_THRESHOLD_SECONDS,
     VALID_TASK_STATUSES,
     authorize_and_create_task,
     authorize_and_get_task,
@@ -1916,6 +1917,7 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             get_outcome.decision,
             "task status",
             task_record=get_outcome.record,
+            task_stale=get_outcome.stale,
         )
 
     list_outcome = authorize_and_list_tasks(
@@ -1928,6 +1930,7 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
         list_outcome.decision,
         "task list",
         task_records=list_outcome.records,
+        stale_task_ids=list_outcome.stale_task_ids,
     )
 
 
@@ -2362,6 +2365,8 @@ class _CommandOutcome:
     task_reason: str | None = None
     task_record: MemoryRecord | None = None
     task_records: tuple[MemoryRecord, ...] | None = None
+    task_stale: bool = False
+    stale_task_ids: frozenset[str] = frozenset()
     route_result: RouteResult | None = None
     route_execution_result: object | None = None
     route_task_id: str | None = None
@@ -2537,8 +2542,14 @@ def _print_project_outcome(outcome: _CommandOutcome) -> None:
         print("No project-goal record found for this goal.")
 
 
-def _print_one_task_record(record: MemoryRecord) -> None:
-    """Print one real task record's own fields -- shared by `task status` and `task list`."""
+def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None:
+    """Print one real task record's own fields -- shared by `task status` and `task list`.
+
+    ``stale`` is WP-116's own real, read-only staleness signal (see
+    ``jarvis.kernel.tasks._is_stale_running``) -- never derived here,
+    always computed by the kernel layer from the record's own
+    ``updated_at`` against a real clock, then passed straight through.
+    """
     data = record.value.value
     if not isinstance(data, dict):
         print(f"{record.identifier}: {data!r}")
@@ -2546,6 +2557,12 @@ def _print_one_task_record(record: MemoryRecord) -> None:
     print(f"{record.identifier}: goal={data.get('goal')!r} status={data.get('status')}")
     if data.get("reason") is not None:
         print(f"    reason: {data.get('reason')}")
+    if stale:
+        print(
+            "    warning: no status update in over "
+            f"{int(STALE_RUNNING_THRESHOLD_SECONDS // 60)} minutes -- this task may have "
+            "crashed or been interrupted; its status was never automatically changed"
+        )
 
 
 def _print_task_outcome(outcome: _CommandOutcome) -> None:
@@ -2561,12 +2578,12 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:
         if outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_record is not None:
-        _print_one_task_record(outcome.task_record)
+        _print_one_task_record(outcome.task_record, stale=outcome.task_stale)
     elif outcome.command_label == "task status":
         print("No task found for this identifier.")
     if outcome.task_records is not None:
         for record in outcome.task_records:
-            _print_one_task_record(record)
+            _print_one_task_record(record, stale=record.identifier in outcome.stale_task_ids)
 
 
 def _print_do_outcome(outcome: _CommandOutcome) -> None:

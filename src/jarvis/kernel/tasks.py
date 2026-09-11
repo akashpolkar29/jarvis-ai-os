@@ -95,11 +95,43 @@ independent id/timestamp pair has no real side effect to share or
 duplicate. See ``jarvis.domain.events``'s own module docstring for the
 full reasoning (why exactly two event types, why no lock, why a
 subscriber's own failure never propagates here).
+
+**WP-116 (2026-09-11): real, read-only stale-running-task detection.**
+WP-113 (2026-09-10) already fixed every *in-process* way a task's own
+stored status could be left at ``"running"`` forever -- a plan step's
+own real execution exception now always lands the record at
+``"failed"`` first. It could not, and does not claim to, fix the
+*process-level* case: if the whole JARVIS process hosting a real
+``authorize_and_run_task`` call is killed, crashes, or loses power
+while a task is genuinely mid-execution, the stored status is left at
+``"running"`` permanently -- there is no later code path, in any
+process, that ever revisits it. ``authorize_and_get_task``/
+``authorize_and_list_tasks`` now compute a real, **read-only**
+``stale`` signal using data the store already has (``updated_at``,
+added WP-107/109) -- a ``"running"`` task whose ``updated_at`` is
+older than :data:`STALE_RUNNING_THRESHOLD_SECONDS` is reported,
+honestly, as likely-stale to the caller.
+
+**Deliberately detection only, never automatic recovery, stated
+plainly, not silently narrowed**: this module investigated whether to
+also *act* on a detected staleness (e.g. auto-transitioning the record
+to ``"failed"``) and chose not to -- a real process that is merely
+slow (a genuinely long-running coding task, a loaded machine) is
+indistinguishable from a genuinely crashed one using only
+``updated_at``'s own age; auto-failing the former would be a real,
+incorrect, and irreversible loss of a task a human might still be
+waiting on. Surfacing the signal and letting a human decide (mirroring
+every other ``Tier.MANUAL_ONLY``-adjacent judgment call this codebase
+already defers to a real person for) is the safe, honest choice here.
+No new capability, no new ``Effect``/``Tier``, no schema change to
+what is actually persisted -- ``stale`` is a derived value computed
+fresh on every real read, never written to storage.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.clock import SystemClockAdapter
@@ -144,6 +176,15 @@ _RECALL_LIST_LIMIT = 1000
 job_application.py's own docstring for the real, honest limitation this
 implies for authorize_and_list_tasks. Does not apply to authorize_and_get_task,
 which looks up by exact identifier, not by this broad recall."""
+
+STALE_RUNNING_THRESHOLD_SECONDS = 1800.0
+"""WP-116 (2026-09-11): how long a task may sit at `"running"` with no further
+`updated_at` progress before it is reported as likely stale -- a real, deliberately
+generous default, not a guess: the real local-model reasoning timeout
+(`adapters/reasoning/local.py::_REQUEST_TIMEOUT_SECONDS`, 120s) bounds one single
+call; even a multi-step plan retrying several times comfortably fits well inside
+this 30-minute margin in the ordinary case. Detection only -- see module docstring's
+own WP-116 section for why this never mutates a task's own stored status."""
 
 
 def derive_result_status(result: PlanExecutionResult) -> tuple[str, str | None]:
@@ -564,6 +605,29 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
     return TaskRunOutcome(decision=plan_decision, status=status, reason=reason)
 
 
+def _is_stale_running(data: object, now: datetime) -> bool:
+    """Return whether a real task record's own dict is `"running"` and stale (WP-116).
+
+    A pure function of the record's own already-stored content plus a
+    real, caller-supplied `now` -- never calls a wall clock itself
+    (this module is not `domain`, but still follows the identical
+    discipline everywhere it reasonably can). `False` for anything
+    that isn't a well-formed task dict at all, or whose own
+    `updated_at` cannot be parsed -- a malformed record is a separate,
+    real problem this function does not paper over by guessing.
+    """
+    if not isinstance(data, dict) or data.get("status") != "running":
+        return False
+    raw_updated_at = data.get("updated_at")
+    if not isinstance(raw_updated_at, str):
+        return False
+    try:
+        updated_at = datetime.fromisoformat(raw_updated_at)
+    except ValueError:
+        return False
+    return (now - updated_at).total_seconds() > STALE_RUNNING_THRESHOLD_SECONDS
+
+
 @dataclass(frozen=True)
 class TaskGetOutcome:
     """The result of one authorize_and_get_task() call.
@@ -573,10 +637,18 @@ class TaskGetOutcome:
             (``Tier.ALLOW``).
         record: The real, current task record at ``task_id``, or
             ``None`` if no such task exists.
+        stale: WP-116, real, read-only, computed fresh on every call,
+            never persisted. ``True`` only if ``record`` is real,
+            currently ``"running"``, and has not been updated in over
+            :data:`STALE_RUNNING_THRESHOLD_SECONDS` -- a real, honest
+            signal that the process running it may have crashed, never
+            an automatic verdict (see module docstring's own WP-116
+            section for why this is detection only).
     """
 
     decision: Decision
     record: MemoryRecord | None
+    stale: bool = False
 
 
 def authorize_and_get_task(  # noqa: PLR0913 -- one per composition-function pass-through
@@ -617,7 +689,10 @@ def authorize_and_get_task(  # noqa: PLR0913 -- one per composition-function pas
         not isinstance(record.value.value, dict) or record.value.value.get("kind") != TASK_KIND
     ):
         record = None
-    return TaskGetOutcome(decision=get_outcome.decision, record=record)
+    stale = record is not None and _is_stale_running(
+        record.value.value, (clock or SystemClockAdapter()).now()
+    )
+    return TaskGetOutcome(decision=get_outcome.decision, record=record, stale=stale)
 
 
 @dataclass(frozen=True)
@@ -631,10 +706,19 @@ class TaskListOutcome:
             "kind" marker (and by ``status``, if given). See the
             module docstring for the real, honest broad-recall-then-
             filter limitation this shares with ``job_application.list``.
+        stale_task_ids: WP-116, real, read-only, computed fresh on
+            every call, never persisted -- the identifiers (matching
+            ``records[i].identifier``) of every returned record that
+            is currently ``"running"`` and has not been updated in
+            over :data:`STALE_RUNNING_THRESHOLD_SECONDS`. A separate
+            field, not a mutation of ``records`` itself, so the raw,
+            real, stored record content stays exactly what was stored
+            -- see module docstring's own WP-116 section.
     """
 
     decision: Decision
     records: tuple[MemoryRecord, ...]
+    stale_task_ids: frozenset[str] = frozenset()
 
 
 def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function pass-through
@@ -671,4 +755,10 @@ def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function p
         and record.value.value.get("kind") == TASK_KIND
         and (status is None or record.value.value.get("status") == status)
     )
-    return TaskListOutcome(decision=recall_outcome.decision, records=matching)
+    now = (clock or SystemClockAdapter()).now()
+    stale_task_ids = frozenset(
+        record.identifier for record in matching if _is_stale_running(record.value.value, now)
+    )
+    return TaskListOutcome(
+        decision=recall_outcome.decision, records=matching, stale_task_ids=stale_task_ids
+    )

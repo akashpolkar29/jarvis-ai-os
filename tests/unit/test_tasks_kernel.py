@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +30,7 @@ from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.files import PathOutsideAllowedScopeError
 from jarvis.kernel.memory import authorize_and_remember
 from jarvis.kernel.tasks import (
+    STALE_RUNNING_THRESHOLD_SECONDS,
     TASK_KIND,
     VALID_TASK_STATUSES,
     authorize_and_create_task,
@@ -37,6 +38,7 @@ from jarvis.kernel.tasks import (
     authorize_and_list_tasks,
     authorize_and_run_task,
     derive_result_status,
+    update_task_status,
 )
 
 if TYPE_CHECKING:
@@ -293,6 +295,149 @@ def test_get_ignores_a_non_task_memory_record(tmp_path: Path) -> None:
 
     outcome = _get(tmp_path, write_outcome.identifier)
     assert outcome.record is None
+
+
+def _set_running_at(tmp_path: Path, task_id: str, goal: str, when: datetime) -> None:
+    """Force a real task record's own stored status to "running" with a fixed `updated_at`.
+
+    Mirrors what a real, genuinely-crashed `authorize_and_run_task`
+    call would have left behind -- a record stuck at `"running"`, last
+    touched at `when`, never revisited by any later call in any
+    process. Uses `update_task_status` directly (the same, real,
+    shared helper `authorize_and_run_task` itself calls), not a
+    hand-built record, so this exercises the real write path.
+    """
+    update_task_status(
+        task_id,
+        goal,
+        "running",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(when),
+        id_port=_SequentialIdPort(),
+    )
+
+
+def test_get_reports_a_running_task_as_stale_once_past_the_real_threshold(
+    tmp_path: Path,
+) -> None:
+    """WP-116: a "running" task untouched for over the real, documented threshold is flagged."""
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    stuck_at = _NOW
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal", stuck_at)
+
+    just_under = stuck_at + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS - 1)
+    still_fresh = authorize_and_get_task(
+        create_outcome.task_id,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(just_under),
+        id_port=_SequentialIdPort(),
+    )
+    assert still_fresh.record is not None
+    assert still_fresh.record.value.value["status"] == "running"  # type: ignore[index]
+    assert still_fresh.stale is False
+
+    just_over = stuck_at + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+    now_stale = authorize_and_get_task(
+        create_outcome.task_id,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(just_over),
+        id_port=_SequentialIdPort(),
+    )
+    assert now_stale.stale is True
+    # The real, stored status itself is never touched by detection alone.
+    assert now_stale.record is not None
+    assert now_stale.record.value.value["status"] == "running"  # type: ignore[index]
+
+
+async def test_get_of_a_completed_task_is_never_reported_stale_no_matter_how_old(
+    tmp_path: Path,
+) -> None:
+    """WP-116: staleness only ever applies to "running" -- a real, finished task never qualifies."""
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    run_outcome = await _run(tmp_path, create_outcome.task_id, "a goal", "[]")
+    assert run_outcome.status == "completed"
+
+    far_future = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS * 100)
+    outcome = authorize_and_get_task(
+        create_outcome.task_id,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(far_future),
+        id_port=_SequentialIdPort(),
+    )
+    assert outcome.stale is False
+
+
+def test_get_of_a_recently_running_task_is_not_yet_stale(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal", _NOW)
+
+    outcome = _get(tmp_path, create_outcome.task_id)
+    assert outcome.record is not None
+    assert outcome.stale is False
+
+
+def test_list_reports_stale_task_ids_for_running_tasks_past_the_threshold(
+    tmp_path: Path,
+) -> None:
+    id_port = _SequentialIdPort()
+    stale_one = _create(tmp_path, "stale goal", id_port=id_port)
+    fresh_one = _create(tmp_path, "fresh goal", id_port=id_port)
+    assert stale_one.task_id is not None
+    assert fresh_one.task_id is not None
+    _set_running_at(tmp_path, stale_one.task_id, "stale goal", _NOW)
+    _set_running_at(tmp_path, fresh_one.task_id, "fresh goal", _NOW)
+
+    later = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(later),
+        id_port=id_port,
+    )
+
+    assert list_outcome.stale_task_ids == {stale_one.task_id, fresh_one.task_id}
+
+
+def test_list_reports_no_stale_task_ids_when_nothing_is_running(tmp_path: Path) -> None:
+    id_port = _SequentialIdPort()
+    create_outcome = _create(tmp_path, "a goal", id_port=id_port)
+    assert create_outcome.task_id is not None
+
+    far_future = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS * 100)
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(far_future),
+        id_port=id_port,
+    )
+
+    assert list_outcome.stale_task_ids == frozenset()
 
 
 async def test_list_filters_by_status_and_ignores_ordinary_memories(tmp_path: Path) -> None:
