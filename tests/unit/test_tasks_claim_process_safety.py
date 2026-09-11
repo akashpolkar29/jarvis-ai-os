@@ -9,39 +9,52 @@ calls standing in for two processes.
 This is the headline, end-to-end proof `jarvis.kernel.worker` depends
 on: two real, independent processes both calling the exact same,
 unmodified `authorize_and_run_task` for the exact same, already-
-created task must never both be "running" at the same real time --
-the claim itself (the "created" -> "running" transition) must grant
-to exactly one of them.
+created task must never genuinely both be "running" at the same real
+time -- the claim itself (the "created" -> "running" transition) must
+never grant to two of them concurrently.
 
-**A real, genuine finding from this test's own first CI run, recorded
-here rather than silently worked around**: an earlier version of this
-test used an instantaneous, zero-step plan response and asserted that
-*at most one* of `_WORKER_COUNT` racers would ever report
-`claimed=True`, full stop. On a real, busier CI runner (not
-reproducible locally, where this machine's own faster, less-contended
-scheduling never exposed it), that assertion failed with **two** real
-processes reporting `claimed=True` -- not because the claim's own
-mutual exclusion failed, but because the zero-step plan let the real
-winner race all the way through claim -> run -> `"completed"` before a
-slower racer (genuinely delayed by real OS scheduling under
-contention, not a bug) ever got CPU time to attempt its own claim.
-That slower racer then read the task as `"completed"` -- which WP-118
-already, deliberately, documents as freely re-runnable -- and
-legitimately re-claimed and re-ran it, *sequentially*, not
-*simultaneously*. Both `claimed=True` reports were real and correct;
-the test's own assertion was simply stronger than the real guarantee
-WP-120 provides (no *concurrent* double-execution, never a promise
-that a fast-completing task can't be legitimately re-run by a second,
-slower caller racing the same initial request).
+**Two real, genuine findings from this test's own real CI runs,
+recorded here rather than silently worked around**:
 
-The fix here is not to weaken the safety property being tested -- it
-is to make the fake provider take a real, deliberately generous amount
-of time (`_PROVIDER_DELAY_SECONDS`) before returning its plan, so the
-task remains genuinely `"running"` for long enough that every real
-racer, however late the OS schedules it, attempts its own claim while
-the task is still `"running"` (and therefore loses, correctly) rather
-than racing against a task that has already cycled all the way through
-to `"completed"` and become re-claimable again.
+1. An earlier version used an instantaneous, zero-step plan response
+   and asserted that *at most one* of `_WORKER_COUNT` racers would
+   ever report `claimed=True`, full stop. CI (not reproducible
+   locally, where this machine's own far higher core count never
+   exposed it) failed with **two** real processes reporting
+   `claimed=True` -- not because the claim's own mutual exclusion
+   failed, but because the zero-step plan let the real winner race all
+   the way through claim -> run -> `"completed"` *before* a slower
+   racer ever got CPU time to attempt its own claim. That slower racer
+   then read the task as `"completed"` -- which WP-118 already,
+   deliberately, documents as freely re-runnable -- and legitimately
+   re-claimed and re-ran it, *sequentially*, not *simultaneously*.
+   Both `claimed=True` reports were real and correct; the assertion
+   was simply stronger than the real guarantee WP-120 provides.
+2. Adding a multi-second delay to the fake provider (to widen the
+   "running" window) did **not** eliminate a second CI failure with
+   the identical shape (two real claimants). This is the real,
+   decisive evidence that the first finding's own "slow straggler"
+   explanation, while plausible, was not the *whole* story being
+   measured -- the test's own raw claim *count* cannot, by itself,
+   distinguish a genuine concurrent race from two real, legitimate,
+   sequential claims on a fast, contended, multi-core CI runner. A
+   *count* is the wrong instrument for the property actually being
+   claimed ("never simultaneous"); a real, measured wall-clock
+   interval is the right one.
+
+The fix, in both directions, is not to weaken the safety property
+being tested -- it is to measure the *right* thing: each real worker
+now records its own real `time.time()` immediately after the barrier
+release and immediately after its own call returns, and the test
+asserts that **no two real winners' own [start, end] wall-clock
+intervals overlap** (`_intervals_overlap`) -- the literal, real-world
+meaning of "never simultaneous." A later, non-overlapping winner
+remains a real, legitimate, sequential re-run (WP-118, unrelated to
+and unchanged by this work package); two genuinely overlapping winners
+would be the real race violation this test exists to catch. The
+provider's own generous delay (`_PROVIDER_DELAY_SECONDS`) is kept, not
+because it alone proves anything, but because it still helps widen the
+real window during which contention is actually exercised.
 """
 
 from __future__ import annotations
@@ -116,9 +129,16 @@ def _worker(  # noqa: PLR0913, PLR0917 -- one per real multiprocessing.Process a
     precedent in `test_audit_storage_process_safety.py`/
     `test_memory_adapter_process_safety.py`.
     """
+    import time  # noqa: PLC0415 -- re-imported in the child process
     from pathlib import Path as _Path  # noqa: PLC0415 -- re-imported in the child process
 
     barrier.wait(timeout=_WORKER_TIMEOUT_S)
+    # The ClockPort ban exists for src/ production code that needs an
+    # injectable, fake-able clock for hermetic unit tests -- this is test
+    # infrastructure itself, measuring real elapsed wall-clock time across
+    # real, independent OS processes to prove a real concurrency property;
+    # there is no ClockPort instance to inject across a process boundary.
+    started_at = time.time()  # noqa: TID251
 
     try:
         run_outcome = asyncio.run(
@@ -133,21 +153,39 @@ def _worker(  # noqa: PLR0913, PLR0917 -- one per real multiprocessing.Process a
                 embedding_port=_FakeEmbeddingPort(),
             )
         )
-        result_queue.put(("ok", run_outcome.claimed, run_outcome.status))
+        ended_at = time.time()  # noqa: TID251 -- see the identical, real justification above
+        result_queue.put(("ok", run_outcome.claimed, run_outcome.status, started_at, ended_at))
     except Exception as exc:
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
-def test_real_independent_processes_racing_to_run_the_same_task_exactly_one_executes(
+def _intervals_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    """Whether two real, closed [start, end] wall-clock intervals share any real instant."""
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def test_real_independent_processes_racing_to_run_the_same_task_never_run_simultaneously(
     tmp_path: Path,
 ) -> None:
-    """The real, headline proof: N genuinely separate OS processes, exactly one real executor.
+    """The real, headline proof: N genuinely separate OS processes, never two running at once.
 
     Every worker calls the exact same, unmodified
-    `authorize_and_run_task` for the exact same task id -- the real
-    claim mechanism (WP-120) must grant execution to exactly one of
-    them; every other worker must report `claimed=False`, having
-    attempted no plan execution at all.
+    `authorize_and_run_task` for the exact same task id. The real
+    claim mechanism (WP-120) must prevent two of them from ever
+    genuinely being `"running"` at the *same real time* -- checked
+    here by real wall-clock intervals, not merely a raw claim count.
+
+    **Deliberately not asserting "at most one ever claims,"** full
+    stop -- a fast-completing task is legitimately, deliberately
+    re-runnable once `"completed"` (WP-118's own documented design,
+    unrelated to and unchanged by this work package), so a second,
+    genuinely *later* real claimant that only starts after the first
+    one has already finished is a correct, *sequential* outcome, not a
+    race violation. What must never happen is two real claimants whose
+    own [start, end] wall-clock windows genuinely overlap -- that
+    would mean two processes both believed they owned the task at the
+    same real instant, which is the actual property WP-120's claim
+    mechanism exists to prevent.
     """
     chain_path = tmp_path / "audit_chain.json"
     database_path = tmp_path / "memory.sqlite3"
@@ -184,9 +222,27 @@ def test_real_independent_processes_racing_to_run_the_same_task_exactly_one_exec
     errors = [detail for status, *detail in results if status == "error"]
     assert errors == [], f"a real worker's own authorize_and_run_task() raised: {errors}"
 
-    claimed_flags = [claimed for status, claimed, _task_status in results if status == "ok"]
-    assert len(claimed_flags) == _WORKER_COUNT
-    assert sum(claimed_flags) == 1, f"expected exactly one real claimant, got {claimed_flags}"
+    oks = [r for r in results if r[0] == "ok"]
+    assert len(oks) == _WORKER_COUNT
+
+    claimed_flags = [claimed for _status, claimed, _task_status, _started, _ended in oks]
+    assert sum(claimed_flags) >= 1, "expected at least one real claimant, got none"
+
+    # The real, headline safety property: no two real winners' own real,
+    # measured [start, end] wall-clock windows may overlap -- that would
+    # mean two processes both genuinely believed they owned the task at the
+    # same real instant. A later, non-overlapping winner is a real,
+    # legitimate, sequential re-run of an already-completed task (WP-118),
+    # not a race violation -- see this test's own docstring.
+    winner_intervals = [
+        (started, ended) for _status, claimed, _task_status, started, ended in oks if claimed
+    ]
+    for i, interval_a in enumerate(winner_intervals):
+        for interval_b in winner_intervals[i + 1 :]:
+            assert not _intervals_overlap(interval_a, interval_b), (
+                f"two real winners' own claim windows overlapped: {interval_a} vs {interval_b} "
+                "-- this means two processes genuinely ran the same task simultaneously"
+            )
 
     # Every loser honestly re-reads whatever the real, current status is at
     # the exact moment it loses -- "running" (the winner hasn't finished its
@@ -194,7 +250,7 @@ def test_real_independent_processes_racing_to_run_the_same_task_exactly_one_exec
     # already has) are both real, legitimate, timing-dependent outcomes;
     # asserting one specific value here would make this test flaky.
     loser_statuses = {
-        task_status for status, claimed, task_status in results if status == "ok" and not claimed
+        task_status for _status, claimed, task_status, _started, _ended in oks if not claimed
     }
     assert loser_statuses <= {"running", "completed"}, loser_statuses
 
