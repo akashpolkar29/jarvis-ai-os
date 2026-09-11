@@ -67,8 +67,10 @@ from jarvis.kernel.router import RouteOutcome
 from jarvis.kernel.tasks import (
     TaskCancelOutcome,
     TaskGetOutcome,
+    TaskRetryOutcome,
     TaskRunOutcome,
     authorize_and_create_task,
+    update_task_status,
 )
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
@@ -769,6 +771,178 @@ def test_post_cancel_task_never_leaks_a_traceback_on_an_unexpected_error(
         "jarvis.cli.ui_server.authorize_and_cancel_task", failing_authorize_and_cancel_task
     ):
         status, data = _post_cancel(base_url, "task:1")
+
+    assert status == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert data["type"] == "error"
+    assert "boom" not in str(data["message"])
+
+
+# ---------------------------------------------------------------------------
+# WP-123: POST /api/tasks/<task_id>/retry -- retries an already-"failed" task
+# ---------------------------------------------------------------------------
+
+
+def _post_retry(base_url: str, task_id: str) -> tuple[int, dict[str, object]]:
+    req = urllib.request.Request(f"{base_url}/api/tasks/{task_id}/retry", data=b"", method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_post_retry_task_reports_not_found_for_an_unknown_task_id_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """Mirrors /cancel: the real lookup happens inside authorize_and_retry_task itself."""
+    base_url, _server = running_server
+
+    status, data = _post_retry(base_url, "no-such-task")
+
+    assert status == HTTPStatus.OK
+    assert data["retried"] is False
+    assert data["reason"] == "No task found for this identifier."
+
+
+def test_post_retry_task_returns_404_for_an_empty_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    status, data = _post_retry(base_url, "")
+
+    assert status == HTTPStatus.NOT_FOUND
+    assert data["type"] == "error"
+
+
+def test_post_retry_task_refuses_a_task_that_is_not_failed(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A "created" task is not retryable -- mirrors authorize_and_retry_task's own guard."""
+    base_url, server = running_server
+    server.jarvis_config = UiServerConfig(
+        chain_path=server.jarvis_config.chain_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    create_outcome = authorize_and_create_task(
+        "a real, independently-created task",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=server.jarvis_config.chain_path,
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    status, data = _post_retry(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.OK
+    assert data["retried"] is False
+    assert "only a 'failed' task can be retried" in str(data["reason"])
+
+
+def test_post_retry_task_real_round_trip_against_a_real_failed_task(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A real, independently-created-then-failed task is really retried -- nothing here is mocked."""  # noqa: E501
+    base_url, server = running_server
+    chain_path = server.jarvis_config.chain_path
+    database_path = tmp_path / "memory.sqlite3"
+    server.jarvis_config = UiServerConfig(
+        chain_path=chain_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=database_path,
+    )
+    create_outcome = authorize_and_create_task(
+        "a real, independently-created task",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert create_outcome.task_id is not None
+    update_task_status(
+        create_outcome.task_id,
+        "a real, independently-created task",
+        "failed",
+        "a real, simulated prior failure",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=None,
+        clock=None,
+        id_port=None,
+    )
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_retry_task",
+        return_value=TaskRetryOutcome(
+            decision=_make_decision(granted=True, tier=Tier.ALLOW),
+            retried=True,
+            status="completed",
+            reason=None,
+        ),
+    ):
+        status, data = _post_retry(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.OK
+    assert data["task_id"] == create_outcome.task_id
+    assert data["granted"] is True
+    assert data["retried"] is True
+    assert data["status"] == "completed"
+
+
+def test_post_retry_task_reports_a_real_refusal_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+    fake_outcome = TaskRetryOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        retried=False,
+        status="running",
+        reason="Task is 'running'; only a 'failed' task can be retried.",
+    )
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_retry_task", return_value=fake_outcome):
+        status, data = _post_retry(base_url, "task:already-running")
+
+    assert status == HTTPStatus.OK
+    assert data["retried"] is False
+    assert data["reason"] == "Task is 'running'; only a 'failed' task can be retried."
+
+
+def test_post_retry_task_reports_a_handled_kernel_error_cleanly(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_retry_task(*_args: object, **_kwargs: object) -> TaskRetryOutcome:
+        raise MemoryRecordNotFoundError("task:gone")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_retry_task", failing_authorize_and_retry_task
+    ):
+        status, data = _post_retry(base_url, "task:gone")
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert data["type"] == "error"
+
+
+def test_post_retry_task_never_leaks_a_traceback_on_an_unexpected_error(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_retry_task(*_args: object, **_kwargs: object) -> TaskRetryOutcome:
+        raise RuntimeError("boom, unexpected")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_retry_task", failing_authorize_and_retry_task
+    ):
+        status, data = _post_retry(base_url, "task:1")
 
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert data["type"] == "error"

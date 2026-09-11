@@ -144,14 +144,14 @@
     cursor: not-allowed;
     opacity: 0.6;
   }
-  .run-task-button, .cancel-task-button {
+  .run-task-button, .cancel-task-button, .retry-task-button {
     display: inline-block;
     margin-top: 8px;
     margin-right: 6px;
     font-size: 12px;
     padding: 4px 10px;
   }
-  .run-task-button:disabled, .cancel-task-button:disabled {
+  .run-task-button:disabled, .cancel-task-button:disabled, .retry-task-button:disabled {
     opacity: 0.5;
     cursor: default;
   }
@@ -232,7 +232,8 @@
         .then(function (data) {
           if (!data) { return; }
           if (data.status && data.status !== lastKnownStatus) {
-            addMessage("task", "Task " + taskId, "Status: " + data.status, null);
+            var pollMsgEl = addMessage("task", "Task " + taskId, "Status: " + data.status, null);
+            addRetryButtonIfFailed(pollMsgEl, taskId, data.status);
             lastKnownStatus = data.status;
           }
           if (TERMINAL_TASK_STATUSES.indexOf(lastKnownStatus) !== -1) { return; }
@@ -272,7 +273,10 @@
           return;
         }
         button.textContent = "Started";
-        addMessage("task", "Task " + taskId, "Status: " + (data.status || "running"), null);
+        var runMsgEl = addMessage(
+          "task", "Task " + taskId, "Status: " + (data.status || "running"), null
+        );
+        addRetryButtonIfFailed(runMsgEl, taskId, data.status);
       })
       .catch(function () {
         addMessage(
@@ -324,6 +328,68 @@
         button.disabled = false;
         button.textContent = "Cancel";
       });
+  }
+
+  // POST /api/tasks/<id>/retry (WP-123) -- mirrors cancelTask's own shape.
+  // Only ever reachable via a real "Retry" button, itself only ever attached
+  // to a message once a task's own status is genuinely reported as "failed"
+  // (see addRetryButtonIfFailed below) -- never shown speculatively. A
+  // real refusal (e.g. another concurrent retry/run already claimed it) is
+  // shown as a status line, not an error bubble, mirroring cancelTask.
+  function retryTask(taskId, button) {
+    button.disabled = true;
+    button.textContent = "Retrying...";
+    fetch("/api/tasks/" + encodeURIComponent(taskId) + "/retry", { method: "POST" })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        var data = result.data;
+        if (!result.ok || data.type === "error") {
+          addMessage(
+            "error", null, (data && data.message) || "Could not retry this task.", null
+          );
+          button.disabled = false;
+          button.textContent = "Retry";
+          return;
+        }
+        if (data.retried) {
+          button.textContent = "Retried";
+          var msgEl = addMessage(
+            "task", "Task " + taskId, "Status: " + (data.status || "running"), null
+          );
+          addRetryButtonIfFailed(msgEl, taskId, data.status);
+        } else {
+          button.disabled = false;
+          button.textContent = "Retry";
+          addMessage("task", "Task " + taskId, data.reason || "Not retried.", null);
+        }
+      })
+      .catch(function () {
+        addMessage(
+          "error", null, "Could not reach the JARVIS backend to retry this task.", null
+        );
+        button.disabled = false;
+        button.textContent = "Retry";
+      });
+  }
+
+  // Attaches a real "Retry" button to `messageEl` only when `status` is
+  // genuinely "failed" -- called from every real place a task's status can
+  // first become visible as "failed": runTask's own synchronous response,
+  // a later pollTaskStatus change, or a prior retry that failed again.
+  function addRetryButtonIfFailed(messageEl, taskId, status) {
+    if (status !== "failed") { return; }
+    var retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "retry-task-button";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", function () {
+      retryTask(taskId, retryButton);
+    });
+    messageEl.appendChild(retryButton);
   }
 
   // Renders one real backend response, distinguishing every real `type` the

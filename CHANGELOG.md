@@ -120,6 +120,15 @@ replacement for either.
   recurrence, no natural-language scheduling, no UI/voice exposure --
   all explicitly out of scope. No new `CapabilityId`/`Effect`/`Tier`,
   no ADR. See `docs/architecture/wp122-local-task-scheduling.md`.
+- WP-123: a real "Retry" button in `jarvis ui` for an already-`"failed"`
+  task. `POST /api/tasks/<task_id>/retry` reuses
+  `kernel.tasks.authorize_and_retry_task` (WP-121) completely
+  unmodified -- the exact same function `jarvis task retry` already
+  calls. The frontend attaches the button only once a task's status is
+  genuinely reported as `"failed"` (from a run's own synchronous
+  response, a later status poll, or a prior retry that failed again)
+  -- never speculatively at task creation. No new `CapabilityId`/
+  `Effect`/`Tier`, no ADR. See `docs/architecture/wp123-retry-from-ui.md`.
 
 ### Fixed
 

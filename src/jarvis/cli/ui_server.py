@@ -134,6 +134,20 @@ this single-threaded server); it lets a human retire a task's own
 stored status by hand, most usefully right after creating a task they
 change their mind about, or once `GET /api/tasks/<task_id>` reports a
 status that has stopped changing.
+
+**WP-123 (2026-09-12): a real, explicit way to retry an already-
+"failed" task from the UI.** `POST /api/tasks/<task_id>/retry` reuses
+`kernel.tasks.authorize_and_retry_task` (WP-121) completely unmodified
+-- the exact same function `jarvis task retry` already calls, which
+itself delegates unmodified to `authorize_and_run_task` once it
+confirms the task is genuinely `"failed"`. Mirrors `POST .../cancel`'s
+own shape: no server-side goal lookup needed here either, since
+`authorize_and_retry_task` already does its own lookup and
+"failed"-only status check internally. The frontend surfaces a real
+"Retry" button only once a task's own status is actually reported as
+`"failed"` -- from `runTask`'s own synchronous response, from a later
+`pollTaskStatus` status change, or from a prior retry that failed
+again -- never speculatively on task creation.
 """
 
 from __future__ import annotations
@@ -173,6 +187,7 @@ from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
     authorize_and_cancel_task,
     authorize_and_get_task,
+    authorize_and_retry_task,
     authorize_and_run_task,
 )
 from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
@@ -204,6 +219,11 @@ task (WP-112). See module docstring's own WP-112 section."""
 _TASK_CANCEL_PATH_SUFFIX = "/cancel"
 """POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- cancels an already-created
 task (WP-119). See module docstring's own WP-119 section."""
+
+_TASK_RETRY_PATH_SUFFIX = "/retry"
+"""POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- retries an already-"failed"
+task (WP-123), reusing kernel.tasks.authorize_and_retry_task (WP-121) completely
+unmodified -- the exact same function `jarvis task retry` already calls."""
 
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
@@ -638,7 +658,7 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        """Handle command/run/cancel task POSTs (WP-108/WP-112/WP-119). Never crashes the server."""
+        """Handle command/run/cancel/retry task POSTs (WP-108/WP-112/WP-119/WP-123). Never crashes the server."""  # noqa: E501
         if self.path == "/api/command":
             self._handle_post_command()
             return
@@ -653,6 +673,12 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         ):
             task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_CANCEL_PATH_SUFFIX)]
             self._handle_cancel_task(task_id)
+            return
+        if self.path.startswith(_TASK_STATUS_PATH_PREFIX) and self.path.endswith(
+            _TASK_RETRY_PATH_SUFFIX
+        ):
+            task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_RETRY_PATH_SUFFIX)]
+            self._handle_retry_task(task_id)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
 
@@ -804,6 +830,57 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                 "granted": cancel_outcome.decision.granted,
                 "cancelled": cancel_outcome.cancelled,
                 "reason": cancel_outcome.reason,
+            },
+        )
+
+    def _handle_retry_task(self, task_id: str) -> None:
+        """Handle `POST /api/tasks/<task_id>/retry` (WP-123) -- reuses authorize_and_retry_task unmodified.
+
+        Mirrors `_handle_cancel_task`'s own shape: no server-side goal
+        lookup is needed here either, since `authorize_and_retry_task`
+        (WP-121) already does its own lookup and "failed"-only status
+        check internally before ever delegating to
+        `authorize_and_run_task`. Because that delegation genuinely
+        runs a real plan, this uses the same, wider
+        `_HANDLED_TASK_RUN_ERRORS` tuple `_handle_run_task` uses, not
+        the narrower one `_handle_cancel_task` uses.
+        """  # noqa: E501
+        if not task_id:
+            self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+            return
+
+        config = self.server.jarvis_config
+        try:
+            retry_outcome = asyncio.run(
+                authorize_and_retry_task(
+                    task_id,
+                    physical_confirmation_available=config.physical_confirmation_available,
+                    remote_confirmation_available=config.remote_confirmation_available,
+                    chain_path=config.chain_path,
+                    database_path=config.database_path,
+                    event_bus=self.server.event_bus,
+                )
+            )
+        except _HANDLED_TASK_RUN_ERRORS as exc:
+            _logger.warning("ui_server: retrying task %s failed: %s", task_id, exc)
+            self._send_json(HTTPStatus.BAD_REQUEST, {"type": "error", "message": str(exc)})
+            return
+        except Exception:
+            _logger.exception("ui_server: unexpected internal error retrying task %s", task_id)
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "An unexpected internal error occurred."},
+            )
+            return
+
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "task_id": task_id,
+                "granted": retry_outcome.decision.granted,
+                "retried": retry_outcome.retried,
+                "status": retry_outcome.status,
+                "reason": retry_outcome.reason,
             },
         )
 

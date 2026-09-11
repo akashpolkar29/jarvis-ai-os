@@ -561,6 +561,19 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp122-local-task-scheduling.md` and
   `docs/OPEN_DECISIONS.md` item 31.
+  **Updated 2026-09-12 (WP-123)**: a real "Retry" button in `jarvis
+  ui`, closing the UI gap WP-121's own report named directly. `POST
+  /api/tasks/<task_id>/retry` reuses `authorize_and_retry_task`
+  (WP-121) completely unmodified, mirroring `/cancel`'s own shape — no
+  server-side goal lookup needed, since `authorize_and_retry_task`
+  already does its own lookup and `"failed"`-only status check
+  internally. The frontend attaches the button only once a task's
+  status is genuinely observed as `"failed"` (a run's own synchronous
+  response, a later status poll, or a prior retry that failed again)
+  — never speculatively at task creation. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp123-retry-from-ui.md` and
+  `docs/OPEN_DECISIONS.md` item 32.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

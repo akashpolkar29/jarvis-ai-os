@@ -1439,6 +1439,23 @@ claimed, and run through the real canonical execution path. See
 `docs/architecture/wp122-local-task-scheduling.md` for the full
 account.
 
+## 32. ~~Task retry missing from `jarvis ui`~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-123**. The real, remaining gap WP-121's own report
+named directly: "no dedicated UI button ... the UI's existing generic
+'Run' button would need its own new state to distinguish 'run' from
+'retry' meaningfully." `POST /api/tasks/<task_id>/retry` reuses
+`authorize_and_retry_task` (WP-121) completely unmodified -- the exact
+same function `jarvis task retry` already calls. Mirrors item 28's own
+`/cancel` shape: no server-side goal lookup needed, since
+`authorize_and_retry_task` already does its own lookup and
+`"failed"`-only status check internally. The frontend attaches a real
+"Retry" button only once a task's status is genuinely observed as
+`"failed"` -- from a run's own synchronous response, a later status
+poll, or a prior retry that failed again -- never speculatively at
+task creation. No new `CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp123-retry-from-ui.md` for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
