@@ -1674,6 +1674,17 @@ genuinely new subsystem, not "the smallest missing reliability
 improvement" this work package asked for. Skipped rather than built;
 recorded here since it was never tracked as an open item before.
 
+## 49. ~~Memory retrieve empty-result message~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-144**. `jarvis memory retrieve <query>` printed
+nothing at all for a granted, zero-match recall -- demonstrated
+directly by an existing test that already exercised this exact case
+without ever checking the (empty) output. Now prints "No matching
+memories found.", matching `jarvis ui`'s own already-correct message.
+No new memory metadata/architecture, no ADR. See
+`docs/architecture/wp144-memory-retrieve-empty-result-message.md` for
+the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

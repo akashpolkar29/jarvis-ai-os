@@ -250,6 +250,11 @@ replacement for either.
   non-determinism a CI gate should not have; kept as the same,
   established, periodic manual check this project has always used
   it as. See `docs/architecture/wp142-dependency-security-hygiene.md`.
+- WP-144: `jarvis memory retrieve <query>` now prints "No matching
+  memories found." for a granted, zero-match recall -- previously
+  printed nothing at all, indistinguishable from a silent failure.
+  Matches `jarvis ui`'s own identical, already-correct message. See
+  `docs/architecture/wp144-memory-retrieve-empty-result-message.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

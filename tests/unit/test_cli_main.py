@@ -992,6 +992,41 @@ def test_memory_retrieve_subcommand_routes_query_and_limit(
     assert exit_code == 0
 
 
+def test_memory_retrieve_subcommand_reports_no_matching_memories_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-144: a granted recall with zero matches must say so, not print nothing at all."""
+
+    def fake_authorize_and_recall(
+        query: str,  # noqa: ARG001
+        *,
+        limit: int,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> MemoryRecallOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return MemoryRecallOutcome(decision=decision, records=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_recall", fake_authorize_and_recall
+    )
+
+    exit_code = main(
+        [
+            "memory",
+            "retrieve",
+            "nothing matches this",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No matching memories found." in captured.out
+
+
 def test_memory_retrieve_subcommand_prints_each_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

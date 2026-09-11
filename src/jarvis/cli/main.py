@@ -3051,6 +3051,12 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
     if outcome.memory_identifier is not None:
         print(f"identifier: {outcome.memory_identifier}")
     if outcome.memory_records is not None:
+        if not outcome.memory_records:
+            # WP-144: a granted recall with zero matches previously printed nothing at
+            # all here -- indistinguishable from a real failure to a user watching the
+            # terminal. Mirrors jarvis ui's own identical message
+            # (_summarize_execution_result's MemoryRecallOutcome-with-no-records case).
+            print("No matching memories found.")
         for record in outcome.memory_records:
             print(f"{record.identifier}: {record.value.value}")
     if outcome.memory_deleted_count is not None:
