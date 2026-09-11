@@ -249,12 +249,13 @@ mechanism WP-115 already made process-safe -- no changes needed there.
   with `--max-passes 2` (one real pass ran a newly-created task, the
   second found nothing, then stopped cleanly on its own).
 
-## Three real findings from CI, not silently worked around
+## Four real findings from CI, not silently worked around
 
 This work package's own real CI runs genuinely failed
-`test_tasks_claim_process_safety.py` three times -- none reproducible
-on this machine's own far higher core count, which never exposed any
-of them locally.
+`test_tasks_claim_process_safety.py` four times. The first two were
+real but benign (the test's own assertion was too strong); the third
+and fourth were a genuine logic bug, eventually reproduced locally too
+once the right conditions were found.
 
 **First failure**: two of six racers reported `claimed=True`, not
 one. The claim mechanism's own mutual exclusion had not failed -- the
@@ -275,36 +276,53 @@ claimants, not one. This was the decisive evidence that a raw claim
 *count* is the wrong instrument for the property actually being
 claimed ("never simultaneous"): on a real, contended, CI runner, it
 cannot by itself distinguish a genuine concurrent race from two real,
-legitimate, sequential claims, no matter how generous the delay.
+legitimate, sequential claims, no matter how generous the delay. The
+fix to the test itself: measure the right thing. Each real worker now
+records its own real `time.time()` immediately after the barrier
+release and immediately after its own call returns; the test asserts
+that no two real winners' own `[start, end]` wall-clock intervals
+overlap -- the literal, real-world meaning of "never simultaneous."
 
-**The fix to the test itself**: measure the right thing. Each real
-worker now records its own real `time.time()` immediately after the
-barrier release and immediately after its own call returns; the test
-asserts that no two real winners' own `[start, end]` wall-clock
-intervals overlap -- the literal, real-world meaning of "never
-simultaneous." A later, non-overlapping winner remains a real,
-legitimate, sequential re-run; two genuinely overlapping winners would
-be the real race violation. This did not weaken the safety property
-under test -- it corrected which property the test's own assertion
-actually measured.
+**Third failure, with the corrected test**: two real winners' own
+measured intervals genuinely *overlapped*, by roughly two full
+seconds, with start times within milliseconds of each other --
+conclusive, direct evidence that two separate processes really did
+hold a granted claim on the same record at the same real instant, not
+a test-design artifact. The first hypothesis -- that SQLite's own
+`BEGIN IMMEDIATE` file locking was not reliably exclusive on that
+specific CI runner's filesystem -- led to replacing it with a real,
+dedicated `fcntl.flock()` on a permanent sibling lock file (the exact
+mechanism WP-115 already proved process-safe, on this exact CI
+environment, for the audit chain's own identical race).
 
-**Third failure, with the corrected test -- the decisive one**: two
-real winners' own measured intervals genuinely *overlapped*, by
-roughly two full seconds, with start times within milliseconds of each
-other. This was conclusive, direct evidence that two separate
-processes really did hold a granted claim on the same record at the
-same real instant -- not a test-design artifact, a genuine failure of
-the underlying lock. SQLite's own `BEGIN IMMEDIATE` file locking was
-not reliably exclusive on that specific CI runner's filesystem (a
-real, known class of caveat for some container/overlay filesystems).
-
-**The real fix to the mechanism**: replace `BEGIN IMMEDIATE` with a
-real, dedicated `fcntl.flock()` on a permanent sibling lock file --
-the exact mechanism WP-115 already proved process-safe, on this exact
-CI environment, for the audit chain's own identical race. No new
-dependency. Verified multiple consecutive real passes locally before
-each re-push; the underlying lock mechanism itself is not novel --
-it is the same one already validated on CI by WP-115.
+**Fourth failure, with `fcntl.flock()` in place -- the actual root
+cause**: the identical overlap recurred a fourth time. This disproved
+the locking hypothesis outright -- `flock()` is a well-understood,
+already-CI-proven primitive, and a *second*, independent locking
+mechanism failing identically pointed at a logic bug instead, not the
+lock. Forcing severe CPU contention locally (`taskset -c 0,1`, pinning
+the test to two cores) reproduced the failure reliably on this
+machine for the first time, letting it be debugged directly with real
+instrumentation. **The real bug**: `update_task_status`'s own
+`expected_value` is captured once, *before* the real lock is ever
+acquired. If a second, later caller's own read happens to already see
+`"running"` (because an earlier claimant already won), that caller's
+own `expected_value` becomes `{"status": "running", ...}` -- and
+because nothing else changes between *that* read and *that* caller's
+own locked write attempt, the compare-and-swap correctly finds the
+current value still matches what it captured, and "succeeds" at a
+**"running" -> "running"** transition. The lock was never broken; the
+CAS's own equality check is simply too weak to know that this
+particular transition should never be valid for *any* caller,
+regardless of timing. The fix: `update_task_status` now refuses any
+atomic `"running"` claim outright -- without even attempting a CAS
+write -- the moment the most recently read prior status is *itself*
+already `"running"`. Verified by temporarily reverting the fix and
+confirming the new regression test
+(`test_run_refuses_to_claim_an_already_running_task`) fails without
+it, then passes with it; the real multiprocessing test now passes
+reliably under `taskset -c 0,1` (8/8 consecutive runs) as well as
+without CPU constraint.
 
 ## Residual limitations, stated plainly
 
