@@ -1892,6 +1892,17 @@ an available, opt-in mitigation; the real, system-wide default-policy
 question in item 52 remains genuinely open, unresolved by design. See
 `docs/architecture/wp162-task-retention-policy-preparation.md`.
 
+## 63. ~~Safe file operation UX: empty-result messages~~ -- RESOLVED/BUILT 2026-09-12 (WP-163)
+
+**Resolved/built, WP-163**. `jarvis fs find`/`search-content`/`recent`
+shared the identical gap WP-144 already fixed for `jarvis memory
+retrieve`: a granted, zero-match result printed nothing at all beyond
+the `GRANTED` line -- confirmed live against this real machine's home
+directory before fixing. Now prints `"No files found."`/`"No matching
+lines found."`. No change to search logic, scope checks, or the
+`capped` reporting mechanism. See
+`docs/architecture/wp163-fs-search-empty-result-messages.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

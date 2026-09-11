@@ -3122,11 +3122,20 @@ def _print_fs_search_outcome(outcome: _CommandOutcome) -> None:
 
     Split out from :func:`_print_outcome` for the identical reason
     `_print_browser_outcome` already is.
+
+    WP-163: a granted, zero-match result previously printed nothing at
+    all here -- indistinguishable from a silent failure, the same real
+    gap WP-144 already fixed for `jarvis memory retrieve`. Both real
+    fields now print an honest message when empty.
     """
     if outcome.fs_paths is not None:
+        if not outcome.fs_paths:
+            print("No files found.")
         for path in outcome.fs_paths:
             print(str(path))
     if outcome.fs_content_matches is not None:
+        if not outcome.fs_content_matches:
+            print("No matching lines found.")
         for path, line_number, line in outcome.fs_content_matches:
             print(f"{path}:{line_number}: {line}")
         if outcome.fs_search_capped:

@@ -5118,6 +5118,34 @@ def test_fs_find_subcommand_prints_each_match(
     assert exit_code == 0
 
 
+def test_fs_find_subcommand_reports_no_files_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-163: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_find_files(
+        pattern: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> FileFindOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.find")
+        return FileFindOutcome(decision=decision, matches=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_find_files", fake_authorize_and_find_files
+    )
+
+    exit_code = main(
+        ["fs", "find", "*.nomatch", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "No files found." in captured.out
+    assert exit_code == 0
+
+
 def test_fs_find_subcommand_requires_pattern() -> None:
     with pytest.raises(SystemExit):
         main(["fs", "find"])
@@ -5184,6 +5212,37 @@ def test_fs_search_content_subcommand_prints_matches_and_capped_warning(
     assert "fs search-content: GRANTED" in captured.out
     assert f"{tmp_path / 'a.txt'}:3: TODO: fix this" in captured.out
     assert "cap was reached" in captured.err
+    assert exit_code == 0
+
+
+def test_fs_search_content_subcommand_reports_no_matching_lines_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-163: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_search_content(
+        query: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> ContentSearchOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.search_content")
+        return ContentSearchOutcome(decision=decision, matches=(), capped=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_search_content",
+        fake_authorize_and_search_content,
+    )
+
+    exit_code = main(
+        ["fs", "search-content", "nomatch", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "No matching lines found." in captured.out
+    assert captured.err == ""
     assert exit_code == 0
 
 
@@ -5273,6 +5332,34 @@ def test_fs_recent_subcommand_prints_each_file(
 
     assert "fs recent: GRANTED" in captured.out
     assert str(tmp_path / "new.txt") in captured.out
+    assert exit_code == 0
+
+
+def test_fs_recent_subcommand_reports_no_files_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-163: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_list_recent_files(
+        *,
+        limit: int,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> RecentFilesOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.recent")
+        return RecentFilesOutcome(decision=decision, files=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_recent_files",
+        fake_authorize_and_list_recent_files,
+    )
+
+    exit_code = main(["fs", "recent", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "No files found." in captured.out
     assert exit_code == 0
 
 

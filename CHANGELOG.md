@@ -285,6 +285,11 @@ replacement for either.
   when a sandboxed capability (e.g. `coding.run_task`) is invoked
   without it installed. See
   `docs/architecture/wp161-sandbox-missing-binary-diagnostics.md`.
+- WP-163: `jarvis fs find`/`search-content`/`recent` now print an
+  honest "No files found."/"No matching lines found." message for a
+  granted, zero-match result -- previously printed nothing at all, the
+  same gap WP-144 already fixed for `jarvis memory retrieve`. See
+  `docs/architecture/wp163-fs-search-empty-result-messages.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check
