@@ -463,6 +463,31 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp119-task-cancellation-from-ui.md` and
   `docs/OPEN_DECISIONS.md` item 28.
+  **Updated 2026-09-11 (WP-120)**: a real, durable background-worker
+  foundation, closing the gap between "a task exists, persisted" and
+  "a task can safely run as a durable background job." A new, real,
+  process-safe compare-and-swap primitive
+  (`MemoryWritePort.compare_and_update_value`, `SqliteMemoryAdapter`,
+  SQLite's own `BEGIN IMMEDIATE` write lock, empirically verified
+  across real, separate OS processes) protects `authorize_and_run_task`'s
+  own "created" -> "running" transition — the one real, narrow place a
+  genuine claim race existed — via
+  `kernel.memory.authorize_and_compare_and_update`, reusing
+  `memory.update`'s own, already-classified authorization path
+  unmodified. `jarvis.kernel.worker.run_pending_tasks_once` discovers
+  every `"created"` task and delegates each to the exact, unmodified
+  `authorize_and_run_task` — no capability-specific logic, no second
+  execution engine. `jarvis task worker` (CLI) is foreground by
+  default, no hidden daemonization; `--once` for one deterministic
+  pass, `--max-passes` for a scriptable, bounded continuous mode (no
+  infinite loop inside any automated test). Proven by real
+  `multiprocessing.Process` tests (not simulated) that two independent
+  processes racing to claim the same task always produce exactly one
+  real winner. No new task status (`"queued"`/`"retrying"`/`"paused"`/
+  `"scheduled"` all considered and rejected), no new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp120-background-worker.md` and
+  `docs/OPEN_DECISIONS.md` item 29.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

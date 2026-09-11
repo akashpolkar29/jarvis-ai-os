@@ -75,7 +75,7 @@ optional email/calendar connection flags; and the audit chain's
 real cross-process lost-write race (item 5, 2026-09-11, WP-115),
 closed via a real `fcntl.flock()`-protected re-read-and-merge inside
 `save()`, proven by real `multiprocessing.Process` tests -- no
-`AuditStoragePort` contract change, no new dependency. All items 1-28
+`AuditStoragePort` contract change, no new dependency. All items 1-29
 below are resolved, decided, or built -- nothing in this index remains
 open as of 2026-09-11 (a real, separate, narrower residual limitation
 of item 5's own fix -- a privileged adversary fabricating a wholesale
@@ -96,7 +96,14 @@ and a real fix closing the one gap item 26 itself opened (item 27,
 silently resume a `"cancelled"` task; and a real UI counterpart to
 item 26 (item 28, 2026-09-11, WP-119) -- `jarvis ui` gained a real
 "Cancel" button and a `POST /api/tasks/<id>/cancel` endpoint, reusing
-`authorize_and_cancel_task` completely unmodified.
+`authorize_and_cancel_task` completely unmodified; and a real,
+process-safe background worker (item 29, 2026-09-11, WP-120) --
+`jarvis task worker` discovers every real "created" task and claims
+one at a time through a new, real, `BEGIN IMMEDIATE`-based
+compare-and-swap primitive inside `authorize_and_run_task`'s own
+"created" -> "running" transition, proven by real `multiprocessing.Process`
+tests that two independent processes can never both execute the same
+task.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1220,6 +1227,47 @@ real reason as a status line, not an error bubble. No new
 `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp119-task-cancellation-from-ui.md` for the full
 account.
+
+## 29. ~~Durable background task execution foundation~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-120**. Closes the real gap between "a task
+exists, persisted" and "a task can safely run as a durable background
+job": every prior task-execution work package made the lifecycle
+durable and safe, but execution was always triggered by one specific,
+already-present human action (a direct `jarvis task run`, or a UI
+"Run" click) -- nothing ever discovered an eligible task and ran it on
+its own, and nothing prevented two independent callers from both
+claiming the same task simultaneously.
+
+**The claim mechanism**: a new, real, process-safe compare-and-swap
+primitive, `MemoryWritePort.compare_and_update_value` (`SqliteMemoryAdapter`,
+using SQLite's own `BEGIN IMMEDIATE` write lock, empirically verified
+across real, separate OS processes) and its composition-root
+counterpart `kernel.memory.authorize_and_compare_and_update` (reusing
+`memory.update`'s own, already-classified authorization path
+unmodified). `authorize_and_run_task`'s own "created" -> "running"
+transition is the one, narrow place this is used (`update_task_status(...,
+atomic=True)`) -- every other real status transition in
+`kernel.tasks` keeps its original, unconditional blind-write behavior,
+since only this one transition has a genuine claim race to close.
+
+**The worker**: `jarvis.kernel.worker.run_pending_tasks_once` discovers
+every `"created"` task and delegates each to the exact, unmodified
+`authorize_and_run_task` -- no capability-specific logic, no second
+execution engine, no worker-specific authorization. `jarvis task
+worker` (CLI) is foreground by default, no hidden daemonization;
+`--once` runs exactly one pass, continuous mode stops on Ctrl+C or a
+real, deterministic `--max-passes` count.
+
+**No new task status** -- `"queued"`/`"retrying"`/`"paused"`/
+`"scheduled"` were all considered and rejected; a worker-discovered
+task is still genuinely `"created"` until it wins the real claim.
+Cancellation, stale detection, authorization, and audit behavior are
+all completely unchanged, reused as-is. Proven by real
+`multiprocessing.Process` tests (not simulated) that two independent
+processes can never both execute the same task. No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp120-background-worker.md` for the full account.
 
 ## Maintaining this index
 

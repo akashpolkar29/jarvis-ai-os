@@ -81,6 +81,17 @@ replacement for either.
   real, granted "not found" result, not an HTTP 404. No new
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp119-task-cancellation-from-ui.md`.
+- WP-120: a real, process-safe background worker, `jarvis task worker`
+  -- discovers every "created" task and claims-and-runs each through
+  the exact, unmodified `authorize_and_run_task`. A new, real
+  compare-and-swap primitive (`MemoryWritePort.compare_and_update_value`,
+  SQLite `BEGIN IMMEDIATE`) protects the "created" -> "running"
+  transition, proven by real `multiprocessing.Process` tests that two
+  independent processes can never both execute the same task.
+  Foreground by default, no hidden daemonization; `--once` for one
+  pass, `--max-passes` for a deterministic, scriptable continuous
+  mode. No new task status, no new `CapabilityId`/`Effect`/`Tier`, no
+  ADR. See `docs/architecture/wp120-background-worker.md`.
 
 ### Fixed
 
