@@ -1913,6 +1913,19 @@ found."`. Read-only; no change to `communications.send_email`/
 `create_calendar_event`. See
 `docs/architecture/wp164-email-calendar-empty-result-messages.md`.
 
+## 65. ~~Browser session observability~~ -- ALREADY SOLVED (WP-165)
+
+**Already solved, WP-165**. Third independent pass over
+`adapters/browser_automation.py` this session (after items 48/WP-143
+and 54/WP-153), specifically re-checking navigation/timeout failure
+reporting, startup-failure distinction, and current-URL/cleanup
+diagnostics. All timeouts already bounded with clear, specific error
+messages; `PageHandle` not storing its own URL judged not a real gap
+(the caller always already has it); the one real, already-known
+cleanup gap (item 48) is unchanged, needing a new subsystem out of
+this work package's own scope. No code changed. See
+`docs/architecture/wp165-browser-observability-recheck.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
