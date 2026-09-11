@@ -1711,6 +1711,31 @@ unmocked `memory.sqlite3` write) was found and fixed alongside this.
 See `docs/architecture/wp150-scheduled-task-worker-visibility.md` for
 the full account.
 
+## 52. Task/job-application record retention policy -- genuinely open, needs a real decision
+
+**Investigated, not built, WP-151**. Task records (`kernel/tasks.py`)
+and the applied-jobs ledger (`job_application.record`) are both
+written through the completely unmodified `authorize_and_remember`,
+which gives every record the same shared `DEFAULT_RETENTION = 90
+days` (`application/memory/retention.py`) as any other memory, with
+no distinction for `"kind": "task"`/`"kind": "job_application"`. A
+record older than 90 days is permanently deleted by `sweep_expired()`
+(ADR-0051) the next time *any* memory write anywhere in the system
+happens to trigger it -- including a `"completed"`/`"failed"` task's
+own execution history (WP-121's `"attempts"`), and, in principle
+(not a realistic scenario at current scale), a still-`"running"` task
+whose owning process crashed and was never recovered.
+
+Two candidate fixes (auto-pin every task; give tasks their own,
+longer default retention) were both considered and rejected as
+silent, unreviewed data-lifecycle-policy decisions, not safe
+defaults. **The real, open question for the user**: should task
+records and/or the job-application ledger be pinned (never expire),
+given a distinct, longer retention window, or is the shared 90-day
+default the intended, accepted behavior for them too? See
+`docs/architecture/wp151-task-retention-review.md` for the full
+investigation.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
