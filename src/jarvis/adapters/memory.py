@@ -49,18 +49,27 @@ every existing caller, which already knows it is the sole writer. It
 is unsafe for a new real need: two genuinely independent processes
 (e.g. two `jarvis task worker` instances, or a worker racing a direct
 `jarvis task run`) both trying to claim the same persisted task for
-execution. ``compare_and_update_value`` closes that gap using SQLite's
-own file-level locking (`BEGIN IMMEDIATE`, empirically verified across
-real, separate OS processes, not merely assumed from documentation --
-see its own docstring and the new process-safety test) rather than a
-new dependency or a SQLite JSON1/`json_extract` predicate. See
-``jarvis.kernel.worker``'s own module docstring for the real caller
-this exists for.
+execution. ``compare_and_update_value`` closes that gap using a real,
+dedicated ``fcntl.flock()`` on a permanent sibling lock file -- the
+exact, already-CI-proven mechanism ``JsonFileAuditStorageAdapter``
+uses for the audit chain's own identical cross-process race (WP-115).
+**A real, empirical correction, not the original design**: this
+method first used SQLite's own file-level locking (``BEGIN
+IMMEDIATE``) alone -- a real CI run genuinely produced two separate
+processes both holding a granted claim on the same record at
+overlapping real wall-clock instants, proving that mechanism was not
+reliably exclusive on that specific runner's filesystem (never
+reproducible on this project's own development machine). No new
+dependency either way -- ``fcntl`` is Linux stdlib, already imported
+by ``audit_storage.py``. See ``jarvis.kernel.worker``'s own module
+docstring for the real caller this exists for.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -180,10 +189,41 @@ class SqliteMemoryAdapter:
         self._embedding_port = embedding_port
         self._clock = clock
         self._id_port = id_port
+        self._database_path = database_path
         self._connection = sqlite3.connect(database_path)
         self._connection.execute(_CREATE_TABLE)
         self._connection.commit()
         _ensure_value_json_column(self._connection)
+
+    @property
+    def _lock_path(self) -> str | None:
+        """A real, permanent, zero-byte sibling file used only for `fcntl.flock()` (WP-120).
+
+        `None` for an ephemeral `":memory:"` store -- it can never be
+        shared across processes (or even across connections) at all,
+        so no real cross-process race exists for it to guard against.
+
+        **Why a separate file, not relying on SQLite's own internal
+        locking (`BEGIN IMMEDIATE`) -- a real, empirical finding, not a
+        preference**: this module originally used `BEGIN IMMEDIATE`
+        alone. A real CI run genuinely produced two separate processes
+        both holding a granted claim on the same record at overlapping
+        real wall-clock instants -- proof that SQLite's own file
+        locking was not reliably exclusive on that specific runner's
+        filesystem (a real, known class of caveat for some
+        container/overlay filesystems, not reproducible on this
+        project's own development machine). `fcntl.flock()` on a
+        separate, dedicated lock file is the exact, already-proven
+        mechanism `JsonFileAuditStorageAdapter` uses for the audit
+        chain's own identical cross-process race (WP-115) -- verified
+        process-safe on this exact CI environment already, not merely
+        assumed. Mirrors that class's own `_lock_path`'s reasoning
+        for why the lock file is separate and permanent, never the
+        data file itself and never deleted.
+        """
+        if self._database_path == ":memory:":
+            return None
+        return f"{self._database_path}.lock"
 
     def write(self, value: Tainted[object]) -> str:
         """Persist ``value`` to the real store, provenance intact.
@@ -275,28 +315,35 @@ class SqliteMemoryAdapter:
     ) -> bool:
         """Atomically swap `identifier`'s value iff current == `expected_value` (WP-120).
 
-        **The real process-safety mechanism**: `BEGIN IMMEDIATE`
-        acquires SQLite's own write lock immediately, before reading
-        anything -- empirically verified (not merely assumed from
-        documentation) to block a second, truly independent
-        `sqlite3.connect()` to the same file from starting its own
-        write transaction until this one commits or rolls back,
-        across real, separate OS processes (see
-        `tests/unit/test_memory_adapter_process_safety.py`). The
-        current row is then re-read *inside* that lock, decoded with
-        the exact same rule `get_by_identifier` uses
-        (`_decode_stored_value`), and compared by value equality
-        against `expected_value` -- if another writer changed it since
-        the caller last read it, this comparison correctly sees that
-        writer's own, newer value, not a stale snapshot. No SQLite
-        JSON1/`json_extract` dependency: the comparison is plain
-        Python equality on the decoded value, not a SQL-level
-        predicate, so this works on any SQLite build.
+        **The real process-safety mechanism -- `fcntl.flock()`, not
+        SQLite's own `BEGIN IMMEDIATE`, after a real, empirical
+        finding, not a preference**: an earlier version of this method
+        used `BEGIN IMMEDIATE` alone. A real CI run genuinely produced
+        two separate processes both holding a granted claim on the
+        same record at overlapping real wall-clock instants -- proof
+        that SQLite's own file locking was not reliably exclusive on
+        that specific runner's filesystem (never reproducible on this
+        project's own development machine). `fcntl.flock()` on a
+        separate, dedicated lock file (`_lock_path`) is the exact
+        mechanism `JsonFileAuditStorageAdapter` already uses for the
+        audit chain's own, identical cross-process race (WP-115) --
+        verified process-safe on this exact CI environment already,
+        not merely assumed. The current row is read *inside* the real
+        OS-level lock, decoded with the exact same rule
+        `get_by_identifier` uses (`_decode_stored_value`), and compared
+        by value equality against `expected_value` -- if another
+        writer changed it since the caller last read it, this
+        comparison correctly sees that writer's own, newer value, not
+        a stale snapshot. No SQLite JSON1/`json_extract` dependency:
+        the comparison is plain Python equality on the decoded value,
+        not a SQL-level predicate. `":memory:"` stores skip the lock
+        entirely (`_lock_path` is `None`) -- they can never be shared
+        across processes at all, so there is no real race to guard.
 
         The embedding for the *new* value is computed before the lock
         is acquired -- it depends only on `value` itself, never on
         what is currently stored, so there is no reason to hold the
-        write lock any longer than the compare-and-write itself needs.
+        lock any longer than the compare-and-write itself needs.
 
         Returns:
             `True` if the comparison matched and the swap was
@@ -322,14 +369,48 @@ class SqliteMemoryAdapter:
             raise UnsupportedMemoryValueError(msg) from exc
         text = value.value if isinstance(value.value, str) else value_json
         (embedding,) = self._embedding_port.embed((text,))
-        self._connection.execute("BEGIN IMMEDIATE")
+
+        lock_path = self._lock_path
+        if lock_path is None:
+            return self._compare_and_update_value_locked(
+                identifier, expected_value, text, value_json, embedding, value
+            )
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            row = self._connection.execute(
-                "SELECT value_json, text FROM memory_records WHERE identifier = ?", (identifier,)
-            ).fetchone()
-            if row is None or _decode_stored_value(row[0], row[1]) != expected_value:
-                self._connection.rollback()
-                return False
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                return self._compare_and_update_value_locked(
+                    identifier, expected_value, text, value_json, embedding, value
+                )
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+    def _compare_and_update_value_locked(  # noqa: PLR0913, PLR0917 -- one per real field this writes
+        self,
+        identifier: str,
+        expected_value: object,
+        text: str,
+        value_json: str,
+        embedding: tuple[float, ...],
+        value: Tainted[object],
+    ) -> bool:
+        """The real compare-and-write, run while `compare_and_update_value`'s own real lock is held.
+
+        A plain SQLite transaction here is sufficient -- the real,
+        cross-process exclusivity guarantee comes entirely from the
+        caller's own `fcntl.flock()`, not from anything SQLite itself
+        does; this method never needs `BEGIN IMMEDIATE`. Still rolls
+        back and re-raises on a real write failure, so a partial
+        transaction is never left applied.
+        """
+        row = self._connection.execute(
+            "SELECT value_json, text FROM memory_records WHERE identifier = ?", (identifier,)
+        ).fetchone()
+        if row is None or _decode_stored_value(row[0], row[1]) != expected_value:
+            return False
+        try:
             self._connection.execute(
                 "UPDATE memory_records SET text = ?, value_json = ?, embedding = ?, trust = ?, "
                 "classification = ?, sources = ? WHERE identifier = ?",
