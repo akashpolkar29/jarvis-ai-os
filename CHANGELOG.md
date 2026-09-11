@@ -169,6 +169,13 @@ replacement for either.
   duplicate-execution hazard, not merely a lost update).
   `update_task_status`'s own shared atomic claim logic is untouched.
   See `docs/architecture/wp127-cancel-and-schedule-race-hardening.md`.
+- WP-128: verified scheduled tasks interact correctly with
+  cancellation, failure/retry, worker restart, and repeated worker
+  passes (all already correct, cross-referenced against existing
+  tests/docs) -- one real, missing combination found and closed with
+  a new regression test, `scheduled_at` surviving stale-task recovery
+  (WP-126). No code change beyond the test. See
+  `docs/architecture/wp128-scheduled-task-recovery-interactions.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

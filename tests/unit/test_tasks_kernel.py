@@ -1845,6 +1845,27 @@ def test_scheduled_at_survives_cancellation(tmp_path: Path) -> None:
     assert data["scheduled_at"] == "2026-09-12T09:00:00+00:00"
 
 
+def test_scheduled_at_survives_recovery(tmp_path: Path) -> None:
+    """WP-128: a scheduled task whose worker crashed after claiming it keeps its schedule."""
+    goal = "a scheduled goal whose worker crashes after claiming it"
+    create_outcome = _create(tmp_path, goal)
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+    # The worker claims it once due, then its own owning process crashes mid-run.
+    _set_running_at(tmp_path, create_outcome.task_id, goal, _NOW)
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id, past_threshold)
+
+    assert recover_outcome.recovered is True
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "failed"
+    assert data["scheduled_at"] == "2026-09-12T09:00:00+00:00"
+
+
 def test_a_legacy_task_record_with_no_scheduled_at_field_can_still_be_scheduled(
     tmp_path: Path,
 ) -> None:

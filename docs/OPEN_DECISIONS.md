@@ -1514,6 +1514,19 @@ new task status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp127-cancel-and-schedule-race-hardening.md` for
 the full account.
 
+## 37. ~~Scheduled task recovery interactions~~ -- VERIFIED 2026-09-12
+
+**Verified, WP-128**. Investigated whether scheduled tasks interact
+correctly with cancellation, failure/retry, stale recovery (WP-126),
+worker restart, and repeated worker passes. All were already correct
+by construction (cancel/recover both build their new value via
+`**data`, preserving `scheduled_at`; retry already documented as
+schedule-agnostic since WP-122; the worker is stateless). One real,
+missing regression test found and added:
+`test_scheduled_at_survives_recovery`. No code change. See
+`docs/architecture/wp128-scheduled-task-recovery-interactions.md` for
+the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
