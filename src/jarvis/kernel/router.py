@@ -100,6 +100,7 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.reasoning.local import LocalReasoningAdapter
 from jarvis.application.routing.router import RouteKind, RouteResult, RoutingError, generate_route
+from jarvis.domain.capability import CapabilityId
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.transcript import Transcript
 from jarvis.kernel.capabilities import (
@@ -127,7 +128,11 @@ from jarvis.kernel.intent import (
     UnrecognizedIntent,
     resolve_intent,
 )
-from jarvis.kernel.tasks import authorize_and_create_task
+from jarvis.kernel.tasks import (
+    authorize_and_create_task,
+    authorize_and_get_task,
+    authorize_and_list_tasks,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -334,6 +339,67 @@ def _resolve_communications_command(
     return None
 
 
+TASK_STATUS_COMMAND_LABEL = CapabilityId("task.status")
+"""A real, router-only label (WP-133) -- deliberately **not** a registered `CapabilityId` in
+`kernel.capabilities.build_default_registry()`. The real authorization this route causes is
+whatever `authorize_and_get_task` itself performs (`memory.get`, `Tier.ALLOW`, WP-107) --
+this label exists only so the router can report a precise, honest `capability_id` in its own
+response, and so `authorize_and_route`'s own execution branch can distinguish this command
+from the unrelated, already-`PLAN_STEP_EXECUTORS`-wired "recall <query>" command, which
+would otherwise collide on the identical, real `memory.get`/`memory.retrieve` capability id."""
+
+TASK_LIST_COMMAND_LABEL = CapabilityId("task.list")
+"""See :data:`TASK_STATUS_COMMAND_LABEL` -- identical reasoning, for `authorize_and_list_tasks`
+(`memory.retrieve`, `Tier.ALLOW`)."""
+
+_TASK_STATUS_COMMAND = "task status"
+"""Mirrors `resolve_intent()`'s own "read <path>" shape exactly -- everything after this fixed
+prefix, verbatim, is the real task id."""
+
+_TASK_LIST_COMMAND = "list tasks"
+"""A single, fixed, exact-match, zero-argument command -- lists every real task, unfiltered
+(`authorize_and_list_tasks(status=None)`). Deliberately no "list <status> tasks" filtered
+variant in this first pass -- a real, separate, small addition, not built speculatively."""
+
+
+def _resolve_task_command(text: str) -> ResolvedIntent | UnrecognizedIntent | None:
+    """Typed-router-only grammar for task status/list (WP-133).
+
+    Returns `None` if `text` matches neither trigger at all -- the
+    caller should try `_resolve_communications_command`/
+    `kernel.intent.resolve_intent()` next. Returns `UnrecognizedIntent`
+    (never `None`) for "task status" with no id following it --
+    deliberately terminal, mirroring `_resolve_communications_command`'s
+    own identical "read email" reasoning, since neither trigger phrase
+    collides with anything `resolve_intent()` already recognizes
+    (confirmed directly: no existing command starts with "task" or
+    "list").
+
+    **Deliberately NOT added to `kernel.intent.resolve_intent()`**, the
+    shared grammar `kernel.voice_loop` also calls -- the "no voice
+    work" hard boundary this work package operates under is reason
+    enough on its own, mirroring `_resolve_communications_command`'s
+    own first, independently-sufficient reason. Confined entirely to
+    `kernel.router` (never imported by `kernel.voice_loop`), this
+    function cannot affect voice in any way -- proven structurally,
+    not just by convention.
+    """
+    lowered = text.lower()
+    if lowered == _TASK_STATUS_COMMAND or lowered.startswith(_TASK_STATUS_COMMAND + " "):
+        task_id = text[len(_TASK_STATUS_COMMAND) :].strip()
+        if not task_id:
+            return UnrecognizedIntent()
+        return ResolvedIntent(
+            capability_id=TASK_STATUS_COMMAND_LABEL,
+            arguments=Tainted({"task_id": task_id}, Provenance.user()),
+        )
+    if lowered == _TASK_LIST_COMMAND:
+        return ResolvedIntent(
+            capability_id=TASK_LIST_COMMAND_LABEL, arguments=Tainted({}, Provenance.user())
+        )
+    return None
+
+
 def route_deterministically(text: str, *, clock: ClockPort | None = None) -> RouteResult:
     """Stage A: resolve `text` via `resolve_intent()`, after a small, bounded normalization pass.
 
@@ -357,7 +423,9 @@ def route_deterministically(text: str, *, clock: ClockPort | None = None) -> Rou
     return _route_deterministically(text, clock or SystemClockAdapter())[0]
 
 
-def _route_deterministically(text: str, clock: ClockPort) -> tuple[RouteResult, bool]:
+def _route_deterministically(  # noqa: PLR0911 -- one return per real, distinct route outcome
+    text: str, clock: ClockPort
+) -> tuple[RouteResult, bool]:
     """The real Stage A implementation: `(route, should_escalate_to_reasoning)`.
 
     **Why a second return value, not just `RouteKind.UNKNOWN` for
@@ -398,6 +466,31 @@ def _route_deterministically(text: str, clock: ClockPort) -> tuple[RouteResult, 
     existing single- or two-word command keywords.
     """
     normalized = _normalize_for_deterministic_routing(text)
+    task_resolved = _resolve_task_command(normalized)
+    if isinstance(task_resolved, ResolvedIntent):
+        return (
+            RouteResult(
+                kind=RouteKind.DETERMINISTIC_COMMAND,
+                original_input=text,
+                confidence=_DETERMINISTIC_ROUTE_CONFIDENCE,
+                source="deterministic",
+                capability_id=task_resolved.capability_id,
+                arguments=task_resolved.arguments,
+            ),
+            False,
+        )
+    if isinstance(task_resolved, UnrecognizedIntent):
+        return (
+            RouteResult(
+                kind=RouteKind.UNKNOWN,
+                original_input=text,
+                confidence=0.0,
+                source="deterministic",
+                detail=('Recognized this as a "task status" command, but no task id followed it.'),
+            ),
+            False,
+        )
+
     communications_resolved = _resolve_communications_command(normalized, clock)
     if isinstance(communications_resolved, ResolvedIntent):
         return (
@@ -494,7 +587,7 @@ class RouteOutcome:
     task_id: str | None
 
 
-async def authorize_and_route(  # noqa: PLR0913 -- one per composition-function pass-through
+async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real, distinct route outcome
     text: str,
     provider: ReasoningPort | None = None,
     *,
@@ -649,6 +742,45 @@ async def authorize_and_route(  # noqa: PLR0913 -- one per composition-function 
             route=route,
             decision=decision,
             execution_result=CalendarListStepResult(decision=decision, events=events),
+            task_id=None,
+        )
+
+    if (
+        route.kind == RouteKind.DETERMINISTIC_COMMAND
+        and route.capability_id == TASK_STATUS_COMMAND_LABEL
+    ):
+        arguments = route.arguments.value if route.arguments is not None else {}
+        get_outcome = authorize_and_get_task(
+            str(arguments["task_id"]),
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=real_clock,
+            id_port=id_port,
+        )
+        return RouteOutcome(
+            route=route, decision=get_outcome.decision, execution_result=get_outcome, task_id=None
+        )
+
+    if (
+        route.kind == RouteKind.DETERMINISTIC_COMMAND
+        and route.capability_id == TASK_LIST_COMMAND_LABEL
+    ):
+        list_outcome = authorize_and_list_tasks(
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+            database_path=database_path,
+            embedding_port=embedding_port,
+            clock=real_clock,
+            id_port=id_port,
+        )
+        return RouteOutcome(
+            route=route,
+            decision=list_outcome.decision,
+            execution_result=list_outcome,
             task_id=None,
         )
 

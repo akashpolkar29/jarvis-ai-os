@@ -199,6 +199,8 @@ from jarvis.kernel.files import (
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
+    TaskGetOutcome,
+    TaskListOutcome,
     authorize_and_cancel_task,
     authorize_and_get_task,
     authorize_and_recover_task,
@@ -494,22 +496,62 @@ def _summarize_wp114_communications_execution_result(result: object) -> str | No
     return None
 
 
+def _summarize_task_status(result: TaskGetOutcome) -> str:
+    """Render a real `task.status` result (WP-133) as chat text."""
+    if result.record is None:
+        return "No task found for this identifier."
+    data = result.record.value.value
+    if not isinstance(data, dict):
+        return f"{result.record.identifier}: {data!r}"
+    lines = [f"goal: {data.get('goal')!r}", f"status: {data.get('status')}"]
+    if data.get("reason") is not None:
+        lines.append(f"reason: {data.get('reason')}")
+    if result.stale:
+        lines.append("warning: this task appears stale (no progress in a long time).")
+    return "\n".join(lines)
+
+
+def _summarize_task_list(result: TaskListOutcome) -> str:
+    """Render a real `task.list` result (WP-133) as chat text."""
+    if not result.records:
+        return "No tasks found."
+    lines = []
+    for record in result.records:
+        data = record.value.value
+        if not isinstance(data, dict):
+            lines.append(f"{record.identifier}: {data!r}")
+            continue
+        lines.append(f"{record.identifier}: {data.get('goal')!r} ({data.get('status')})")
+    return "\n".join(lines)
+
+
+def _summarize_wp133_task_execution_result(result: object) -> str | None:
+    """Render one of WP-133's own two new `task.*` result shapes. `None` if no match."""
+    if isinstance(result, TaskGetOutcome):
+        return _summarize_task_status(result)
+    if isinstance(result, TaskListOutcome):
+        return _summarize_task_list(result)
+    return None
+
+
 def _summarize_execution_result(capability_id: str, result: object) -> str:
     """Render a real, wired execution result as chat text.
 
     A real, closed, exhaustive set -- every real result shape
     `authorize_and_route` (`kernel/router.py`) can ever produce, given
     its own structural execution boundary (`PLAN_STEP_EXECUTORS`, WP-104,
-    plus the three real `communications.*` reads WP-114 added directly).
-    Split across three helpers purely to stay under ruff's own
-    branch-count limit -- not a real behavioral split. The final
-    fallback line only fires if that boundary grows without one of
-    them being updated alongside it -- a real, honest gap, not hidden.
+    the three real `communications.*` reads WP-114 added directly, and
+    the two real `task.*` reads WP-133 added directly). Split across
+    four helpers purely to stay under ruff's own branch-count limit --
+    not a real behavioral split. The final fallback line only fires if
+    that boundary grows without one of them being updated alongside it
+    -- a real, honest gap, not hidden.
     """
     for summarize in (
         _summarize_wp104_execution_result,
         _summarize_wp114_fs_execution_result,
         _summarize_wp114_communications_execution_result,
+        _summarize_wp133_task_execution_result,
     ):
         summary = summarize(result)
         if summary is not None:

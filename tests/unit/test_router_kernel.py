@@ -32,7 +32,12 @@ from jarvis.kernel.capability_dispatch import (
     EmailReadStepResult,
 )
 from jarvis.kernel.router import authorize_and_route, route_deterministically
-from jarvis.kernel.tasks import authorize_and_get_task
+from jarvis.kernel.tasks import (
+    TaskGetOutcome,
+    TaskListOutcome,
+    authorize_and_create_task,
+    authorize_and_get_task,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -195,6 +200,79 @@ async def test_deterministic_routing_tolerates_a_please_prefix(tmp_path: Path) -
     assert outcome.route.kind == RouteKind.DETERMINISTIC_COMMAND
     assert outcome.route.capability_id == CapabilityId("memory.retrieve")
     assert provider.calls == []
+
+
+async def test_task_status_command_executes_for_real_against_a_real_task(tmp_path: Path) -> None:
+    """WP-133: "task status <id>" is actually executed, not just recognized."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    create_outcome = authorize_and_create_task(
+        "a real goal to check the status of",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert create_outcome.task_id is not None
+
+    outcome = await authorize_and_route(
+        f"task status {create_outcome.task_id}",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+
+    assert outcome.route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert outcome.route.capability_id == CapabilityId("task.status")
+    assert outcome.decision is not None
+    assert outcome.decision.granted is True
+    assert isinstance(outcome.execution_result, TaskGetOutcome)
+    assert outcome.execution_result.record is not None
+    assert outcome.execution_result.record.identifier == create_outcome.task_id
+
+
+async def test_task_status_command_reports_no_task_found_honestly(tmp_path: Path) -> None:
+    outcome = await authorize_and_route(
+        "task status no-such-task",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+
+    assert isinstance(outcome.execution_result, TaskGetOutcome)
+    assert outcome.execution_result.record is None
+
+
+async def test_list_tasks_command_executes_for_real_against_real_tasks(tmp_path: Path) -> None:
+    """WP-133: "list tasks" is actually executed, not just recognized."""
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    create_outcome = authorize_and_create_task(
+        "a real goal that should show up in the list",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+    assert create_outcome.task_id is not None
+
+    outcome = await authorize_and_route(
+        "list tasks",
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+    )
+
+    assert outcome.route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert outcome.route.capability_id == CapabilityId("task.list")
+    assert outcome.decision is not None
+    assert outcome.decision.granted is True
+    assert isinstance(outcome.execution_result, TaskListOutcome)
+    identifiers = {record.identifier for record in outcome.execution_result.records}
+    assert create_outcome.task_id in identifiers
 
 
 async def test_deterministic_routing_tolerates_can_you_prefix_and_trailing_question_mark(
@@ -717,6 +795,39 @@ def test_route_deterministically_calendar_with_an_unsupported_date_phrase_is_unk
 def test_route_deterministically_still_prefers_resolve_intent_for_existing_commands() -> None:
     """A pre-existing resolve_intent() command is unaffected by the new communications grammar."""
     route = route_deterministically("recall my notes", clock=_FixedClock())
+
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert route.capability_id == CapabilityId("memory.retrieve")
+
+
+def test_route_deterministically_resolves_task_status_with_a_verbatim_task_id() -> None:
+    route = route_deterministically("task status mem:abc123")
+
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert route.capability_id == CapabilityId("task.status")
+    assert route.arguments is not None
+    assert route.arguments.value == {"task_id": "mem:abc123"}
+
+
+def test_route_deterministically_task_status_with_no_id_is_unknown() -> None:
+    """ "task status" alone (no id) is genuinely ambiguous -- never silently guessed."""
+    route = route_deterministically("task status")
+
+    assert route.kind == RouteKind.UNKNOWN
+
+
+def test_route_deterministically_resolves_list_tasks() -> None:
+    route = route_deterministically("list tasks")
+
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+    assert route.capability_id == CapabilityId("task.list")
+    assert route.arguments is not None
+    assert route.arguments.value == {}
+
+
+def test_route_deterministically_task_status_does_not_collide_with_recall() -> None:
+    """A real, pre-existing "recall <query>" command is unaffected by the new task grammar."""
+    route = route_deterministically("recall my task notes")
 
     assert route.kind == RouteKind.DETERMINISTIC_COMMAND
     assert route.capability_id == CapabilityId("memory.retrieve")

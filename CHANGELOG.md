@@ -197,6 +197,19 @@ replacement for either.
   (no error) still exits `0`, unchanged. No behavior change to
   `kernel.worker.run_pending_tasks_once` itself. See
   `docs/architecture/wp132-worker-operability.md`.
+- WP-133: `jarvis do "task status <id>"`/`"list tasks"` now reach the
+  real router and actually execute (`authorize_and_get_task`/
+  `authorize_and_list_tasks`, both already `Tier.ALLOW`). Two new,
+  deliberately unregistered, router-only `CapabilityId` labels
+  (`task.status`/`task.list`) avoid a real collision with the
+  pre-existing "recall <query>" command, which already resolves to
+  the identical, already-`PLAN_STEP_EXECUTORS`-wired
+  `memory.retrieve`. Cancel/retry/recover deliberately not added --
+  their `Tier.CONFIRM`/dynamic-effect nature is structurally
+  incompatible with `PLAN_STEP_EXECUTORS`'s `Tier.ALLOW`-only ceiling
+  (ADR-0062); they remain CLI-only. No voice grammar. No new
+  registered `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp133-deterministic-task-commands.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

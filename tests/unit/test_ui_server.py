@@ -67,6 +67,7 @@ from jarvis.kernel.router import RouteOutcome
 from jarvis.kernel.tasks import (
     TaskCancelOutcome,
     TaskGetOutcome,
+    TaskListOutcome,
     TaskRecoverOutcome,
     TaskRetryOutcome,
     TaskRunOutcome,
@@ -176,6 +177,54 @@ def test_real_server_finds_recent_files_via_the_real_router(
     assert data["capability_id"] == "fs.recent"
     assert data["granted"] is True
     assert "a.txt" in str(data["message"])
+
+
+def test_real_server_reports_task_status_via_the_real_router(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """WP-133: "task status <id>" reaches the real router and actually executes (task.status)."""
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a real goal to check via the router",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    status, data = _post(
+        base_url, json.dumps({"text": f"task status {create_outcome.task_id}"}).encode()
+    )
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "response"
+    assert data["capability_id"] == "task.status"
+    assert data["granted"] is True
+    assert "a real goal to check via the router" in str(data["message"])
+
+
+def test_real_server_lists_tasks_via_the_real_router(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """WP-133: "list tasks" reaches the real router and actually executes (task.list)."""
+    base_url, _server = running_server
+    create_outcome = authorize_and_create_task(
+        "a real goal that should appear in the router's own list",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    status, data = _post(base_url, json.dumps({"text": "list tasks"}).encode())
+
+    assert status == HTTPStatus.OK
+    assert data["type"] == "response"
+    assert data["capability_id"] == "task.list"
+    assert data["granted"] is True
+    assert create_outcome.task_id in str(data["message"])
 
 
 def test_real_server_reports_email_not_configured_with_a_precise_message(
@@ -1363,6 +1412,63 @@ def test_summarize_execution_result_for_git_status() -> None:
     summary = _summarize_execution_result("git.status", result)
 
     assert summary == "On branch main\n"
+
+
+def test_summarize_execution_result_for_task_status_with_no_task_found() -> None:
+    result = TaskGetOutcome(decision=_make_decision(granted=True, tier=Tier.ALLOW), record=None)
+
+    summary = _summarize_execution_result("task.status", result)
+
+    assert summary == "No task found for this identifier."
+
+
+def test_summarize_execution_result_for_task_status_with_a_reason_and_stale() -> None:
+    result = TaskGetOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        record=_make_memory_record({"goal": "a real goal", "status": "failed", "reason": "boom"}),
+        stale=True,
+    )
+
+    summary = _summarize_execution_result("task.status", result)
+
+    assert "goal: 'a real goal'" in summary
+    assert "status: failed" in summary
+    assert "reason: boom" in summary
+    assert "appears stale" in summary
+
+
+def test_summarize_execution_result_for_task_status_with_a_malformed_record() -> None:
+    result = TaskGetOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        record=_make_memory_record("not a dict"),
+    )
+
+    summary = _summarize_execution_result("task.status", result)
+
+    assert "not a dict" in summary
+
+
+def test_summarize_execution_result_for_task_list_with_no_tasks() -> None:
+    result = TaskListOutcome(decision=_make_decision(granted=True, tier=Tier.ALLOW), records=())
+
+    summary = _summarize_execution_result("task.list", result)
+
+    assert summary == "No tasks found."
+
+
+def test_summarize_execution_result_for_task_list_with_real_and_malformed_records() -> None:
+    result = TaskListOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        records=(
+            _make_memory_record({"goal": "a real goal", "status": "created"}),
+            _make_memory_record("not a dict"),
+        ),
+    )
+
+    summary = _summarize_execution_result("task.list", result)
+
+    assert "'a real goal' (created)" in summary
+    assert "not a dict" in summary
 
 
 def test_summarize_execution_result_falls_back_for_an_unrecognized_result_shape() -> None:

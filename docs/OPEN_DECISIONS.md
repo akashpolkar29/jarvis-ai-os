@@ -1554,6 +1554,25 @@ losing a claim race is unaffected. No change to
 new `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp132-worker-operability.md` for the full account.
 
+## 40. ~~Deterministic task-management commands~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-133**. `jarvis do`/`jarvis ui` had zero
+task-related grammar at all. Added `"task status <id>"`/`"list
+tasks"`, executed for real via `authorize_and_get_task`/
+`authorize_and_list_tasks` (both `Tier.ALLOW`). A real structural
+collision was found and avoided: reusing `memory.get`/`memory.retrieve`
+as the routing label would have collided with the pre-existing
+"recall <query>" command's own identical, already-wired
+`PLAN_STEP_EXECUTORS` entry -- two new, deliberately **unregistered**,
+router-only `CapabilityId` labels (`task.status`/`task.list`) resolve
+this without adding a new authorization primitive. Cancel/retry/
+recover deliberately not added (`Tier.CONFIRM`/dynamic-effect,
+structurally incompatible with `PLAN_STEP_EXECUTORS`'s `Tier.ALLOW`-
+only ceiling, ADR-0062) -- they remain CLI-only. No voice grammar, no
+new registered `CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp133-deterministic-task-commands.md` for the full
+account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
