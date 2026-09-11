@@ -37,6 +37,7 @@ from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
+    authorize_and_retry_task,
     authorize_and_run_task,
     derive_result_status,
     update_task_status,
@@ -50,12 +51,15 @@ if TYPE_CHECKING:
         TaskCancelOutcome,
         TaskCreateOutcome,
         TaskGetOutcome,
+        TaskRetryOutcome,
         TaskRunOutcome,
     )
 
 _NOW = datetime(2026, 9, 9, tzinfo=UTC)
 _ALL_TASKS_COUNT = 2
 _EXPECTED_TRANSITION_COUNT = 2
+_EXPECTED_ATTEMPT_COUNT = 2
+_EXPECTED_EVENT_COUNT = 2
 
 
 class _FakeEmbeddingPort:
@@ -174,6 +178,29 @@ async def _run(  # noqa: PLR0913 -- one per fake-fixture pass-through
     )
 
 
+async def _retry(  # noqa: PLR0913 -- one per fake-fixture pass-through
+    tmp_path: Path,
+    task_id: str,
+    plan_response: str = "[]",
+    *,
+    physical_confirmation_available: bool = True,
+    remote_confirmation_available: bool = False,
+    event_bus: EventBus | None = None,
+) -> TaskRetryOutcome:
+    return await authorize_and_retry_task(
+        task_id,
+        _FakeReasoningProvider(plan_response),
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        event_bus=event_bus,
+    )
+
+
 def test_create_writes_a_real_task_with_status_created(tmp_path: Path) -> None:
     outcome = _create(tmp_path, "build a thing")
 
@@ -190,6 +217,7 @@ def test_create_writes_a_real_task_with_status_created(tmp_path: Path) -> None:
         "reason": None,
         "created_at": _NOW.isoformat(),
         "updated_at": _NOW.isoformat(),
+        "attempts": [],
     }
 
 
@@ -219,6 +247,95 @@ async def test_run_on_a_zero_step_plan_completes_and_preserves_created_at(tmp_pa
     # created_at across a transition, not silently drop it via a blind
     # overwrite (update_value replaces the whole stored value).
     assert data["created_at"] == _NOW.isoformat()
+
+
+async def test_run_appends_a_real_concluded_attempt_to_execution_history(tmp_path: Path) -> None:
+    """WP-121: one real, concluded attempt record per "running" -> terminal transition."""
+    create_outcome = _create(tmp_path, "a trivial goal")
+    assert create_outcome.task_id is not None
+
+    await _run(tmp_path, create_outcome.task_id, "a trivial goal", "[]")
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["attempts"] == [
+        {
+            "attempt": 1,
+            "started_at": _NOW.isoformat(),
+            "ended_at": _NOW.isoformat(),
+            "status": "completed",
+            "reason": None,
+        }
+    ]
+
+
+async def test_create_writes_a_real_task_with_an_empty_attempts_history(tmp_path: Path) -> None:
+    """A brand-new task starts with a real, empty execution history, never absent entirely."""
+    create_outcome = _create(tmp_path, "a goal nobody has run yet")
+    assert create_outcome.task_id is not None
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["attempts"] == []  # type: ignore[index]
+
+
+async def test_a_legacy_task_record_with_no_attempts_field_still_loads_and_runs(
+    tmp_path: Path,
+) -> None:
+    """WP-121 backward compatibility: a real pre-WP-121 record (no "attempts" key at all).
+
+    Simulates a task record written before this work package existed
+    -- a real, direct write via `authorize_and_remember`, not
+    `write_task_record` (which now always includes `"attempts"`),
+    mirroring exactly what an old, already-persisted TaskStore row
+    looks like. Must still load, still run, and gain a real,
+    first-ever attempt entry on its very first transition.
+    """
+    legacy_record: dict[str, object] = {
+        "kind": TASK_KIND,
+        "goal": "a goal created before WP-121 existed",
+        "status": "created",
+        "reason": None,
+        "created_at": _NOW.isoformat(),
+        "updated_at": _NOW.isoformat(),
+    }
+    write_outcome = authorize_and_remember(
+        legacy_record,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    get_outcome_before = _get(tmp_path, write_outcome.identifier)
+    assert get_outcome_before.record is not None
+    assert "attempts" not in get_outcome_before.record.value.value  # type: ignore[operator]
+
+    run_outcome = await _run(
+        tmp_path, write_outcome.identifier, "a goal created before WP-121 existed", "[]"
+    )
+    assert run_outcome.claimed is True
+    assert run_outcome.status == "completed"
+
+    get_outcome_after = _get(tmp_path, write_outcome.identifier)
+    assert get_outcome_after.record is not None
+    data = get_outcome_after.record.value.value
+    assert isinstance(data, dict)
+    assert data["attempts"] == [
+        {
+            "attempt": 1,
+            "started_at": _NOW.isoformat(),
+            "ended_at": _NOW.isoformat(),
+            "status": "completed",
+            "reason": None,
+        }
+    ]
 
 
 async def test_run_on_a_malformed_plan_raises_and_marks_the_task_failed(tmp_path: Path) -> None:
@@ -902,3 +1019,264 @@ async def test_run_still_works_normally_on_a_task_that_was_never_cancelled(
 
     assert run_outcome.status == "completed"
     assert run_outcome.reason is None
+
+
+async def test_retry_of_a_failed_task_runs_it_and_transitions_to_completed(
+    tmp_path: Path,
+) -> None:
+    """WP-121: the headline, real retry path -- a failed task, explicitly retried, succeeds."""
+    create_outcome = _create(tmp_path, "a goal that will fail once")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal that will fail once", "not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id, "[]")
+
+    assert retry_outcome.retried is True
+    assert retry_outcome.status == "completed"
+    assert retry_outcome.reason is None
+    assert retry_outcome.decision.granted is True
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "completed"
+    assert data["goal"] == "a goal that will fail once"
+    # The original failure's own concluded attempt is never destroyed --
+    # the retry's own new attempt is appended alongside it, not in place of it.
+    assert len(data["attempts"]) == _EXPECTED_ATTEMPT_COUNT
+    assert data["attempts"][0]["status"] == "failed"
+    assert data["attempts"][1]["status"] == "completed"
+
+
+async def test_retry_that_fails_again_appends_a_second_failed_attempt_not_replacing_the_first(
+    tmp_path: Path,
+) -> None:
+    """The original failure record is never destroyed -- both attempts survive, in order.
+
+    Both the original run and the retry itself raise `PlanningError`
+    (matching `authorize_and_run_task`'s own documented behavior of
+    re-raising unmodified after recording "failed") -- this test's
+    own real point is that the *stored* record accumulates both
+    concluded attempts rather than the second one silently replacing
+    the first.
+    """
+    create_outcome = _create(tmp_path, "a goal that keeps failing")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal that keeps failing", "not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+
+    try:
+        await _retry(tmp_path, create_outcome.task_id, "still not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate on the retry too."
+        raise AssertionError(msg)
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "failed"
+    assert len(data["attempts"]) == _EXPECTED_ATTEMPT_COUNT
+    assert data["attempts"][0]["status"] == "failed"
+    assert data["attempts"][1]["status"] == "failed"
+
+
+async def test_retry_of_an_unknown_task_id_reports_not_found_and_runs_nothing(
+    tmp_path: Path,
+) -> None:
+    retry_outcome = await _retry(tmp_path, "task:no-such-id")
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status is None
+    assert retry_outcome.reason == "No task found for this identifier."
+    assert retry_outcome.decision.granted is True  # the lookup itself is Tier.ALLOW
+
+
+async def test_retry_of_a_created_task_is_refused_and_never_runs_it(tmp_path: Path) -> None:
+    """A task never yet attempted has nothing to retry -- `task run` is the correct command."""
+    create_outcome = _create(tmp_path, "a goal nobody has run yet")
+    assert create_outcome.task_id is not None
+    provider = _FakeReasoningProvider("[]")
+
+    retry_outcome = await authorize_and_retry_task(
+        create_outcome.task_id,
+        provider,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status == "created"
+    assert retry_outcome.reason == "Task is 'created'; only a 'failed' task can be retried."
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "created"  # type: ignore[index]
+
+
+async def test_retry_of_a_completed_task_is_refused_not_silently_re_run(tmp_path: Path) -> None:
+    """Deliberately narrower than `task run`'s own "completed is freely re-runnable" policy."""
+    create_outcome = _create(tmp_path, "a trivial goal")
+    assert create_outcome.task_id is not None
+    await _run(tmp_path, create_outcome.task_id, "a trivial goal", "[]")
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id)
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status == "completed"
+    assert retry_outcome.reason == "Task is 'completed'; only a 'failed' task can be retried."
+
+
+async def test_retry_of_a_cancelled_task_is_refused_never_silently_resumed(
+    tmp_path: Path,
+) -> None:
+    """A human's own explicit cancel must never be undone by a retry (mirrors WP-118 for run)."""
+    create_outcome = _create(tmp_path, "a goal a human gave up on")
+    assert create_outcome.task_id is not None
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+    assert cancel_outcome.cancelled is True
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id)
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status == "cancelled"
+    assert retry_outcome.reason == "Task is 'cancelled'; only a 'failed' task can be retried."
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "cancelled"  # type: ignore[index]
+
+
+async def test_retry_of_an_already_running_task_is_refused_never_double_run(
+    tmp_path: Path,
+) -> None:
+    """ "running" is not in _RETRYABLE_STATUSES -- refused by the same status gate, no CAS race."""
+    goal = "a task someone else is already running"
+    create_outcome = _create(tmp_path, goal)
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, goal, _NOW)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id)
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status == "running"
+    assert retry_outcome.reason == "Task is 'running'; only a 'failed' task can be retried."
+
+
+async def test_retry_denied_without_confirmation_leaves_the_task_at_failed(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal that failed once")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal that failed once", "not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+
+    retry_outcome = await _retry(
+        tmp_path, create_outcome.task_id, "[]", physical_confirmation_available=False
+    )
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.decision.granted is False
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "failed"  # type: ignore[index]
+
+
+async def test_retry_publishes_a_real_status_changed_event(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal that failed once")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal that failed once", "not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+    published: list[TaskStatusChanged] = []
+    bus = EventBus()
+    bus.subscribe(TaskStatusChanged, published.append)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id, "[]", event_bus=bus)
+
+    assert retry_outcome.retried is True
+    # A successful retry makes two real transitions -- "failed" -> "running"
+    # (the claim) and "running" -> "completed" (the real plan finishing) --
+    # both published, mirroring an ordinary `run` on a fresh task exactly.
+    assert len(published) == _EXPECTED_EVENT_COUNT
+    assert published[0].previous_status == "failed"
+    assert published[0].new_status == "running"
+    assert published[1].previous_status == "running"
+    assert published[1].new_status == "completed"
+
+
+async def test_retry_refused_for_a_non_retryable_status_publishes_no_event(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal nobody has run yet")
+    assert create_outcome.task_id is not None
+    published: list[TaskStatusChanged] = []
+    bus = EventBus()
+    bus.subscribe(TaskStatusChanged, published.append)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id, "[]", event_bus=bus)
+
+    assert retry_outcome.retried is False
+    assert published == []
+
+
+async def test_retry_reuses_the_real_wp_120_claim_mechanism_refusing_a_running_re_retry(
+    tmp_path: Path,
+) -> None:
+    """Proves retry is protected by WP-120's claim fix, not a separate, newly-written check.
+
+    Forces the task to "failed", then simulates a second, concurrent
+    retry attempt already having claimed it (a real "running" record,
+    via `update_task_status` directly -- the identical, shared helper
+    `authorize_and_run_task`'s own atomic claim uses) before this
+    call's own retry reaches its own claim. Since "running" is not in
+    `_RETRYABLE_STATUSES`, this is actually caught by the earlier
+    status-gate check here -- but it proves the same, real, end-to-end
+    property two independent, concurrent retries need: a task already
+    claimed by another attempt is never retried a second time
+    concurrently.
+    """
+    create_outcome = _create(tmp_path, "a goal two processes retry at once")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal two processes retry at once", "[")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal two processes retry at once", _NOW)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id)
+
+    assert retry_outcome.retried is False
+    assert retry_outcome.status == "running"

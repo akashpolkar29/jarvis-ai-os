@@ -205,6 +205,42 @@ where a genuine claim race is possible needed this; widening it
 everywhere would have been unjustified scope, not a safety
 requirement (see ``docs/architecture/wp120-background-worker.md`` for
 the full reasoning on why this is the narrowest correct fix).
+
+**WP-121 (2026-09-11): safe, explicit task retry + durable execution
+history.** Two real, additive features atop everything above.
+
+*Execution history*: every real task record now carries a real
+``attempts`` list -- empty for a brand-new task (:func:`write_task_record`),
+appended to by :func:`update_task_status` exactly once per real,
+*concluded* execution attempt (a "running" -> ``"completed"``/
+``"failed"``/``"cancelled"`` transition, never the "start running"
+transition itself, since that attempt has not concluded yet). Each
+entry records its own ``attempt`` number, ``started_at`` (the prior
+record's own ``updated_at`` -- the exact real moment it last became
+"running", never re-derived or guessed), ``ended_at``, the concluding
+``status``, and ``reason``. **Real backward compatibility, not
+assumed**: a task record written before this work package existed has
+no ``"attempts"`` key at all -- ``existing.get("attempts")`` defaults
+to ``[]`` for it, so its very next transition gains a real, correct
+first attempt entry rather than raising or silently losing history
+that never existed. The live, current record's own ``reason`` is
+still overwritten on every transition (unchanged) -- ``attempts`` is
+where a *concluded* attempt's own failure reason survives a later
+retry overwriting the live field.
+
+*Explicit retry*: :func:`authorize_and_retry_task` (`jarvis task retry
+<task_id>`) permits retrying only a task currently ``"failed"`` --
+deliberately narrower than ``jarvis task run``'s own, unchanged
+"completed"/"failed" re-run permissiveness (see
+:data:`_RETRYABLE_STATUSES`'s own docstring). Once permitted, it
+delegates directly to the exact, unmodified :func:`authorize_and_run_task`
+for the actual execution -- no new authorization concept, no second
+execution path. This means a retry is automatically protected by the
+exact same, real, process-safe claim mechanism WP-120 already built:
+two independent processes both retrying the same failed task race on
+the identical "failed" -> "running" compare-and-swap, and the same
+"running" -> "running" refusal closes the identical gap for a slower,
+later racer, with zero new locking code.
 """
 
 from __future__ import annotations
@@ -329,6 +365,7 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
         "reason": reason,
         "created_at": now,
         "updated_at": now,
+        "attempts": [],
     }
     write_outcome = authorize_and_remember(
         record,
@@ -430,6 +467,26 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         else resolved_clock.now().isoformat()
     )
     now = resolved_clock.now().isoformat()
+    existing_attempts = existing.get("attempts") if isinstance(existing, dict) else None
+    attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
+    if previous_status == "running" and status in ("completed", "failed", "cancelled"):
+        # WP-121: one real, concluded execution attempt -- appended only when
+        # a "running" task reaches a terminal status, never for the
+        # "created"/"failed"/"completed" -> "running" transition itself (that
+        # one is still *in progress*, nothing to append yet). `started_at` is
+        # the existing record's own `updated_at` -- the exact real moment it
+        # last transitioned *to* "running" -- not re-derived or guessed.
+        started_at = existing.get("updated_at") if isinstance(existing, dict) else None
+        attempts = [
+            *attempts,
+            {
+                "attempt": len(attempts) + 1,
+                "started_at": started_at,
+                "ended_at": now,
+                "status": status,
+                "reason": reason,
+            },
+        ]
     record: dict[str, object] = {
         "kind": TASK_KIND,
         "goal": goal,
@@ -437,6 +494,7 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         "reason": reason,
         "created_at": created_at,
         "updated_at": now,
+        "attempts": attempts,
     }
     if atomic:
         if existing is None:
@@ -1080,4 +1138,139 @@ def authorize_and_cancel_task(  # noqa: PLR0913 -- one per composition-function 
         decision=update_decision,
         cancelled=update_decision.granted,
         reason=None if update_decision.granted else "Cancellation was not authorized.",
+    )
+
+
+_RETRYABLE_STATUSES = frozenset({"failed"})
+"""The only real status authorize_and_retry_task() will transition out of.
+
+Deliberately narrower than `jarvis task run`'s own, already-existing,
+unchanged "completed"/"failed" re-run permissiveness (WP-118's own
+documented scope boundary) -- "retry" is a real, distinct, explicit
+action a human takes specifically in response to a real failure, not
+a general-purpose re-run command. A `"completed"` task has nothing to
+retry; `jarvis task run` remains the correct, existing command for a
+caller that genuinely wants to re-run one anyway. `"created"`/
+`"running"`/`"cancelled"` are refused for the same real reason `task
+cancel` already refuses them: none represents a real, concluded
+failure to retry.
+"""
+
+
+@dataclass(frozen=True)
+class TaskRetryOutcome:
+    """The result of one authorize_and_retry_task() call (WP-121).
+
+    Attributes:
+        decision: The most directly gating real ``Decision``. If no
+            task was found, or its current status is not
+            ``"failed"``, this is the ``memory.get`` lookup's own
+            ``Decision`` (always granted, ``Tier.ALLOW``) -- nothing
+            past that point was attempted. Otherwise it is whatever
+            real ``Decision`` :func:`authorize_and_run_task` itself
+            returns for the actual retry attempt.
+        retried: ``True`` only if this call's own retry attempt
+            genuinely executed -- mirrors
+            ``TaskRunOutcome.claimed`` exactly, since a retry
+            delegates to the identical, unmodified claim mechanism
+            (WP-120) and can just as validly lose a race against
+            another concurrent retry or run attempt for the same
+            task.
+        status: The task's real, current status after this call, or
+            the real reason it was refused naming the non-retryable
+            status it found -- never a fabricated sentinel.
+        reason: The real reason, mirroring ``TaskRunOutcome.reason``
+            when a retry was attempted, or naming why it was refused
+            outright (not found, or not currently ``"failed"``).
+    """
+
+    decision: Decision
+    retried: bool
+    status: str | None
+    reason: str | None
+
+
+async def authorize_and_retry_task(  # noqa: PLR0913 -- one per composition-function pass-through
+    task_id: str,
+    provider: ReasoningPort | None = None,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
+) -> TaskRetryOutcome:
+    """Explicitly retry a real task currently "failed" (WP-121).
+
+    A real, narrow, explicit action: only a task currently ``"failed"``
+    may be retried (see :data:`_RETRYABLE_STATUSES`'s own docstring
+    for why this is deliberately narrower than ``jarvis task run``'s
+    own, unchanged permissiveness). Once permitted, this delegates
+    directly to the exact, unmodified :func:`authorize_and_run_task`
+    for the actual execution -- no new authorization concept, no new
+    ``CapabilityId``/``Effect``/``Tier``, no second execution path.
+    This also means a retry is automatically protected by the exact
+    same, real, process-safe claim mechanism (WP-120) that already
+    protects every other real call into ``authorize_and_run_task``:
+    two independent processes both retrying the same failed task race
+    on the identical "failed" -> "running" compare-and-swap, and the
+    same "running" -> "running" refusal closes the identical gap a
+    slower, later racer would otherwise hit.
+
+    A ``"cancelled"`` task is never retried -- it is not in
+    :data:`_RETRYABLE_STATUSES` at all, so it is refused by the exact
+    same real status check every other non-retryable status is,
+    before :func:`authorize_and_run_task` is ever called.
+
+    Returns:
+        A ``TaskRetryOutcome`` -- see its own docstring.
+    """
+    get_outcome = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    if get_outcome.record is None:
+        return TaskRetryOutcome(
+            decision=get_outcome.decision,
+            retried=False,
+            status=None,
+            reason="No task found for this identifier.",
+        )
+    data = get_outcome.record.value.value
+    current_status = data.get("status") if isinstance(data, dict) else None
+    goal = data.get("goal") if isinstance(data, dict) else None
+    if current_status not in _RETRYABLE_STATUSES or not isinstance(goal, str):
+        return TaskRetryOutcome(
+            decision=get_outcome.decision,
+            retried=False,
+            status=current_status if isinstance(current_status, str) else None,
+            reason=(f"Task is {current_status!r}; only a 'failed' task can be retried."),
+        )
+    run_outcome = await authorize_and_run_task(
+        task_id,
+        goal,
+        provider,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+        event_bus=event_bus,
+    )
+    return TaskRetryOutcome(
+        decision=run_outcome.decision,
+        retried=run_outcome.claimed,
+        status=run_outcome.status,
+        reason=run_outcome.reason,
     )

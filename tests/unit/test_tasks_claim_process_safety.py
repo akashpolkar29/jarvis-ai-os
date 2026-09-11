@@ -63,11 +63,13 @@ import asyncio
 import multiprocessing
 from typing import TYPE_CHECKING, Any
 
+from jarvis.application.planning.planner import PlanningError
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
+    authorize_and_retry_task,
     authorize_and_run_task,
 )
 
@@ -155,6 +157,51 @@ def _worker(  # noqa: PLR0913, PLR0917 -- one per real multiprocessing.Process a
         )
         ended_at = time.time()  # noqa: TID251 -- see the identical, real justification above
         result_queue.put(("ok", run_outcome.claimed, run_outcome.status, started_at, ended_at))
+    except Exception as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+def _retry_worker(
+    chain_path_str: str,
+    database_path_str: str,
+    task_id: str,
+    barrier: Any,
+    result_queue: Any,
+) -> None:
+    """WP-121: the identical race, for `authorize_and_retry_task` instead of `run`.
+
+    Mirrors `_worker` exactly, minus the `goal` argument (retry looks
+    its own goal up from the real, already-failed record itself,
+    unlike `run`, which requires the caller to supply one). Proves the
+    same, real safety property for the one new entry point WP-121
+    adds: two independent processes both explicitly retrying the exact
+    same, already-failed task must never genuinely run it at the same
+    real instant, exactly like two independent `run` calls (WP-120).
+    Since `authorize_and_retry_task` delegates directly to the
+    identical, unmodified `authorize_and_run_task`, this is really the
+    same claim mechanism exercised through its second real entry
+    point, not a separate one.
+    """
+    import time  # noqa: PLC0415 -- re-imported in the child process
+    from pathlib import Path as _Path  # noqa: PLC0415 -- re-imported in the child process
+
+    barrier.wait(timeout=_WORKER_TIMEOUT_S)
+    started_at = time.time()  # noqa: TID251 -- see `_worker`'s own identical, real justification
+
+    try:
+        retry_outcome = asyncio.run(
+            authorize_and_retry_task(
+                task_id,
+                _FakeReasoningProvider(),
+                physical_confirmation_available=True,
+                remote_confirmation_available=False,
+                chain_path=_Path(chain_path_str),
+                database_path=_Path(database_path_str),
+                embedding_port=_FakeEmbeddingPort(),
+            )
+        )
+        ended_at = time.time()  # noqa: TID251 -- see `_worker`'s own identical, real justification
+        result_queue.put(("ok", retry_outcome.retried, retry_outcome.status, started_at, ended_at))
     except Exception as exc:
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
@@ -253,6 +300,134 @@ def test_real_independent_processes_racing_to_run_the_same_task_never_run_simult
         task_status for _status, claimed, task_status, _started, _ended in oks if not claimed
     }
     assert loser_statuses <= {"running", "completed"}, loser_statuses
+
+    final = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    assert final.record is not None
+    assert final.record.value.value["status"] == "completed"  # type: ignore[index]
+
+
+def test_real_independent_processes_racing_to_retry_the_same_failed_task_never_run_simultaneously(
+    tmp_path: Path,
+) -> None:
+    """WP-121's own headline concurrency proof: the identical property, through `retry`.
+
+    First, synchronously, drives a real task to `"failed"` (a real
+    `PlanningError` from a malformed plan, exactly like
+    `test_tasks_kernel.py`'s own established pattern) -- this must
+    happen *before* the real race, not as part of it, since retry's
+    own real precondition is an already-concluded failure. Then,
+    exactly like the module's own headline `run` test above, spawns
+    `_WORKER_COUNT` genuinely independent OS processes, all barrier-
+    released together, all calling the exact same, unmodified
+    `authorize_and_retry_task` for the exact same failed task.
+    """
+    chain_path = tmp_path / "audit_chain.json"
+    database_path = tmp_path / "memory.sqlite3"
+    goal = "a real, shared, contended task to retry"
+    create_outcome = authorize_and_create_task(
+        goal,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    assert create_outcome.task_id is not None
+    task_id = create_outcome.task_id
+
+    class _FailingOnceProvider:
+        async def generate(
+            self, _task: str, _prior_attempts: tuple[Attempt, ...]
+        ) -> Tainted[Candidate]:
+            candidate = Candidate(author="test-provider", content="not valid json")
+            return Tainted(candidate, Provenance.system())
+
+    try:
+        asyncio.run(
+            authorize_and_run_task(
+                task_id,
+                goal,
+                _FailingOnceProvider(),
+                physical_confirmation_available=True,
+                remote_confirmation_available=False,
+                chain_path=chain_path,
+                database_path=database_path,
+                embedding_port=_FakeEmbeddingPort(),
+            )
+        )
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected the initial run to fail with PlanningError."
+        raise AssertionError(msg)
+
+    pre_retry = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=_FakeEmbeddingPort(),
+    )
+    assert pre_retry.record is not None
+    assert pre_retry.record.value.value["status"] == "failed"  # type: ignore[index]
+
+    barrier: Any = multiprocessing.Barrier(_WORKER_COUNT)
+    result_queue: Any = multiprocessing.Queue()
+    processes = [
+        multiprocessing.Process(
+            target=_retry_worker,
+            args=(str(chain_path), str(database_path), task_id, barrier, result_queue),
+        )
+        for _ in range(_WORKER_COUNT)
+    ]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=_WORKER_TIMEOUT_S)
+        assert not process.is_alive(), "a real worker process hung past its own timeout"
+        assert process.exitcode == 0, "a real worker process crashed"
+
+    results = [result_queue.get_nowait() for _ in processes]
+    errors = [detail for status, *detail in results if status == "error"]
+    assert errors == [], f"a real worker's own authorize_and_retry_task() raised: {errors}"
+
+    oks = [r for r in results if r[0] == "ok"]
+    assert len(oks) == _WORKER_COUNT
+
+    retried_flags = [retried for _status, retried, _task_status, _started, _ended in oks]
+    assert sum(retried_flags) >= 1, "expected at least one real retrier, got none"
+
+    # The real, headline safety property, identical to the `run` test above,
+    # just reached through `retry` instead: no two real winners' own
+    # measured [start, end] wall-clock windows may overlap.
+    winner_intervals = [
+        (started, ended) for _status, retried, _task_status, started, ended in oks if retried
+    ]
+    for i, interval_a in enumerate(winner_intervals):
+        for interval_b in winner_intervals[i + 1 :]:
+            assert not _intervals_overlap(interval_a, interval_b), (
+                f"two real winners' own retry windows overlapped: {interval_a} vs {interval_b} "
+                "-- this means two processes genuinely ran the same task simultaneously"
+            )
+
+    # A loser either still sees "failed" (it lost the status-gate check
+    # before ever reaching the claim at all) or "running"/"completed" (it
+    # passed the status gate but lost the real claim race inside
+    # authorize_and_run_task itself) -- all three are real, legitimate,
+    # timing-dependent outcomes for a loser here.
+    loser_statuses = {
+        task_status for _status, retried, task_status, _started, _ended in oks if not retried
+    }
+    assert loser_statuses <= {"failed", "running", "completed"}, loser_statuses
 
     final = authorize_and_get_task(
         task_id,

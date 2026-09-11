@@ -88,6 +88,7 @@ from jarvis.kernel.tasks import (
     TaskCreateOutcome,
     TaskGetOutcome,
     TaskListOutcome,
+    TaskRetryOutcome,
     TaskRunOutcome,
 )
 from jarvis.kernel.worker import WorkerPassOutcome, WorkerTaskOutcome
@@ -3122,6 +3123,125 @@ def test_task_cancel_subcommand_reports_a_refused_cancellation_with_its_reason(
 def test_task_cancel_subcommand_requires_task_id() -> None:
     with pytest.raises(SystemExit):
         main(["task", "cancel"])
+
+
+def test_task_retry_subcommand_reports_a_successful_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    async def fake_authorize_and_retry_task(
+        task_id: str,
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRetryOutcome:
+        received.append(task_id)
+        decision = _make_decision(granted=True, capability_id="memory.update")
+        return TaskRetryOutcome(decision=decision, retried=True, status="completed", reason=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_retry_task",
+        fake_authorize_and_retry_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "retry",
+            "task:1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["task:1"]
+    assert exit_code == 0
+    assert "retried: true" in captured.out
+    assert "status: completed" in captured.out
+
+
+def test_task_retry_subcommand_reports_a_refused_retry_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_authorize_and_retry_task(
+        task_id: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRetryOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskRetryOutcome(
+            decision=decision,
+            retried=False,
+            status="cancelled",
+            reason="Task is 'cancelled'; only a 'failed' task can be retried.",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_retry_task",
+        fake_authorize_and_retry_task,
+    )
+
+    exit_code = main(
+        ["task", "retry", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "retried: false" in captured.out
+    assert "Task is 'cancelled'; only a 'failed' task can be retried." in captured.out
+
+
+def test_task_retry_subcommand_reports_not_found_without_a_status_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Covers the one real case `task_status` is `None` -- the retried block's own reason print."""
+
+    async def fake_authorize_and_retry_task(
+        task_id: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRetryOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskRetryOutcome(
+            decision=decision,
+            retried=False,
+            status=None,
+            reason="No task found for this identifier.",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_retry_task",
+        fake_authorize_and_retry_task,
+    )
+
+    exit_code = main(
+        ["task", "retry", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "retried: false" in captured.out
+    assert "No task found for this identifier." in captured.out
+    assert "status:" not in captured.out
+
+
+def test_task_retry_subcommand_requires_task_id() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "retry"])
 
 
 def test_task_worker_once_reports_a_claimed_run(

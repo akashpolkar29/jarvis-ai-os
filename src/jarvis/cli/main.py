@@ -252,6 +252,7 @@ from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
+    authorize_and_retry_task,
     authorize_and_run_task,
 )
 from jarvis.kernel.voice_loop import run_voice_loop
@@ -745,6 +746,17 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     cancel_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
     _add_common_flags(cancel_parser)
+
+    retry_parser = task_subparsers.add_parser(
+        "retry",
+        help=(
+            "Explicitly retry a real task currently 'failed' (WP-121). Delegates to the "
+            "same, unmodified execution path as 'task run' -- no new authorization, no "
+            "new claim mechanism."
+        ),
+    )
+    retry_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    _add_common_flags(retry_parser)
 
     worker_parser = task_subparsers.add_parser(
         "worker",
@@ -1969,20 +1981,23 @@ def _run_project_subcommand(args: argparse.Namespace) -> _CommandOutcome:
 
 
 def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
-    """Dispatch ``task create``/``run``/``status``/``list``, returning a full _CommandOutcome.
+    """Dispatch ``task create``/``run``/``status``/``list``/``cancel``/``retry`` (WP-121).
 
     Split out from :func:`_dispatch_command` for the identical reason
-    :func:`_run_project_subcommand` is. ``authorize_and_run_task`` is
-    ``async``, so ``run`` wraps its own call in ``asyncio.run``;
+    :func:`_run_project_subcommand` is. ``authorize_and_run_task``/
+    ``authorize_and_retry_task`` are ``async``, so ``run``/``retry``
+    each wrap their own call in ``asyncio.run``;
     ``authorize_and_create_task``/``authorize_and_get_task``/
-    ``authorize_and_list_tasks`` are sync, no wrapping needed. Omits
-    ``provider`` entirely on ``run``, the same real, deliberate scope
-    limit ``_add_task_parsers``'s own docstring already states. A real
-    ``PlanningError``/``PlanValidationError`` from ``run`` is not
-    caught here -- it propagates to ``main()``'s own existing broad
-    except tuple, exactly like ``plan run``/``project start`` already
-    do; ``authorize_and_run_task`` has already durably updated the
-    task's own status before it re-raises.
+    ``authorize_and_list_tasks``/``authorize_and_cancel_task`` are
+    sync, no wrapping needed. Omits ``provider`` entirely on
+    ``run``/``retry``, the same real, deliberate scope limit
+    ``_add_task_parsers``'s own docstring already states. A real
+    ``PlanningError``/``PlanValidationError`` from ``run``/``retry`` is
+    not caught here -- it propagates to ``main()``'s own existing
+    broad except tuple, exactly like ``plan run``/``project start``
+    already do; ``authorize_and_run_task`` has already durably updated
+    the task's own status before it re-raises, and ``retry`` delegates
+    to that exact, unmodified function.
     """
     if args.task_command == "create":
         create_outcome = authorize_and_create_task(
@@ -2040,6 +2055,23 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             "task cancel",
             task_cancelled=cancel_outcome.cancelled,
             task_reason=cancel_outcome.reason,
+        )
+
+    if args.task_command == "retry":
+        retry_outcome = asyncio.run(
+            authorize_and_retry_task(
+                args.task_id,
+                physical_confirmation_available=args.physical_confirmation_available,
+                remote_confirmation_available=args.remote_confirmation_available,
+                chain_path=args.chain_path,
+            )
+        )
+        return _CommandOutcome(
+            retry_outcome.decision,
+            "task retry",
+            task_retried=retry_outcome.retried,
+            task_status=retry_outcome.status,
+            task_reason=retry_outcome.reason,
         )
 
     list_outcome = authorize_and_list_tasks(
@@ -2490,6 +2522,7 @@ class _CommandOutcome:
     task_stale: bool = False
     stale_task_ids: frozenset[str] = frozenset()
     task_cancelled: bool | None = None
+    task_retried: bool | None = None
     route_result: RouteResult | None = None
     route_execution_result: object | None = None
     route_task_id: str | None = None
@@ -2703,6 +2736,15 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:
     if outcome.task_cancelled is not None:
         print(f"cancelled: {'true' if outcome.task_cancelled else 'false'}")
         if not outcome.task_cancelled and outcome.task_reason is not None:
+            print(f"reason: {outcome.task_reason}")
+    if outcome.task_retried is not None:
+        print(f"retried: {'true' if outcome.task_retried else 'false'}")
+        # `status`/`reason` were already printed just above via the
+        # `task_status` block whenever a real status exists (e.g. a
+        # genuine retry attempt's own outcome) -- only print `reason`
+        # here for the one real case that block skips entirely: no
+        # task found at all, where `task_status` is `None`.
+        if outcome.task_status is None and outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_record is not None:
         _print_one_task_record(outcome.task_record, stale=outcome.task_stale)
