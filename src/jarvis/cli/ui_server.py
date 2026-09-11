@@ -120,6 +120,20 @@ user clicks a real "Run" control, mirroring `jarvis task create`/
 `authorize_and_get_task` before running -- the browser never supplies
 its own copy of the goal text, so it cannot smuggle a different goal
 into a real plan run than the one the task was actually created for.
+
+**WP-119 (2026-09-11): a real, explicit way to cancel an already-
+created task from the UI.** `POST /api/tasks/<task_id>/cancel` reuses
+`kernel.tasks.authorize_and_cancel_task` (WP-117) completely
+unmodified -- the exact same function `jarvis task cancel` already
+calls. No new authorization concept. Mirrors `POST .../run`'s own
+shape exactly, but needs no server-side goal lookup first --
+`authorize_and_cancel_task` already does its own lookup internally.
+As with cancellation everywhere else in this codebase, this does not
+interrupt any real, in-flight execution (there is none to interrupt in
+this single-threaded server); it lets a human retire a task's own
+stored status by hand, most usefully right after creating a task they
+change their mind about, or once `GET /api/tasks/<task_id>` reports a
+status that has stopped changing.
 """
 
 from __future__ import annotations
@@ -156,7 +170,11 @@ from jarvis.kernel.files import (
 )
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import authorize_and_route
-from jarvis.kernel.tasks import authorize_and_get_task, authorize_and_run_task
+from jarvis.kernel.tasks import (
+    authorize_and_cancel_task,
+    authorize_and_get_task,
+    authorize_and_run_task,
+)
 from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
@@ -182,6 +200,10 @@ module docstring's own "why this is not SSE" section."""
 _TASK_RUN_PATH_SUFFIX = "/run"
 """POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- runs an already-created
 task (WP-112). See module docstring's own WP-112 section."""
+
+_TASK_CANCEL_PATH_SUFFIX = "/cancel"
+"""POST <_TASK_STATUS_PATH_PREFIX>+<task_id>+<this> -- cancels an already-created
+task (WP-119). See module docstring's own WP-119 section."""
 
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
@@ -541,7 +563,12 @@ def build_response_payload(outcome: RouteOutcome) -> dict[str, object]:
 
 
 class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
-    """Exactly two real routes: `GET /` (the static page) and `POST /api/command`."""
+    """The real static page plus `POST /api/command` and the `/api/tasks/<id>` family.
+
+    Corrected in passing (WP-119): this docstring previously claimed
+    "exactly two real routes," already stale since WP-111/WP-112 added
+    `GET /api/tasks/<id>` and `POST /api/tasks/<id>/run`.
+    """
 
     server: JarvisUiServer  # narrows the inherited, generically-typed `server` attribute
 
@@ -611,7 +638,7 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        """Handle `POST /api/command` or `POST /api/tasks/<id>/run`. Never crashes the server."""
+        """Handle command/run/cancel task POSTs (WP-108/WP-112/WP-119). Never crashes the server."""
         if self.path == "/api/command":
             self._handle_post_command()
             return
@@ -620,6 +647,12 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
         ):
             task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_RUN_PATH_SUFFIX)]
             self._handle_run_task(task_id)
+            return
+        if self.path.startswith(_TASK_STATUS_PATH_PREFIX) and self.path.endswith(
+            _TASK_CANCEL_PATH_SUFFIX
+        ):
+            task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) : -len(_TASK_CANCEL_PATH_SUFFIX)]
+            self._handle_cancel_task(task_id)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
 
@@ -727,6 +760,50 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                 "granted": run_outcome.decision.granted,
                 "status": run_outcome.status,
                 "reason": run_outcome.reason,
+            },
+        )
+
+    def _handle_cancel_task(self, task_id: str) -> None:
+        """Handle `POST /api/tasks/<task_id>/cancel` (WP-119) -- reuses authorize_and_cancel_task unmodified.
+
+        Unlike `_handle_run_task`, no server-side goal lookup is
+        needed first -- `authorize_and_cancel_task` already does its
+        own lookup internally. See module docstring's own WP-119
+        section.
+        """  # noqa: E501
+        if not task_id:
+            self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+            return
+
+        config = self.server.jarvis_config
+        try:
+            cancel_outcome = authorize_and_cancel_task(
+                task_id,
+                physical_confirmation_available=config.physical_confirmation_available,
+                remote_confirmation_available=config.remote_confirmation_available,
+                chain_path=config.chain_path,
+                database_path=config.database_path,
+                event_bus=self.server.event_bus,
+            )
+        except _HANDLED_ROUTING_ERRORS as exc:
+            _logger.warning("ui_server: cancelling task %s failed: %s", task_id, exc)
+            self._send_json(HTTPStatus.BAD_REQUEST, {"type": "error", "message": str(exc)})
+            return
+        except Exception:
+            _logger.exception("ui_server: unexpected internal error cancelling task %s", task_id)
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"type": "error", "message": "An unexpected internal error occurred."},
+            )
+            return
+
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "task_id": task_id,
+                "granted": cancel_outcome.decision.granted,
+                "cancelled": cancel_outcome.cancelled,
+                "reason": cancel_outcome.reason,
             },
         )
 

@@ -144,15 +144,20 @@
     cursor: not-allowed;
     opacity: 0.6;
   }
-  .run-task-button {
-    display: block;
+  .run-task-button, .cancel-task-button {
+    display: inline-block;
     margin-top: 8px;
+    margin-right: 6px;
     font-size: 12px;
     padding: 4px 10px;
   }
-  .run-task-button:disabled {
+  .run-task-button:disabled, .cancel-task-button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  .cancel-task-button {
+    color: var(--error-text);
+    border-color: var(--error-text);
   }
 </style>
 </head>
@@ -278,6 +283,49 @@
       });
   }
 
+  // POST /api/tasks/<id>/cancel (WP-119) -- mirrors runTask's own shape exactly.
+  // Never sent automatically: only a real user click on the real "Cancel"
+  // button calls this. Unlike runTask, a real refusal (e.g. the task already
+  // finished) is not a network/server error -- it's a real, granted lookup
+  // reporting `cancelled: false` with its own reason, shown as a real task
+  // status line rather than an error bubble.
+  function cancelTask(taskId, button) {
+    button.disabled = true;
+    button.textContent = "Cancelling...";
+    fetch("/api/tasks/" + encodeURIComponent(taskId) + "/cancel", { method: "POST" })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        var data = result.data;
+        if (!result.ok || data.type === "error") {
+          addMessage(
+            "error", null, (data && data.message) || "Could not cancel this task.", null
+          );
+          button.disabled = false;
+          button.textContent = "Cancel";
+          return;
+        }
+        if (data.cancelled) {
+          button.textContent = "Cancelled";
+          addMessage("task", "Task " + taskId, "Status: cancelled", null);
+        } else {
+          button.disabled = false;
+          button.textContent = "Cancel";
+          addMessage("task", "Task " + taskId, data.reason || "Not cancelled.", null);
+        }
+      })
+      .catch(function () {
+        addMessage(
+          "error", null, "Could not reach the JARVIS backend to cancel this task.", null
+        );
+        button.disabled = false;
+        button.textContent = "Cancel";
+      });
+  }
+
   // Renders one real backend response, distinguishing every real `type` the
   // API can return (see jarvis.cli.ui_server.build_response_payload) rather
   // than lumping every non-error response into one generic bubble.
@@ -300,6 +348,14 @@
           runTask(data.task_id, runButton);
         });
         taskEl.appendChild(runButton);
+        var cancelButton = document.createElement("button");
+        cancelButton.type = "button";
+        cancelButton.className = "cancel-task-button";
+        cancelButton.textContent = "Cancel";
+        cancelButton.addEventListener("click", function () {
+          cancelTask(data.task_id, cancelButton);
+        });
+        taskEl.appendChild(cancelButton);
         pollTaskStatus(data.task_id, status, TASK_POLL_MAX_ATTEMPTS);
       }
       return;

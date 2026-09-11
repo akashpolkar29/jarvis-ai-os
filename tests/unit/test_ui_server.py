@@ -64,7 +64,13 @@ from jarvis.kernel.files import (
 )
 from jarvis.kernel.memory import MemoryRecallOutcome
 from jarvis.kernel.router import RouteOutcome
-from jarvis.kernel.tasks import TaskGetOutcome, TaskRunOutcome, authorize_and_create_task
+from jarvis.kernel.tasks import (
+    TaskCancelOutcome,
+    TaskGetOutcome,
+    TaskRunOutcome,
+    authorize_and_create_task,
+)
+from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -641,6 +647,132 @@ def test_post_run_task_reports_a_clean_500_for_a_malformed_stored_record(
 
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert data["type"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# WP-119: POST /api/tasks/<task_id>/cancel -- cancels an already-created task
+# ---------------------------------------------------------------------------
+
+
+def _post_cancel(base_url: str, task_id: str) -> tuple[int, dict[str, object]]:
+    req = urllib.request.Request(f"{base_url}/api/tasks/{task_id}/cancel", data=b"", method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_post_cancel_task_reports_not_found_for_an_unknown_task_id_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """Unlike /run, /cancel's own real lookup happens inside authorize_and_cancel_task itself.
+
+    An unknown-but-well-formed task id is a real, granted (`Tier.ALLOW`)
+    `memory.get` lookup that simply found nothing -- not an HTTP-layer
+    404, since `_handle_cancel_task` does no separate pre-lookup the
+    way `_handle_run_task` does.
+    """
+    base_url, _server = running_server
+
+    status, data = _post_cancel(base_url, "no-such-task")
+
+    assert status == HTTPStatus.OK
+    assert data["cancelled"] is False
+    assert data["reason"] == "No task found for this identifier."
+
+
+def test_post_cancel_task_returns_404_for_an_empty_task_id(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    status, data = _post_cancel(base_url, "")
+
+    assert status == HTTPStatus.NOT_FOUND
+    assert data["type"] == "error"
+
+
+def test_post_cancel_task_real_round_trip_against_a_real_created_task(
+    running_server: tuple[str, JarvisUiServer], tmp_path: Path
+) -> None:
+    """A real, independently-created task is really cancelled -- nothing here is mocked."""
+    base_url, server = running_server
+    server.jarvis_config = UiServerConfig(
+        chain_path=server.jarvis_config.chain_path,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    create_outcome = authorize_and_create_task(
+        "a real, independently-created task",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=server.jarvis_config.chain_path,
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    assert create_outcome.task_id is not None
+
+    status, data = _post_cancel(base_url, create_outcome.task_id)
+
+    assert status == HTTPStatus.OK
+    assert data["task_id"] == create_outcome.task_id
+    assert data["granted"] is True
+    assert data["cancelled"] is True
+    assert data["reason"] is None
+
+
+def test_post_cancel_task_reports_a_real_refusal_without_an_error_status(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+    fake_outcome = TaskCancelOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW),
+        cancelled=False,
+        reason="Task is already 'completed' and cannot be cancelled.",
+    )
+
+    with mock.patch("jarvis.cli.ui_server.authorize_and_cancel_task", return_value=fake_outcome):
+        status, data = _post_cancel(base_url, "task:already-done")
+
+    assert status == HTTPStatus.OK
+    assert data["cancelled"] is False
+    assert data["reason"] == "Task is already 'completed' and cannot be cancelled."
+
+
+def test_post_cancel_task_reports_a_handled_kernel_error_cleanly(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_cancel_task(*_args: object, **_kwargs: object) -> TaskCancelOutcome:
+        raise MemoryRecordNotFoundError("task:gone")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_cancel_task", failing_authorize_and_cancel_task
+    ):
+        status, data = _post_cancel(base_url, "task:gone")
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert data["type"] == "error"
+
+
+def test_post_cancel_task_never_leaks_a_traceback_on_an_unexpected_error(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    base_url, _server = running_server
+
+    def failing_authorize_and_cancel_task(*_args: object, **_kwargs: object) -> TaskCancelOutcome:
+        raise RuntimeError("boom, unexpected")
+
+    with mock.patch(
+        "jarvis.cli.ui_server.authorize_and_cancel_task", failing_authorize_and_cancel_task
+    ):
+        status, data = _post_cancel(base_url, "task:1")
+
+    assert status == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert data["type"] == "error"
+    assert "boom" not in str(data["message"])
 
 
 # ---------------------------------------------------------------------------
