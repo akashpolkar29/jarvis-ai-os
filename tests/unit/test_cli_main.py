@@ -106,6 +106,7 @@ from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
+from jarvis.ports.sandbox import SandboxUnavailableError
 from jarvis.ports.secret import SecretNotFoundError
 from jarvis.ports.vscode import EditorLaunchFailedError
 
@@ -1959,6 +1960,44 @@ def test_code_subcommand_prints_the_result_label(
     assert "code: GRANTED" in captured.out
     assert "result: written" in captured.out
     assert exit_code == 0
+
+
+def test_code_subcommand_reports_a_clean_error_when_the_sandbox_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-161: a missing bwrap binary surfaces as a clean error, not a raw traceback."""
+
+    async def fake_authorize_and_run_coding_task(  # noqa: PLR0913 -- mirrors the real signature
+        task: str,  # noqa: ARG001
+        target_repo: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        max_climbs: int,  # noqa: ARG001
+    ) -> tuple[Decision, CodingLoopResult]:
+        msg = "bubblewrap (bwrap) is not installed or not on PATH"
+        raise SandboxUnavailableError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_run_coding_task",
+        fake_authorize_and_run_coding_task,
+    )
+
+    exit_code = main(
+        [
+            "code",
+            "fix the bug",
+            str(tmp_path / "target_repo"),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error: bubblewrap" in captured.err
 
 
 def test_code_subcommand_requires_task_and_repo_path() -> None:

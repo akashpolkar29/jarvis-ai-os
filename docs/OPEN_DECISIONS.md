@@ -1859,6 +1859,19 @@ behavior changed; the two already-reviewed naming inconsistencies
 (item 4) remain the user's own accepted, left-as-is decision. See
 `docs/architecture/wp160-cli-ux-consistency.md`.
 
+## 61. ~~Config/environment diagnostics: missing bwrap binary~~ -- RESOLVED/BUILT 2026-09-12 (WP-161)
+
+**Resolved/built, WP-161**. `jarvis doctor` already proactively checks
+for the real `bwrap` binary, but running any sandboxed capability
+without it installed raised a raw, unexplained
+`FileNotFoundError: [Errno 2] No such file or directory: 'bwrap'` --
+confirmed live before fixing. New `SandboxUnavailableError`
+(`ports/sandbox.py`), raised by `BwrapSandboxAdapter.run()`/`.launch()`
+in place of the raw `FileNotFoundError`, naming the real binary and an
+install command. No change to sandboxing logic itself, no new
+capability/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp161-sandbox-missing-binary-diagnostics.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

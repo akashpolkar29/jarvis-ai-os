@@ -279,6 +279,12 @@ replacement for either.
   page read arbitrary local filesystem content under a confirmation
   prompt that only ever showed a URL string. See
   `docs/architecture/wp154-browser-url-scheme-precondition.md`.
+- WP-161: a missing `bwrap` binary now raises a clean, actionable
+  `SandboxUnavailableError` instead of a raw
+  `FileNotFoundError: [Errno 2] No such file or directory: 'bwrap'`
+  when a sandboxed capability (e.g. `coding.run_task`) is invoked
+  without it installed. See
+  `docs/architecture/wp161-sandbox-missing-binary-diagnostics.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

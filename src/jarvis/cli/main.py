@@ -269,6 +269,7 @@ from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.media_player import MediaPlayerCommandFailedError, NoMediaPlayerRunningError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 from jarvis.ports.retrieval import MemoryIntegrityViolationError
+from jarvis.ports.sandbox import SandboxUnavailableError
 from jarvis.ports.secret import SecretNotFoundError
 from jarvis.ports.vscode import EditorLaunchFailedError
 
@@ -3255,6 +3256,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one earl
         MediaPlayerCommandFailedError,
         PathOutsideAllowedScopeError,
         UnsupportedUrlSchemeError,
+        SandboxUnavailableError,
         MemoryRecordNotFoundError,
         UnsupportedMemoryValueError,
         MemoryIntegrityViolationError,

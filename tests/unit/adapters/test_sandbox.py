@@ -29,6 +29,7 @@ import pytest
 
 from jarvis.adapters.sandbox import BwrapSandboxAdapter, _build_bwrap_argv
 from jarvis.domain.process import CommandResult
+from jarvis.ports.sandbox import SandboxUnavailableError
 
 _EXPECTED_BIND_FLAG_COUNT = 2
 _EXPECTED_EXIT_CODE = 3
@@ -170,6 +171,18 @@ def test_run_delegates_the_built_argv_to_the_injected_subprocess_runner() -> Non
     assert seen == [_build_bwrap_argv(("echo", "hi"), bind_paths=(), allow_network=False)]
 
 
+def test_run_raises_a_clean_sandbox_unavailable_error_when_bwrap_is_missing() -> None:
+    """WP-161: a raw FileNotFoundError is caught and re-raised with an actionable message."""
+
+    def fake_run_subprocess(argv: tuple[str, ...]) -> CommandResult:  # noqa: ARG001
+        raise FileNotFoundError(2, "No such file or directory", "bwrap")
+
+    adapter = BwrapSandboxAdapter(run_subprocess=fake_run_subprocess)
+
+    with pytest.raises(SandboxUnavailableError, match="bubblewrap"):
+        adapter.run(("echo", "hi"))
+
+
 # ---------------------------------------------------------------------------
 # BwrapSandboxAdapter.launch: real bwrap subprocess, WP-52 (Terminal, ADR-0046).
 # ---------------------------------------------------------------------------
@@ -190,6 +203,18 @@ def test_launch_delegates_the_built_argv_to_the_injected_launch_subprocess_runne
 
     assert seen == [_build_bwrap_argv(("gnome-terminal",), bind_paths=(), allow_network=False)]
     assert pid == fake_pid
+
+
+def test_launch_raises_a_clean_sandbox_unavailable_error_when_bwrap_is_missing() -> None:
+    """WP-161: the identical fix as run()'s own, for launch()'s own subprocess call."""
+
+    def fake_launch_subprocess(argv: tuple[str, ...]) -> int:  # noqa: ARG001
+        raise FileNotFoundError(2, "No such file or directory", "bwrap")
+
+    adapter = BwrapSandboxAdapter(launch_subprocess=fake_launch_subprocess)
+
+    with pytest.raises(SandboxUnavailableError, match="bubblewrap"):
+        adapter.launch(("gnome-terminal",))
 
 
 def test_launch_returns_immediately_and_the_real_process_completes_its_work_afterward(

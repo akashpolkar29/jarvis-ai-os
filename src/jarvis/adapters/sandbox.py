@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jarvis.domain.process import CommandResult
+from jarvis.ports.sandbox import SandboxUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -93,6 +94,21 @@ def _build_bwrap_argv(
     argv.append("--")
     argv.extend(command)
     return tuple(argv)
+
+
+def _sandbox_unavailable_error(exc: FileNotFoundError) -> SandboxUnavailableError:
+    """Build a clean, actionable error for a missing ``bwrap`` binary (WP-161).
+
+    A raw ``FileNotFoundError`` from ``subprocess`` names only the
+    literal argv[0] string (``'bwrap'``), with no indication of what
+    it is or how to fix it -- confirmed live before this fix.
+    """
+    msg = (
+        "bubblewrap (bwrap) is not installed or not on PATH -- required to run any "
+        "sandboxed capability (e.g. coding.run_task). Install it via your system's "
+        f"package manager (e.g. 'apt install bubblewrap' on Debian/Ubuntu). ({exc})"
+    )
+    return SandboxUnavailableError(msg)
 
 
 def _run_subprocess(argv: tuple[str, ...]) -> CommandResult:
@@ -217,9 +233,19 @@ class BwrapSandboxAdapter:
         bind_paths: tuple[Path, ...] = (),
         allow_network: bool = False,
     ) -> CommandResult:
-        """Run ``command`` inside a real ``bwrap`` sandbox and return its real outcome."""
+        """Run ``command`` inside a real ``bwrap`` sandbox and return its real outcome.
+
+        Raises:
+            SandboxUnavailableError: If the real ``bwrap`` binary
+                itself is missing/not on PATH (WP-161) -- confirmed
+                live, before this fix, to otherwise surface as a raw,
+                unexplained ``FileNotFoundError``.
+        """
         argv = _build_bwrap_argv(command, bind_paths=bind_paths, allow_network=allow_network)
-        return self._run_subprocess(argv)
+        try:
+            return self._run_subprocess(argv)
+        except FileNotFoundError as exc:
+            raise _sandbox_unavailable_error(exc) from exc
 
     def launch(
         self,
@@ -243,9 +269,15 @@ class BwrapSandboxAdapter:
                 actually display something. See
                 :func:`_display_bind_paths` for what this does and does
                 not cover.
+
+        Raises:
+            SandboxUnavailableError: See :meth:`run`'s identical note.
         """
         real_bind_paths = bind_paths
         if allow_display:
             real_bind_paths = (*bind_paths, *self._display_bind_paths())
         argv = _build_bwrap_argv(command, bind_paths=real_bind_paths, allow_network=allow_network)
-        return self._launch_subprocess(argv)
+        try:
+            return self._launch_subprocess(argv)
+        except FileNotFoundError as exc:
+            raise _sandbox_unavailable_error(exc) from exc

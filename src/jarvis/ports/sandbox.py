@@ -23,6 +23,23 @@ if TYPE_CHECKING:
     from jarvis.domain.process import CommandResult
 
 
+class SandboxUnavailableError(Exception):
+    """Raised when the real sandboxing binary itself is missing or not on PATH (WP-161).
+
+    Not a :class:`~jarvis.domain.errors.JarvisError` subclass: an
+    adapter-level, real-world environment condition (a missing local
+    dependency), not a domain-level security/policy concern -- the
+    same reasoning :class:`~jarvis.ports.git.GitCommandFailedError`
+    already uses. Distinct from an ordinary sandboxed-command failure
+    (a non-zero exit *inside* a working sandbox): this means the
+    sandbox mechanism itself could not even start. `jarvis doctor`
+    already checks for this binary proactively; this closes the gap
+    for a caller that runs a sandboxed capability anyway, live-
+    confirmed before this fix to otherwise raise a raw, unexplained
+    ``FileNotFoundError: [Errno 2] No such file or directory: 'bwrap'``.
+    """
+
+
 @runtime_checkable
 class SandboxPort(Protocol):
     """A real, isolated environment a command can be run inside."""
