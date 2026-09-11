@@ -254,6 +254,7 @@ from jarvis.kernel.tasks import (
     authorize_and_list_tasks,
     authorize_and_retry_task,
     authorize_and_run_task,
+    authorize_and_schedule_task,
 )
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.kernel.worker import run_pending_tasks_once
@@ -757,6 +758,26 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     retry_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
     _add_common_flags(retry_parser)
+
+    schedule_parser = task_subparsers.add_parser(
+        "schedule",
+        help=(
+            "Schedule a real task still 'created' to become due at a future time (WP-122). "
+            "Does not change the task's own status; the existing worker claims and runs it "
+            "once its own scheduled time has passed."
+        ),
+    )
+    schedule_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    schedule_parser.add_argument(
+        "--at",
+        dest="scheduled_at",
+        required=True,
+        help=(
+            "A real ISO-8601 timestamp with an explicit timezone offset "
+            "(e.g. '2026-09-12T09:00:00+00:00' or '...Z') -- naive timestamps are rejected."
+        ),
+    )
+    _add_common_flags(schedule_parser)
 
     worker_parser = task_subparsers.add_parser(
         "worker",
@@ -1980,24 +2001,30 @@ def _run_project_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     )
 
 
-def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
-    """Dispatch ``task create``/``run``/``status``/``list``/``cancel``/``retry`` (WP-121).
+def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
+    args: argparse.Namespace,
+) -> _CommandOutcome:
+    """Dispatch ``task create``/``run``/``status``/``list``/``cancel``/``retry``/``schedule``.
 
     Split out from :func:`_dispatch_command` for the identical reason
     :func:`_run_project_subcommand` is. ``authorize_and_run_task``/
     ``authorize_and_retry_task`` are ``async``, so ``run``/``retry``
     each wrap their own call in ``asyncio.run``;
     ``authorize_and_create_task``/``authorize_and_get_task``/
-    ``authorize_and_list_tasks``/``authorize_and_cancel_task`` are
-    sync, no wrapping needed. Omits ``provider`` entirely on
-    ``run``/``retry``, the same real, deliberate scope limit
-    ``_add_task_parsers``'s own docstring already states. A real
-    ``PlanningError``/``PlanValidationError`` from ``run``/``retry`` is
-    not caught here -- it propagates to ``main()``'s own existing
-    broad except tuple, exactly like ``plan run``/``project start``
-    already do; ``authorize_and_run_task`` has already durably updated
-    the task's own status before it re-raises, and ``retry`` delegates
-    to that exact, unmodified function.
+    ``authorize_and_list_tasks``/``authorize_and_cancel_task``/
+    ``authorize_and_schedule_task`` (WP-122) are sync, no wrapping
+    needed. Omits ``provider`` entirely on ``run``/``retry``, the same
+    real, deliberate scope limit ``_add_task_parsers``'s own docstring
+    already states. A real ``PlanningError``/``PlanValidationError``
+    from ``run``/``retry`` is not caught here -- it propagates to
+    ``main()``'s own existing broad except tuple, exactly like ``plan
+    run``/``project start`` already do; ``authorize_and_run_task`` has
+    already durably updated the task's own status before it re-raises,
+    and ``retry`` delegates to that exact, unmodified function. A real
+    ``ValueError`` from ``schedule`` (an invalid or naive timestamp,
+    see ``authorize_and_schedule_task``) is likewise not caught here --
+    it propagates to the same broad except tuple, which already
+    catches ``ValueError`` for every other subcommand.
     """
     if args.task_command == "create":
         create_outcome = authorize_and_create_task(
@@ -2072,6 +2099,22 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             task_retried=retry_outcome.retried,
             task_status=retry_outcome.status,
             task_reason=retry_outcome.reason,
+        )
+
+    if args.task_command == "schedule":
+        schedule_outcome = authorize_and_schedule_task(
+            args.task_id,
+            args.scheduled_at,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            schedule_outcome.decision,
+            "task schedule",
+            task_scheduled=schedule_outcome.scheduled,
+            task_scheduled_at=schedule_outcome.scheduled_at,
+            task_reason=schedule_outcome.reason,
         )
 
     list_outcome = authorize_and_list_tasks(
@@ -2523,6 +2566,8 @@ class _CommandOutcome:
     stale_task_ids: frozenset[str] = frozenset()
     task_cancelled: bool | None = None
     task_retried: bool | None = None
+    task_scheduled: bool | None = None
+    task_scheduled_at: str | None = None
     route_result: RouteResult | None = None
     route_execution_result: object | None = None
     route_task_id: str | None = None
@@ -2713,6 +2758,8 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
     print(f"{record.identifier}: goal={data.get('goal')!r} status={data.get('status')}")
     if data.get("reason") is not None:
         print(f"    reason: {data.get('reason')}")
+    if data.get("scheduled_at") is not None:
+        print(f"    scheduled_at: {data.get('scheduled_at')}")
     if stale:
         print(
             "    warning: no status update in over "
@@ -2721,7 +2768,7 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
         )
 
 
-def _print_task_outcome(outcome: _CommandOutcome) -> None:
+def _print_task_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- one branch per optional field
     """Print a task create/run/status/list subcommand's own real payload.
 
     Split out from :func:`_print_outcome` for the identical reason
@@ -2745,6 +2792,12 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:
         # here for the one real case that block skips entirely: no
         # task found at all, where `task_status` is `None`.
         if outcome.task_status is None and outcome.task_reason is not None:
+            print(f"reason: {outcome.task_reason}")
+    if outcome.task_scheduled is not None:
+        print(f"scheduled: {'true' if outcome.task_scheduled else 'false'}")
+        if outcome.task_scheduled:
+            print(f"scheduled_at: {outcome.task_scheduled_at}")
+        elif outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_record is not None:
         _print_one_task_record(outcome.task_record, stale=outcome.task_stale)

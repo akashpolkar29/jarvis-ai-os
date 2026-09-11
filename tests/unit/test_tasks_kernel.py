@@ -39,6 +39,7 @@ from jarvis.kernel.tasks import (
     authorize_and_list_tasks,
     authorize_and_retry_task,
     authorize_and_run_task,
+    authorize_and_schedule_task,
     derive_result_status,
     update_task_status,
 )
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
         TaskGetOutcome,
         TaskRetryOutcome,
         TaskRunOutcome,
+        TaskScheduleOutcome,
     )
 
 _NOW = datetime(2026, 9, 9, tzinfo=UTC)
@@ -201,6 +203,27 @@ async def _retry(  # noqa: PLR0913 -- one per fake-fixture pass-through
     )
 
 
+def _schedule(
+    tmp_path: Path,
+    task_id: str,
+    scheduled_at: str,
+    *,
+    physical_confirmation_available: bool = True,
+    remote_confirmation_available: bool = False,
+) -> TaskScheduleOutcome:
+    return authorize_and_schedule_task(
+        task_id,
+        scheduled_at,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+
 def test_create_writes_a_real_task_with_status_created(tmp_path: Path) -> None:
     outcome = _create(tmp_path, "build a thing")
 
@@ -218,6 +241,7 @@ def test_create_writes_a_real_task_with_status_created(tmp_path: Path) -> None:
         "created_at": _NOW.isoformat(),
         "updated_at": _NOW.isoformat(),
         "attempts": [],
+        "scheduled_at": None,
     }
 
 
@@ -1280,3 +1304,270 @@ async def test_retry_reuses_the_real_wp_120_claim_mechanism_refusing_a_running_r
 
     assert retry_outcome.retried is False
     assert retry_outcome.status == "running"
+
+
+def test_schedule_of_a_created_task_stores_a_real_canonical_utc_timestamp(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal to run later")
+    assert create_outcome.task_id is not None
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is True
+    assert schedule_outcome.scheduled_at == "2026-09-12T09:00:00+00:00"
+    assert schedule_outcome.reason is None
+    assert schedule_outcome.decision.granted is True
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["scheduled_at"] == "2026-09-12T09:00:00+00:00"
+    assert data["status"] == "created"  # WP-122: scheduling never changes status
+
+
+def test_schedule_canonicalizes_a_non_utc_offset_to_utc(tmp_path: Path) -> None:
+    """A real, non-UTC offset is accepted and converted, not rejected or stored verbatim."""
+    create_outcome = _create(tmp_path, "a goal in another timezone")
+    assert create_outcome.task_id is not None
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+05:00")
+
+    assert schedule_outcome.scheduled is True
+    assert schedule_outcome.scheduled_at == "2026-09-12T04:00:00+00:00"
+
+
+def test_schedule_rejects_a_naive_timestamp_with_no_real_lookup_or_write(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+
+    try:
+        _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00")
+    except ValueError as exc:
+        assert "scheduled_at" in str(exc)
+        assert "timezone" in str(exc)
+    else:
+        msg = "Expected ValueError for a naive timestamp."
+        raise AssertionError(msg)
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["scheduled_at"] is None  # type: ignore[index]
+
+
+def test_schedule_rejects_a_garbage_timestamp(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+
+    try:
+        _schedule(tmp_path, create_outcome.task_id, "not a timestamp at all")
+    except ValueError:
+        pass
+    else:
+        msg = "Expected ValueError for a garbage timestamp."
+        raise AssertionError(msg)
+
+
+def test_schedule_of_an_unknown_task_id_reports_not_found(tmp_path: Path) -> None:
+    schedule_outcome = _schedule(tmp_path, "task:no-such-id", "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.scheduled_at is None
+    assert schedule_outcome.reason == "No task found for this identifier."
+    assert schedule_outcome.decision.granted is True  # the lookup itself is Tier.ALLOW
+
+
+async def test_schedule_of_an_already_running_task_is_refused(tmp_path: Path) -> None:
+    goal = "a task already running"
+    create_outcome = _create(tmp_path, goal)
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, goal, _NOW)
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.reason == "Task is 'running'; only a 'created' task can be scheduled."
+
+
+async def test_schedule_of_an_already_completed_task_is_refused(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a trivial goal")
+    assert create_outcome.task_id is not None
+    await _run(tmp_path, create_outcome.task_id, "a trivial goal", "[]")
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.reason == "Task is 'completed'; only a 'created' task can be scheduled."
+
+
+async def test_schedule_of_a_failed_task_is_refused_scheduling_is_not_a_retry(
+    tmp_path: Path,
+) -> None:
+    """WP-122: scheduling must not become a back-door way to auto-retry a failed task."""
+    create_outcome = _create(tmp_path, "a goal that failed")
+    assert create_outcome.task_id is not None
+    try:
+        await _run(tmp_path, create_outcome.task_id, "a goal that failed", "not valid json")
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.reason == "Task is 'failed'; only a 'created' task can be scheduled."
+
+
+def test_schedule_of_a_cancelled_task_is_refused(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal a human gave up on")
+    assert create_outcome.task_id is not None
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+    assert cancel_outcome.cancelled is True
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.reason == (
+        "Task is 'cancelled'; only a 'created' task can be scheduled."
+    )
+
+
+def test_re_scheduling_a_still_created_task_overwrites_the_prior_scheduled_at(
+    tmp_path: Path,
+) -> None:
+    """A real substitute for a separate 'unschedule' verb -- reschedule by calling again."""
+    create_outcome = _create(tmp_path, "a goal rescheduled twice")
+    assert create_outcome.task_id is not None
+    first = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+    assert first.scheduled is True
+
+    second = _schedule(tmp_path, create_outcome.task_id, "2026-10-01T00:00:00+00:00")
+
+    assert second.scheduled is True
+    assert second.scheduled_at == "2026-10-01T00:00:00+00:00"
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["scheduled_at"] == "2026-10-01T00:00:00+00:00"  # type: ignore[index]
+
+
+def test_schedule_denied_without_confirmation_leaves_the_task_unscheduled(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+
+    schedule_outcome = _schedule(
+        tmp_path,
+        create_outcome.task_id,
+        "2026-09-12T09:00:00+00:00",
+        physical_confirmation_available=False,
+    )
+
+    assert schedule_outcome.scheduled is False
+    assert schedule_outcome.decision.granted is False
+    assert schedule_outcome.scheduled_at is None
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["scheduled_at"] is None  # type: ignore[index]
+
+
+async def test_scheduled_at_survives_a_run_transition_to_completed(tmp_path: Path) -> None:
+    """WP-122: update_task_status must preserve scheduled_at, exactly like created_at/attempts."""
+    create_outcome = _create(tmp_path, "a scheduled goal that will run")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    await _run(tmp_path, create_outcome.task_id, "a scheduled goal that will run", "[]")
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "completed"
+    assert data["scheduled_at"] == "2026-09-12T09:00:00+00:00"
+
+
+async def test_scheduled_at_survives_a_failed_run_and_a_subsequent_retry(
+    tmp_path: Path,
+) -> None:
+    """A scheduled task that fails, then is explicitly retried, keeps its own real schedule info."""
+    create_outcome = _create(tmp_path, "a scheduled goal that will fail then retry")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+    try:
+        await _run(
+            tmp_path,
+            create_outcome.task_id,
+            "a scheduled goal that will fail then retry",
+            "not valid json",
+        )
+    except PlanningError:
+        pass
+    else:
+        msg = "Expected PlanningError to propagate."
+        raise AssertionError(msg)
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id, "[]")
+
+    assert retry_outcome.retried is True
+    assert retry_outcome.status == "completed"
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["scheduled_at"] == "2026-09-12T09:00:00+00:00"  # type: ignore[index]
+
+
+def test_scheduled_at_survives_cancellation(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a scheduled goal that gets cancelled")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+
+    assert cancel_outcome.cancelled is True
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "cancelled"
+    assert data["scheduled_at"] == "2026-09-12T09:00:00+00:00"
+
+
+def test_a_legacy_task_record_with_no_scheduled_at_field_can_still_be_scheduled(
+    tmp_path: Path,
+) -> None:
+    """Backward compatibility: a real pre-WP-122 record (no "scheduled_at" key at all)."""
+    legacy_record: dict[str, object] = {
+        "kind": TASK_KIND,
+        "goal": "a goal created before WP-122 existed",
+        "status": "created",
+        "reason": None,
+        "created_at": _NOW.isoformat(),
+        "updated_at": _NOW.isoformat(),
+        "attempts": [],
+    }
+    write_outcome = authorize_and_remember(
+        legacy_record,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    get_outcome_before = _get(tmp_path, write_outcome.identifier)
+    assert get_outcome_before.record is not None
+    assert "scheduled_at" not in get_outcome_before.record.value.value  # type: ignore[operator]
+
+    schedule_outcome = _schedule(tmp_path, write_outcome.identifier, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is True
+    get_outcome_after = _get(tmp_path, write_outcome.identifier)
+    assert get_outcome_after.record is not None
+    assert get_outcome_after.record.value.value["scheduled_at"] == "2026-09-12T09:00:00+00:00"  # type: ignore[index]

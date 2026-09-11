@@ -90,6 +90,7 @@ from jarvis.kernel.tasks import (
     TaskListOutcome,
     TaskRetryOutcome,
     TaskRunOutcome,
+    TaskScheduleOutcome,
 )
 from jarvis.kernel.worker import WorkerPassOutcome, WorkerTaskOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
@@ -3242,6 +3243,143 @@ def test_task_retry_subcommand_reports_not_found_without_a_status_line(
 def test_task_retry_subcommand_requires_task_id() -> None:
     with pytest.raises(SystemExit):
         main(["task", "retry"])
+
+
+def test_task_schedule_subcommand_reports_a_successful_schedule(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[tuple[str, str]] = []
+
+    def fake_authorize_and_schedule_task(
+        task_id: str,
+        scheduled_at: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskScheduleOutcome:
+        received.append((task_id, scheduled_at))
+        decision = _make_decision(granted=True, capability_id="memory.update")
+        return TaskScheduleOutcome(
+            decision=decision,
+            scheduled=True,
+            scheduled_at="2026-09-12T09:00:00+00:00",
+            reason=None,
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_schedule_task",
+        fake_authorize_and_schedule_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "schedule",
+            "task:1",
+            "--at",
+            "2026-09-12T09:00:00+00:00",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == [("task:1", "2026-09-12T09:00:00+00:00")]
+    assert exit_code == 0
+    assert "scheduled: true" in captured.out
+    assert "scheduled_at: 2026-09-12T09:00:00+00:00" in captured.out
+
+
+def test_task_schedule_subcommand_reports_a_refused_schedule_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_schedule_task(
+        task_id: str,  # noqa: ARG001
+        scheduled_at: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskScheduleOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskScheduleOutcome(
+            decision=decision,
+            scheduled=False,
+            scheduled_at=None,
+            reason="Task is 'completed'; only a 'created' task can be scheduled.",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_schedule_task",
+        fake_authorize_and_schedule_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "schedule",
+            "task:1",
+            "--at",
+            "2026-09-12T09:00:00+00:00",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "scheduled: false" in captured.out
+    assert "Task is 'completed'; only a 'created' task can be scheduled." in captured.out
+
+
+def test_task_schedule_subcommand_surfaces_a_naive_timestamp_valueerror_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real ValueError from authorize_and_schedule_task propagates to main()'s own broad catch."""
+
+    def fake_authorize_and_schedule_task(
+        task_id: str,  # noqa: ARG001
+        scheduled_at: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskScheduleOutcome:
+        msg = "scheduled_at must include an explicit timezone offset"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_schedule_task",
+        fake_authorize_and_schedule_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "schedule",
+            "task:1",
+            "--at",
+            "2026-09-12T09:00:00",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error: scheduled_at must include an explicit timezone offset" in captured.err
+
+
+def test_task_schedule_subcommand_requires_task_id_and_at() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "schedule"])
+    with pytest.raises(SystemExit):
+        main(["task", "schedule", "task:1"])
 
 
 def test_task_worker_once_reports_a_claimed_run(

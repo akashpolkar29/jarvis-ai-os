@@ -29,7 +29,7 @@ module never touches `compare_and_update_value`/
 already-real `claimed` field (`TaskRunOutcome.claimed`, WP-120) to
 know whether *this* call actually executed anything -- see
 `kernel.tasks`'s own module docstring for the full claim-mechanism
-reasoning (the real `BEGIN IMMEDIATE`-based compare-and-swap, why only
+reasoning (the real, `fcntl.flock()`-based compare-and-swap, why only
 the "created" -> "running" transition needed it, why two independent
 processes calling this module's own `run_pending_tasks_once` for the
 same task can never both execute it).
@@ -68,14 +68,36 @@ wired into `kernel.capability_dispatch.PLAN_STEP_EXECUTORS` -- no
 submission capability exists there today, and this module adds none.
 A worker automating task execution does not, and structurally cannot,
 automate job-application submission.
+
+**WP-122 (2026-09-12): deterministic one-time local scheduling.** A
+task's own, real, additive `scheduled_at` field (`kernel.tasks`'s own
+WP-122 section) is the one new thing this module's discovery step
+consults -- a `"created"` task with no `scheduled_at` at all (every
+task created before this work package existed, and every task created
+after it that was never scheduled) is eligible exactly as before,
+unchanged. A `"created"` task that *is* scheduled is only added to
+this pass's own `attempted` set once its own `scheduled_at` has
+genuinely passed a real `ClockPort.now()` -- checked fresh, every
+pass, never cached. A scheduled task that is not yet due is silently
+excluded from `attempted` entirely, exactly as if discovery itself had
+not returned it -- it is not an error, and it is not reported as a
+"loss." **No second claim mechanism**: this due-time check is a pure,
+local, read-only filter over what this pass will *attempt*; the real
+mutual-exclusion guarantee (two workers never both executing the same
+task) still comes entirely from the one, real, unmodified claim inside
+`authorize_and_run_task` itself -- the due-time check merely decides
+who gets to *try*, exactly the same way the existing `"created"`
+status filter already does.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
 
+from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.kernel.tasks import authorize_and_list_tasks, authorize_and_run_task
 
 if TYPE_CHECKING:
@@ -94,6 +116,31 @@ _ELIGIBLE_STATUS = "created"
 new "queued" status (see this module's own originating work package: do not activate a
 reserved status, or invent a new one, without proving it is genuinely needed). A task already
 "running" is never re-discovered by a later pass -- it is not `"created"` anymore."""
+
+
+def _is_due(data: object, now: datetime) -> bool:
+    """Whether a real `"created"` task record's own `scheduled_at` (if any) has passed (WP-122).
+
+    `True` for every task with no real `scheduled_at` string at all --
+    the existing, unchanged, immediately-eligible behavior this work
+    package does not alter. `True` once a real, stored `scheduled_at`
+    is at or before `now`. A malformed, unparseable `scheduled_at`
+    (should never happen through `authorize_and_schedule_task`'s own
+    real validation, but a hand-edited or legacy-adjacent record is not
+    assumed impossible) is treated as due -- an honest, logged warning
+    is the caller's own responsibility, not this pure predicate's; see
+    `run_pending_tasks_once`'s own real handling immediately below.
+    """
+    if not isinstance(data, dict):
+        return True
+    scheduled_at = data.get("scheduled_at")
+    if not isinstance(scheduled_at, str):
+        return True
+    try:
+        parsed = datetime.fromisoformat(scheduled_at)
+    except ValueError:
+        return True
+    return parsed <= now
 
 
 @dataclass(frozen=True)
@@ -140,7 +187,11 @@ class WorkerPassOutcome:
             discovered and attempted, in the order
             `authorize_and_list_tasks` returned them. Empty if no
             `"created"` task existed at the moment this pass started
-            its own discovery step -- not an error.
+            its own discovery step -- not an error. WP-122: a
+            `"created"` task that is scheduled but not yet due is
+            excluded from this tuple entirely -- not attempted, not an
+            error, and not distinguishable here from never having
+            existed at all (see `_is_due`).
     """
 
     attempted: tuple[WorkerTaskOutcome, ...] = field(default_factory=tuple)
@@ -177,6 +228,12 @@ async def run_pending_tasks_once(  # noqa: PLR0913 -- one per composition-functi
     step itself, never bypasses authorization, and never auto-confirms
     anything (see module docstring).
 
+    WP-122: a `"created"` task whose own real `scheduled_at` has not
+    yet passed `now` is silently excluded from `attempted` entirely --
+    not attempted, not reported, exactly as if discovery had not
+    returned it (see module docstring's own WP-122 section and
+    `_is_due`).
+
     A real exception from one task's own `authorize_and_run_task` call
     is caught and recorded in that task's own `WorkerTaskOutcome.error`
     -- it never aborts the rest of this pass, and it is never silently
@@ -195,10 +252,13 @@ async def run_pending_tasks_once(  # noqa: PLR0913 -- one per composition-functi
         clock=clock,
         id_port=id_port,
     )
+    now = (clock or SystemClockAdapter()).now()
 
     attempted: list[WorkerTaskOutcome] = []
     for record in list_outcome.records:
         data = record.value.value
+        if not _is_due(data, now):
+            continue
         goal = data.get("goal") if isinstance(data, dict) else None
         if not isinstance(goal, str):
             _logger.warning(

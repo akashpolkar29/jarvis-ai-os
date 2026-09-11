@@ -10,14 +10,23 @@ in a single process.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.kernel.memory import authorize_and_remember
-from jarvis.kernel.tasks import authorize_and_cancel_task, authorize_and_create_task
-from jarvis.kernel.worker import WorkerPassOutcome, WorkerTaskOutcome, run_pending_tasks_once
+from jarvis.kernel.tasks import (
+    authorize_and_cancel_task,
+    authorize_and_create_task,
+    authorize_and_schedule_task,
+)
+from jarvis.kernel.worker import (
+    WorkerPassOutcome,
+    WorkerTaskOutcome,
+    _is_due,
+    run_pending_tasks_once,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -76,6 +85,21 @@ def _create(tmp_path: Path, goal: str) -> TaskCreateOutcome:
         clock=_FakeClock(),
         id_port=_SequentialIdPort(),
     )
+
+
+def _schedule(tmp_path: Path, task_id: str, scheduled_at: str) -> None:
+    outcome = authorize_and_schedule_task(
+        task_id,
+        scheduled_at,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert outcome.scheduled is True
 
 
 async def _run_pass(
@@ -211,3 +235,173 @@ def test_worker_task_outcome_is_a_real_frozen_dataclass() -> None:
 
     assert outcome.task_id == "t:1"
     assert outcome.error is None
+
+
+async def test_a_scheduled_task_not_yet_due_is_not_attempted(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal scheduled for the future")
+    assert create_outcome.task_id is not None
+    future = (_NOW + timedelta(hours=1)).isoformat()
+    _schedule(tmp_path, create_outcome.task_id, future)
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert pass_outcome.attempted == ()
+    assert pass_outcome.claimed_count == 0
+
+
+async def test_a_scheduled_task_exactly_at_now_is_due(tmp_path: Path) -> None:
+    """The real, chosen policy is <=, not <, for "is this due yet"."""
+    create_outcome = _create(tmp_path, "a goal scheduled for exactly now")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, _NOW.isoformat())
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert len(pass_outcome.attempted) == 1
+    assert pass_outcome.attempted[0].status == "completed"
+
+
+async def test_a_scheduled_task_in_the_past_is_due_and_runs_through_the_canonical_path(
+    tmp_path: Path,
+) -> None:
+    """The real, chosen missed-schedule policy: past due is simply due, executed once, now."""
+    create_outcome = _create(tmp_path, "a goal scheduled in the past")
+    assert create_outcome.task_id is not None
+    past = (_NOW - timedelta(hours=3)).isoformat()
+    _schedule(tmp_path, create_outcome.task_id, past)
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert len(pass_outcome.attempted) == 1
+    outcome = pass_outcome.attempted[0]
+    assert outcome.task_id == create_outcome.task_id
+    assert outcome.claimed is True
+    assert outcome.status == "completed"
+
+
+async def test_a_scheduled_task_executes_only_once_even_across_several_passes(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal scheduled in the past, run once")
+    assert create_outcome.task_id is not None
+    past = (_NOW - timedelta(hours=3)).isoformat()
+    _schedule(tmp_path, create_outcome.task_id, past)
+
+    first_pass = await _run_pass(tmp_path)
+    second_pass = await _run_pass(tmp_path)
+    third_pass = await _run_pass(tmp_path)
+
+    assert len(first_pass.attempted) == 1
+    assert first_pass.attempted[0].status == "completed"
+    assert second_pass.attempted == ()
+    assert third_pass.attempted == ()
+
+
+async def test_a_failed_scheduled_task_persists_failed_and_preserves_scheduled_at(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a goal scheduled in the past that fails")
+    assert create_outcome.task_id is not None
+    past = (_NOW - timedelta(hours=3)).isoformat()
+    _schedule(tmp_path, create_outcome.task_id, past)
+
+    pass_outcome = await _run_pass(tmp_path, plan_response="not valid json")
+
+    assert len(pass_outcome.attempted) == 1
+    outcome = pass_outcome.attempted[0]
+    assert outcome.claimed is True
+    assert outcome.error is not None
+    assert "PlanningError" in outcome.error
+
+
+async def test_a_cancelled_scheduled_task_is_never_discovered_or_run(tmp_path: Path) -> None:
+    """Scheduling composes safely with cancellation via the existing, unmodified status filter."""
+    create_outcome = _create(tmp_path, "a scheduled goal a human gave up on")
+    assert create_outcome.task_id is not None
+    past = (_NOW - timedelta(hours=3)).isoformat()
+    _schedule(tmp_path, create_outcome.task_id, past)
+    cancel_outcome = authorize_and_cancel_task(
+        create_outcome.task_id,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert cancel_outcome.cancelled is True
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert pass_outcome.attempted == ()
+
+
+async def test_an_unscheduled_task_is_attempted_immediately_unchanged_from_before_wp122(
+    tmp_path: Path,
+) -> None:
+    """A task with scheduled_at=None (every task's own real default) is eligible immediately."""
+    create_outcome = _create(tmp_path, "an ordinary, unscheduled goal")
+    assert create_outcome.task_id is not None
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert len(pass_outcome.attempted) == 1
+    assert pass_outcome.attempted[0].status == "completed"
+
+
+async def test_a_legacy_created_task_record_with_no_scheduled_at_key_is_immediately_eligible(
+    tmp_path: Path,
+) -> None:
+    """Backward compatibility: a real pre-WP-122 record (no "scheduled_at" key at all)."""
+    write_outcome = authorize_and_remember(
+        {
+            "kind": "task",
+            "status": "created",
+            "goal": "a legacy goal with no scheduled_at key",
+            "reason": None,
+        },
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert write_outcome.identifier is not None
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert len(pass_outcome.attempted) == 1
+    outcome = pass_outcome.attempted[0]
+    assert outcome.task_id == write_outcome.identifier
+    assert outcome.claimed is True
+    assert outcome.status == "completed"
+
+
+def test_is_due_treats_a_non_dict_record_value_as_due() -> None:
+    """A real, defensive branch -- never reachable via the real pipeline (see module docstring
+    and `_is_due`'s own), since `authorize_and_list_tasks` already filters to real task dicts,
+    but `_is_due` is a general-purpose pure predicate, tested directly on its own terms."""
+    assert _is_due("not a dict", _NOW) is True
+
+
+def test_is_due_treats_a_malformed_scheduled_at_string_as_due() -> None:
+    """Mirrors `authorize_and_schedule_task`'s own real validation guarantee that this should
+    never occur through the real write path -- still handled honestly, not assumed impossible."""
+    data = {"kind": "task", "status": "created", "scheduled_at": "not a real timestamp"}
+    assert _is_due(data, _NOW) is True
+
+
+def test_is_due_treats_no_scheduled_at_key_at_all_as_due() -> None:
+    assert _is_due({"kind": "task", "status": "created"}, _NOW) is True
+
+
+def test_is_due_treats_a_none_scheduled_at_as_due() -> None:
+    assert _is_due({"kind": "task", "status": "created", "scheduled_at": None}, _NOW) is True
+
+
+def test_is_due_treats_a_future_scheduled_at_as_not_due() -> None:
+    future = (_NOW + timedelta(hours=1)).isoformat()
+    assert _is_due({"kind": "task", "status": "created", "scheduled_at": future}, _NOW) is False

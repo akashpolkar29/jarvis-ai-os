@@ -241,12 +241,92 @@ two independent processes both retrying the same failed task race on
 the identical "failed" -> "running" compare-and-swap, and the same
 "running" -> "running" refusal closes the identical gap for a slower,
 later racer, with zero new locking code.
+
+**WP-122 (2026-09-12): deterministic one-time local scheduling.**
+Closes the gap between "a task exists, persisted" and "a task runs at
+a future time with nobody typing a command at that exact moment" --
+the smallest safe foundation, not a general-purpose workflow engine,
+not recurrence, not natural-language scheduling (all explicitly out of
+scope for this work package).
+
+**No new task status, deliberately** -- a scheduled task stays
+``"created"`` the whole time it is waiting; only one new, additive,
+backward-compatible field, ``scheduled_at`` (a real, UTC-canonicalized
+ISO-8601 string, or ``None``), is added to the stored record.
+``None`` (the default for every task created before or after this
+work package, and for every legacy record with no such key at all)
+means exactly what "created" already meant before this work package
+existed -- immediately eligible, unchanged. A non-``None``
+``scheduled_at`` means "eligible once this real time has passed,"
+checked by :func:`jarvis.kernel.worker.run_pending_tasks_once` against
+a real ``ClockPort.now()`` -- never a second status, never a second
+discovery mechanism, just one more, optional filter on top of the
+exact same ``"created"`` status the worker already discovers.
+:func:`authorize_and_schedule_task` (`jarvis task schedule <task_id>
+--at <iso8601>`) is the one, new, explicit write that sets it; only a
+task still ``"created"`` may be scheduled (see
+:data:`_SCHEDULABLE_STATUSES`'s own docstring for why ``"failed"`` is
+deliberately excluded -- scheduling is not a way to auto-retry).
+Calling it again on the same still-``"created"`` task simply
+overwrites the prior ``scheduled_at`` -- a real, deliberate substitute
+for a separate "unschedule" verb, which this work package investigated
+and did not find a genuine, independent need for (see
+:func:`authorize_and_schedule_task`'s own docstring).
+
+**Timezone policy**: :func:`_parse_aware_iso8601` rejects a naive
+(timezone-less) input outright, the identical real correctness fix
+``adapters/calendar.py`` already established (10-phase combined pass,
+Phase 10) for the identical real hazard -- a naive timestamp would
+make "is this due yet" ambiguous against an always-UTC
+``ClockPort.now()``. The accepted value is canonicalized to UTC before
+storage, so every later due-time comparison is a plain ``<=`` between
+two UTC-aware datetimes, never a conversion.
+
+**Missed-schedule policy, the simplest safe deterministic choice**: a
+``scheduled_at`` at or before the current real time is due, full stop
+-- whether that is because the worker just happens to be checking
+promptly, or because the worker was not running at all for hours and
+only just started. No catch-up logic, no "this was supposed to run
+three times while the laptop was asleep" accounting -- recurrence is
+explicitly out of this work package's own scope, so there is only ever
+one real due moment to miss or not miss, and a task already executed
+once naturally leaves ``"created"`` status, so the worker structurally
+cannot re-discover and re-run it on a later pass.
+
+**Duplicate-execution protection, entirely inherited, zero new locking
+code**: :func:`jarvis.kernel.worker.run_pending_tasks_once`'s own
+due-time check is a pure, local, read-only filter -- it decides which
+discovered tasks to *attempt*, nothing more. The actual claim (the
+real "created" -> "running" compare-and-swap) is the exact, unmodified
+WP-120 mechanism inside :func:`authorize_and_run_task` itself. Two
+independent worker processes racing on the same due, scheduled task
+both pass the identical due-time check (a benign, idempotent read) but
+only one of them wins the real CAS -- proven directly by a new,
+dedicated ``multiprocessing.Process`` test mirroring WP-120's/WP-121's
+own headline proof exactly.
+
+**Cancellation, retry, and authorization are all completely
+unaffected, by construction**: a cancelled task's own status is
+``"cancelled"``, not ``"created"``, so the worker's own, unchanged
+status filter already excludes it -- no scheduling-specific
+cancellation check was needed or added. Retrying a scheduled-then-
+failed task (WP-121) delegates directly to ``authorize_and_run_task``,
+which does not consult ``scheduled_at`` at all -- an explicit retry
+always runs immediately, exactly like retrying any other failed task,
+with the original ``scheduled_at`` preserved in the record purely as
+historical information. Scheduling a task is never itself
+authorization for what it will later do -- the real
+``physical_confirmation_available``/``remote_confirmation_available``
+flags passed to the *later*, separate worker-triggered
+``authorize_and_run_task`` call are what gate that run, completely
+independent of whatever flags were used (or not used) at schedule
+time.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.clock import SystemClockAdapter
@@ -366,6 +446,7 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
         "created_at": now,
         "updated_at": now,
         "attempts": [],
+        "scheduled_at": None,
     }
     write_outcome = authorize_and_remember(
         record,
@@ -420,7 +501,12 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     the record's own current value first (via the ``Tier.ALLOW``
     ``memory.get``, always granted, so this never itself blocks on
     confirmation), preserves every field it does not itself change,
-    and only then writes the merged result.
+    and only then writes the merged result. **WP-122**: this is why
+    ``scheduled_at`` (see :func:`authorize_and_schedule_task`) survives
+    every status transition unchanged -- running, retrying, or
+    cancelling a scheduled task never silently drops its own real
+    scheduled time, the exact same reasoning that already protects
+    ``created_at``/``attempts``.
 
     **WP-120: ``atomic``, deliberately opt-in, default ``False``.**
     When ``True``, the write is a real compare-and-swap
@@ -469,6 +555,8 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     now = resolved_clock.now().isoformat()
     existing_attempts = existing.get("attempts") if isinstance(existing, dict) else None
     attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
+    existing_scheduled_at = existing.get("scheduled_at") if isinstance(existing, dict) else None
+    scheduled_at = existing_scheduled_at if isinstance(existing_scheduled_at, str) else None
     if previous_status == "running" and status in ("completed", "failed", "cancelled"):
         # WP-121: one real, concluded execution attempt -- appended only when
         # a "running" task reaches a terminal status, never for the
@@ -495,6 +583,7 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         "created_at": created_at,
         "updated_at": now,
         "attempts": attempts,
+        "scheduled_at": scheduled_at,
     }
     if atomic:
         if existing is None:
@@ -1273,4 +1362,192 @@ async def authorize_and_retry_task(  # noqa: PLR0913 -- one per composition-func
         retried=run_outcome.claimed,
         status=run_outcome.status,
         reason=run_outcome.reason,
+    )
+
+
+def _parse_aware_iso8601(value: str, field_name: str) -> datetime:
+    """Parse `value` as ISO-8601, rejecting a naive (timezone-less) result (WP-122).
+
+    A deliberate, local duplicate of
+    `adapters/calendar.py::_parse_aware_iso8601`'s own, already-
+    established real bug fix (10-phase combined pass, Phase 10) rather
+    than a cross-import: `kernel/tasks.py` has no real reason to depend
+    on the calendar adapter, and this is a small, generic, timezone-
+    correctness check, not calendar-specific logic. The same real
+    hazard applies here -- `datetime.fromisoformat()` silently accepts
+    a string with no UTC offset (e.g. `"2026-09-12T09:00:00"`),
+    producing a naive `datetime` that would make "is this due yet"
+    comparisons against a real, always-UTC `ClockPort.now()` silently
+    ambiguous (whose timezone does the naive value mean?). Rejecting
+    it outright, rather than guessing a timezone, is the same safe
+    choice already made for calendar events.
+
+    Args:
+        value: The real, caller-supplied ISO-8601 string.
+        field_name: Which field this is, for a clear error message.
+
+    Raises:
+        ValueError: If `value` is not valid ISO-8601, or parses to a
+            naive `datetime` (no timezone offset).
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        msg = (
+            f"{field_name} must include an explicit timezone offset "
+            f"(e.g. '+00:00' or 'Z'), got {value!r} -- a naive datetime "
+            "would make 'is this due yet' ambiguous."
+        )
+        raise ValueError(msg)
+    return parsed
+
+
+_SCHEDULABLE_STATUSES = frozenset({"created"})
+"""The only real status authorize_and_schedule_task() will accept (WP-122).
+
+A task must still be `"created"` -- never attempted -- to be
+scheduled. `"running"`/`"completed"`/`"failed"`/`"cancelled"` are all
+refused: scheduling does not interact with retry (WP-121's own
+explicit, human-triggered retry remains the one real way to re-attempt
+a failed task -- this module deliberately does not let a caller
+"schedule a retry" by reusing this function on a `"failed"` task), and
+a `"cancelled"`/terminal task has nothing left to schedule.
+"""
+
+
+@dataclass(frozen=True)
+class TaskScheduleOutcome:
+    """The result of one authorize_and_schedule_task() call (WP-122).
+
+    Attributes:
+        decision: The most directly gating real ``Decision``. If no
+            task was found, or its current status is not
+            ``"created"``, this is the ``memory.get`` lookup's own
+            ``Decision`` (always granted, ``Tier.ALLOW``) -- nothing
+            past that point was attempted. Otherwise it is the real
+            ``memory.update`` ``Decision`` for the actual write of the
+            new ``scheduled_at`` value.
+        scheduled: ``True`` only if a real write setting
+            ``scheduled_at`` was attempted and granted.
+        scheduled_at: The real, canonical (UTC) ISO-8601 string that
+            was actually stored, if ``scheduled`` is ``True``. ``None``
+            otherwise -- never a fabricated echo of the caller's own
+            input when nothing was actually written.
+        reason: A real, human-readable explanation whenever
+            ``scheduled`` is ``False`` -- "no such task," or naming
+            the task's own current, non-schedulable status, or that
+            the write itself was not authorized. ``None`` when
+            ``scheduled`` is ``True``.
+    """
+
+    decision: Decision
+    scheduled: bool
+    scheduled_at: str | None
+    reason: str | None
+
+
+def authorize_and_schedule_task(  # noqa: PLR0913 -- one per composition-function pass-through
+    task_id: str,
+    scheduled_at: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+) -> TaskScheduleOutcome:
+    """Schedule a real task currently "created" to become due at `scheduled_at` (WP-122).
+
+    A real, narrow, additive operation -- this never changes the
+    task's own `status` (it stays `"created"`; see module docstring's
+    own WP-122 section for why no new status was introduced). Calling
+    this again on the same still-`"created"` task simply overwrites
+    the previously-stored `scheduled_at` with the new one -- a real,
+    deliberate way to reschedule without a separate "unschedule" verb
+    (see module docstring).
+
+    Scheduling itself is **not** authorization for the eventual run --
+    a real, separate, later `authorize_and_run_task` call (made by
+    `jarvis.kernel.worker.run_pending_tasks_once` once `scheduled_at`
+    has passed) still independently requires its own
+    `physical_confirmation_available`/`remote_confirmation_available`,
+    exactly like every other real caller. A scheduled timestamp carries
+    no pre-approval of anything a plan might later do.
+
+    `task_id` is a real identifier from a prior, granted
+    `authorize_and_create_task` call. `scheduled_at` is a real,
+    caller-supplied ISO-8601 timestamp with an explicit timezone
+    offset (see `_parse_aware_iso8601`) -- canonicalized to UTC before
+    storage, so a later due-time comparison against `ClockPort.now()`
+    (always UTC) is never a timezone-conversion question.
+
+    Raises:
+        ValueError: If `scheduled_at` is not a valid, timezone-aware
+            ISO-8601 timestamp -- raised before any real lookup or
+            write is attempted, mirroring `adapters/calendar.py`'s own
+            identical fail-fast convention.
+
+    Returns:
+        A ``TaskScheduleOutcome`` -- see its own docstring.
+    """
+    parsed = _parse_aware_iso8601(scheduled_at, "scheduled_at")
+    canonical_scheduled_at = parsed.astimezone(UTC).isoformat()
+
+    get_outcome = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    if get_outcome.record is None:
+        return TaskScheduleOutcome(
+            decision=get_outcome.decision,
+            scheduled=False,
+            scheduled_at=None,
+            reason="No task found for this identifier.",
+        )
+    data = get_outcome.record.value.value
+    current_status = data.get("status") if isinstance(data, dict) else None
+    goal = data.get("goal") if isinstance(data, dict) else None
+    reason = data.get("reason") if isinstance(data, dict) else None
+    created_at = data.get("created_at") if isinstance(data, dict) else None
+    attempts = data.get("attempts") if isinstance(data, dict) else None
+    if current_status not in _SCHEDULABLE_STATUSES or not isinstance(goal, str):
+        return TaskScheduleOutcome(
+            decision=get_outcome.decision,
+            scheduled=False,
+            scheduled_at=None,
+            reason=f"Task is {current_status!r}; only a 'created' task can be scheduled.",
+        )
+    record: dict[str, object] = {
+        "kind": TASK_KIND,
+        "goal": goal,
+        "status": current_status,
+        "reason": reason if isinstance(reason, str) else None,
+        "created_at": created_at,
+        "updated_at": (clock or SystemClockAdapter()).now().isoformat(),
+        "attempts": list(attempts) if isinstance(attempts, list) else [],
+        "scheduled_at": canonical_scheduled_at,
+    }
+    update_decision = _authorize_and_update_memory(
+        task_id,
+        record,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    return TaskScheduleOutcome(
+        decision=update_decision,
+        scheduled=update_decision.granted,
+        scheduled_at=canonical_scheduled_at if update_decision.granted else None,
+        reason=None if update_decision.granted else "Scheduling was not authorized.",
     )

@@ -149,6 +149,7 @@ async def test_a_granted_zero_step_plan_completes_and_is_recorded(tmp_path: Path
         "created_at": _NOW.isoformat(),
         "updated_at": _NOW.isoformat(),
         "attempts": [],
+        "scheduled_at": None,
     }
 
 
