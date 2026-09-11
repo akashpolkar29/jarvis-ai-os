@@ -1926,6 +1926,15 @@ cleanup gap (item 48) is unchanged, needing a new subsystem out of
 this work package's own scope. No code changed. See
 `docs/architecture/wp165-browser-observability-recheck.md`.
 
+## 66. ~~jarvis command discovery~~ -- RESOLVED/BUILT 2026-09-12 (WP-166)
+
+**Resolved/built, WP-166**. `jarvis do --help` gave zero indication of
+what it actually recognizes -- confirmed live before fixing. Added a
+real epilog listing nine concrete, live-verified example requests,
+pointing at `docs/protocol/README.md` for the full list rather than
+duplicating it. No new router, no LLM, no grammar/behavior change. See
+`docs/architecture/wp166-do-command-discovery.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

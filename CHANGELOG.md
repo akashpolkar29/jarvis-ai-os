@@ -295,6 +295,10 @@ replacement for either.
   granted, zero-result response -- previously printed nothing at all,
   the same gap WP-144/WP-163 already fixed elsewhere. See
   `docs/architecture/wp164-email-calendar-empty-result-messages.md`.
+- WP-166: `jarvis do --help` now shows nine real, live-verified example
+  requests it recognizes -- previously gave zero indication of what
+  it understood. No new router, no LLM, no grammar change. See
+  `docs/architecture/wp166-do-command-discovery.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

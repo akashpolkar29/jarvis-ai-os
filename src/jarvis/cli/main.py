@@ -893,7 +893,27 @@ def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPars
     which reads as a question-answering interface this is not.
     """
     do_parser = subparsers.add_parser(
-        "do", help="Route a typed, natural-language request (WP-104)."
+        "do",
+        help="Route a typed, natural-language request (WP-104).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples of deterministically recognized requests\n"
+            "(matched before any reasoning fallback; see\n"
+            "docs/protocol/README.md for the full, current list):\n"
+            '  jarvis do "recall my notes on the interview"\n'
+            '  jarvis do "remember the wifi password is..."\n'
+            '  jarvis do "read ~/todo.txt"\n'
+            '  jarvis do "find files *.py"\n'
+            '  jarvis do "search files TODO"\n'
+            '  jarvis do "recent files"\n'
+            '  jarvis do "task status <task-id>"\n'
+            '  jarvis do "list tasks"\n'
+            '  jarvis do "list scheduled tasks"\n'
+            "\n"
+            "A request that matches none of these falls back to a real\n"
+            "reasoning provider; one matching no real, wired capability at\n"
+            "all is reported back, never executed."
+        ),
     )
     do_parser.add_argument("text", help="The real, typed natural-language request.")
     _add_common_flags(do_parser)

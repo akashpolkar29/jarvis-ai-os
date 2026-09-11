@@ -4516,6 +4516,20 @@ def test_do_subcommand_requires_text() -> None:
         main(["do"])
 
 
+def test_do_subcommand_help_shows_real_recognized_command_examples(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WP-166: --help previously gave no indication of what jarvis do actually recognizes."""
+    with pytest.raises(SystemExit):
+        main(["do", "--help"])
+    captured = capsys.readouterr()
+
+    assert 'jarvis do "recall my notes' in captured.out
+    assert 'jarvis do "list tasks"' in captured.out
+    assert "ADR-" not in captured.out
+    assert "WP-" not in captured.out
+
+
 _EMAIL_COMMON_FLAGS = [
     "--imap-host",
     "imap.example.com",
