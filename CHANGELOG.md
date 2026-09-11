@@ -71,6 +71,15 @@ replacement for either.
   in-memory copy. No `AuditStoragePort` contract change, no new
   dependency. Proven by real `multiprocessing.Process` tests. See
   `docs/architecture/audit-chain-process-safety.md`.
+- A real `PermissionError` gap in `browser_automation.py`'s process
+  liveness check (`_process_is_really_gone()`), surfaced by WP-115's
+  own new multiprocessing test suite shifting real PID allocation on
+  a CI runner -- `os.kill(pid, 0)` raises `PermissionError`, not
+  `ProcessLookupError`, when `pid` has been recycled to an unrelated,
+  other-user-owned process after the one this adapter launched
+  already exited. Now treated identically to `ProcessLookupError`;
+  both `os.killpg()` call sites in the same module widened the same
+  way.
 - WP-113: a task left stuck at `"running"` permanently when a plan
   step's own real execution raised an exception other than
   `PlanningError`/`PlanValidationError` (e.g. `PathOutsideAllowedScopeError`,

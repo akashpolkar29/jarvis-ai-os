@@ -280,6 +280,46 @@ zero lines changed), `TaskStore`/router/UI behavior (none of
 touched), capability registration (`kernel/capabilities.py`, zero
 lines changed), and every existing CLI subcommand's own semantics.
 
+## A real, unrelated bug this work package's own CI run surfaced
+
+The first CI run for this work package failed on `py3.13` only (the
+`py3.12` matrix leg passed) in
+`tests/unit/adapters/test_browser_automation.py` -- a file this work
+package never touches. Investigated directly rather than assumed
+unrelated: `src/jarvis/adapters/browser_automation.py::_process_is_really_gone()`
+calls `os.kill(pid, 0)` to check whether a launched browser process is
+still alive, and already handled `ProcessLookupError` (the process is
+genuinely gone) but not `PermissionError` (the process exists *right
+now* but is owned by a different user) -- reachable only via real PID
+reuse, since a process this adapter itself spawned is always ours to
+signal. `test_browser_automation.py`'s own `_FakeProcess` hardcodes a
+placeholder pid (`4242`), assumed to never collide with anything real.
+
+This work package's own new test suite
+(`tests/unit/test_audit_storage_process_safety.py`) spawns 16 real
+`multiprocessing.Process` child processes per run, shifting the OS's
+real PID allocation space forward -- on that specific CI runner, this
+made `4242` collide with a real, unrelated, other-user-owned process
+already running there, triggering the latent, pre-existing
+`PermissionError` gap for the first time. Reproduced directly before
+fixing, not assumed: `os.kill(1, 0)` (PID 1, always real, always
+root-owned) raises the identical `PermissionError` under any ordinary,
+non-root user.
+
+**Fixed as part of this work package** (a second, code+tests commit on
+the same branch), since it was genuinely blocking this work package's
+own CI: `_process_is_really_gone()` now treats `PermissionError`
+identically to `ProcessLookupError` (both mean "whatever this adapter
+launched under this pid is no longer identifiable as alive"); the two
+`os.killpg()` call sites in the same module, which have the identical
+recycled-pid hazard, are widened the same way. A new, deterministic
+unit test (monkeypatching `os.kill` directly, not relying on real PID
+collision luck) proves the fix. This is a real, independent
+correctness fix to `browser_automation.py`, unrelated to the audit
+chain itself -- recorded here because this work package's own CI run
+is what surfaced it, not because it changes anything about audit-chain
+process safety.
+
 ## Residual limitations, stated plainly
 
 - **Not a signing/HMAC/external-anchor mechanism.** This closes the
