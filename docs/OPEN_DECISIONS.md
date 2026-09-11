@@ -1542,6 +1542,18 @@ have been dead code, not a real feature. No new
 `docs/architecture/wp130-ui-task-recovery-history.md` for the full
 account.
 
+## 39. ~~Worker exit codes on real error~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-132**. `jarvis task worker` always exited `0`
+regardless of a real per-task `error` -- a script/cron job/systemd
+unit had no way to detect a real failure except by parsing printed
+text. Now exits `1` if any task in a pass (or any pass in a bounded
+`--max-passes` run) had a real error, `0` otherwise; a task merely
+losing a claim race is unaffected. No change to
+`kernel.worker.run_pending_tasks_once` itself, no new task status, no
+new `CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp132-worker-operability.md` for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

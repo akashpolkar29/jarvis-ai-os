@@ -3807,9 +3807,38 @@ def test_task_worker_once_reports_a_not_claimed_task_and_a_real_error(
     )
     captured = capsys.readouterr()
 
-    assert exit_code == 0
+    # WP-132: a real per-task error makes --once exit non-zero, so a script/cron
+    # job/systemd unit can detect it without parsing printed text -- a "not claimed"
+    # (lost a race) outcome alone is not itself an error and does not trigger this.
+    assert exit_code == 1
     assert "task:lost-race -- not claimed (status: running)" in captured.out
     assert "task:malformed -- error: Malformed task record" in captured.out
+
+
+def test_task_worker_once_exits_zero_when_no_task_errored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A "not claimed" (lost a race) outcome alone is not an error -- exit code stays 0."""
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        return WorkerPassOutcome(
+            attempted=(
+                WorkerTaskOutcome(task_id="task:1", claimed=True, status="completed", reason=None),
+                WorkerTaskOutcome(
+                    task_id="task:2", claimed=False, status="running", reason="lost the race"
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+
+    exit_code = main(
+        ["task", "worker", "--once", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+
+    assert exit_code == 0
 
 
 _WORKER_MAX_PASSES = 3
@@ -3848,6 +3877,49 @@ def test_task_worker_max_passes_stops_deterministically_with_no_real_sleep(
     assert call_count == _WORKER_MAX_PASSES
     # one real sleep between each pass, never a trailing one after the last pass
     assert sleep_calls == [10.0] * (_WORKER_MAX_PASSES - 1)
+
+
+def test_task_worker_max_passes_exits_non_zero_if_any_pass_had_a_real_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-132: an error on an *earlier* pass still fails the whole bounded run, not just the last."""  # noqa: E501
+    call_count = 0
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return WorkerPassOutcome(
+                attempted=(
+                    WorkerTaskOutcome(
+                        task_id="task:1",
+                        claimed=False,
+                        status=None,
+                        reason=None,
+                        error="a real, first-pass error",
+                    ),
+                )
+            )
+        return WorkerPassOutcome(attempted=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+    monkeypatch.setattr(sys.modules["jarvis.cli.main"].time, "sleep", lambda _seconds: None)
+
+    exit_code = main(
+        [
+            "task",
+            "worker",
+            "--max-passes",
+            str(_WORKER_MAX_PASSES),
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 1
+    assert call_count == _WORKER_MAX_PASSES
 
 
 def test_task_subcommand_requires_a_real_task_command() -> None:

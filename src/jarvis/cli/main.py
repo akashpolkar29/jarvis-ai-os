@@ -1473,25 +1473,36 @@ def _run_task_worker(args: argparse.Namespace) -> int:
             chain_path=args.chain_path,
         )
 
+    def _pass_had_a_real_error(pass_outcome: WorkerPassOutcome) -> bool:
+        return any(outcome.error is not None for outcome in pass_outcome.attempted)
+
     if args.once:
-        _print_worker_pass(asyncio.run(_one_pass()))
-        return 0
+        pass_outcome = asyncio.run(_one_pass())
+        _print_worker_pass(pass_outcome)
+        # WP-132: a non-zero exit lets a script/cron job/systemd unit detect a real
+        # per-task error without parsing printed text -- the worker's own tolerant,
+        # never-abort-the-pass behavior (module docstring) is completely unchanged;
+        # this only changes what this CLI invocation reports to the OS afterward.
+        return 1 if _pass_had_a_real_error(pass_outcome) else 0
 
     print(
         "Running the background task worker -- polling every "
         f"{args.poll_interval_seconds}s. Press Ctrl+C to stop."
     )
     passes_run = 0
+    any_error = False
     try:
         while args.max_passes is None or passes_run < args.max_passes:
-            _print_worker_pass(asyncio.run(_one_pass()))
+            pass_outcome = asyncio.run(_one_pass())
+            _print_worker_pass(pass_outcome)
+            any_error = any_error or _pass_had_a_real_error(pass_outcome)
             passes_run += 1
             if args.max_passes is not None and passes_run >= args.max_passes:
                 break
             time.sleep(args.poll_interval_seconds)
     except KeyboardInterrupt:
         print("\nStopped.")
-    return 0
+    return 1 if any_error else 0
 
 
 def _run_listen(chain_path: Path, *, verbose: bool) -> int:

@@ -189,6 +189,14 @@ replacement for either.
   live session, so it could never practically fire. No new
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/wp130-ui-task-recovery-history.md`.
+- WP-132: `jarvis task worker` now exits `1` if any task in a pass
+  (or, for `--max-passes`, any pass in the whole run) had a real
+  `WorkerTaskOutcome.error`, `0` otherwise -- a script/cron job/
+  systemd unit can now detect a real failure via the exit code alone,
+  without parsing printed text. A task merely losing a claim race
+  (no error) still exits `0`, unchanged. No behavior change to
+  `kernel.worker.run_pending_tasks_once` itself. See
+  `docs/architecture/wp132-worker-operability.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check
