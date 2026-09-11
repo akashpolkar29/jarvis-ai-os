@@ -449,6 +449,20 @@ it.
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/run-refuses-cancelled-task.md` and
   `docs/OPEN_DECISIONS.md` item 27.
+  **Updated 2026-09-11 (WP-119)**: a real UI counterpart to task
+  cancellation — `jarvis ui` gained a real "Cancel" button and a
+  `POST /api/tasks/<id>/cancel` endpoint, reusing
+  `authorize_and_cancel_task` (WP-117) completely unmodified, the same
+  way `POST /api/tasks/<id>/run` (WP-112) already reuses
+  `authorize_and_run_task`. Unlike `/run`, no separate server-side goal
+  lookup is needed first — `authorize_and_cancel_task` already does
+  its own lookup internally. An unknown-but-well-formed task id
+  returns a real, granted "not found" result (`200`,
+  `cancelled: false`), not an HTTP 404 — only a genuinely empty task id
+  is rejected before any kernel call. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp119-task-cancellation-from-ui.md` and
+  `docs/OPEN_DECISIONS.md` item 28.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real

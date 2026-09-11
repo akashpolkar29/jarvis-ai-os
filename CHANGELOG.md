@@ -74,6 +74,13 @@ replacement for either.
   execution -- there is none to interrupt in this architecture. No new
   `CapabilityId`/`Effect`/`Tier`, no ADR. See
   `docs/architecture/task-cancellation.md`.
+- WP-119: a real "Cancel" button and `POST /api/tasks/<task_id>/cancel`
+  endpoint in `jarvis ui`, reusing `authorize_and_cancel_task`
+  (WP-117) completely unmodified -- the web UI's own counterpart to
+  `jarvis task cancel`. An unknown-but-well-formed task id returns a
+  real, granted "not found" result, not an HTTP 404. No new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp119-task-cancellation-from-ui.md`.
 
 ### Fixed
 

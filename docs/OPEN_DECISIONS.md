@@ -75,7 +75,7 @@ optional email/calendar connection flags; and the audit chain's
 real cross-process lost-write race (item 5, 2026-09-11, WP-115),
 closed via a real `fcntl.flock()`-protected re-read-and-merge inside
 `save()`, proven by real `multiprocessing.Process` tests -- no
-`AuditStoragePort` contract change, no new dependency. All items 1-27
+`AuditStoragePort` contract change, no new dependency. All items 1-28
 below are resolved, decided, or built -- nothing in this index remains
 open as of 2026-09-11 (a real, separate, narrower residual limitation
 of item 5's own fix -- a privileged adversary fabricating a wholesale
@@ -93,7 +93,10 @@ human retire a `"created"` task they no longer want run, or a stale
 in-flight execution (there is none to interrupt in this architecture);
 and a real fix closing the one gap item 26 itself opened (item 27,
 2026-09-11, WP-118) -- `authorize_and_run_task` now refuses to
-silently resume a `"cancelled"` task.
+silently resume a `"cancelled"` task; and a real UI counterpart to
+item 26 (item 28, 2026-09-11, WP-119) -- `jarvis ui` gained a real
+"Cancel" button and a `POST /api/tasks/<id>/cancel` endpoint, reusing
+`authorize_and_cancel_task` completely unmodified.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1192,6 +1195,30 @@ needed -- the existing `task run` print path already passes
 `status`/`reason` through generically. No new
 `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/run-refuses-cancelled-task.md` for the full
+account.
+
+## 28. ~~Task cancellation missing from `jarvis ui`~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-119**. A real UI counterpart to item 26 (WP-117):
+`jarvis ui`'s frontend gained a "Run" button (WP-112) and real task
+cancellation was added as a kernel capability and CLI subcommand
+(WP-117), but the UI itself never gained any way to trigger it -- a
+human chatting through the web UI had to drop to a separate terminal
+to cancel a task.
+
+`POST /api/tasks/<task_id>/cancel` reuses `authorize_and_cancel_task`
+(WP-117) completely unmodified -- the exact same function `jarvis task
+cancel` already calls. Unlike the `/run` endpoint, no separate
+server-side goal lookup is needed first, since
+`authorize_and_cancel_task` already does its own lookup internally. An
+unknown-but-well-formed task id is a real, granted lookup that simply
+found nothing (`200`, `cancelled: false`, a real reason), not an
+HTTP-layer 404 -- only a genuinely empty task id is rejected before any
+kernel call. A real "Cancel" button now appears next to "Run" on every
+`task_created` message; a real refusal (already finished) shows the
+real reason as a status line, not an error bubble. No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp119-task-cancellation-from-ui.md` for the full
 account.
 
 ## Maintaining this index
