@@ -1807,7 +1807,7 @@ argument-level correctness), a class of bug either present or absent
 for the whole package, not per-subcommand. No code changed. See
 `docs/architecture/wp156-e2e-smoke-suite-recheck.md`.
 
-## 58. `docs/ROADMAP.md` staleness (WP-124 through WP-156 not reflected) -- flagged, not fixed
+## 58. ~~`docs/ROADMAP.md` staleness (WP-124 through WP-156 not reflected)~~ -- RESOLVED/BUILT 2026-09-12 (WP-158)
 
 **Investigated, WP-157**, the closing review of this session's own
 10-work-package queue. `docs/ROADMAP.md`'s own real, work-package-level
@@ -1824,6 +1824,11 @@ attempted hastily inside a review pass. See
 the full review, including a proposed next-queue ordering and a
 (not-acted-on) recommendation that a new milestone tag may be
 warranted given 72 real commits since `v0.9.0`.
+
+**Resolved/built, WP-158**: one condensed, theme-grouped update added
+to `docs/ROADMAP.md`'s own M7 entry, covering WP-124 through WP-157
+without repeating each work package's own already-existing detail
+(pointed at instead). Structure preserved, no redesign.
 
 ## Maintaining this index
 
