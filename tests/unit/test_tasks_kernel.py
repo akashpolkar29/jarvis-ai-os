@@ -37,6 +37,7 @@ from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
+    authorize_and_recover_task,
     authorize_and_retry_task,
     authorize_and_run_task,
     authorize_and_schedule_task,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
         TaskCancelOutcome,
         TaskCreateOutcome,
         TaskGetOutcome,
+        TaskRecoverOutcome,
         TaskRetryOutcome,
         TaskRunOutcome,
         TaskScheduleOutcome,
@@ -138,6 +140,26 @@ def _cancel(
         database_path=tmp_path / "memory.sqlite3",
         embedding_port=_FakeEmbeddingPort(),
         clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+
+def _recover(
+    tmp_path: Path,
+    task_id: str,
+    now: datetime = _NOW,
+    *,
+    physical_confirmation_available: bool = True,
+    remote_confirmation_available: bool = False,
+) -> TaskRecoverOutcome:
+    return authorize_and_recover_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(now),
         id_port=_SequentialIdPort(),
     )
 
@@ -527,6 +549,156 @@ def test_get_reports_a_running_task_as_stale_once_past_the_real_threshold(
     # The real, stored status itself is never touched by detection alone.
     assert now_stale.record is not None
     assert now_stale.record.value.value["status"] == "running"  # type: ignore[index]
+
+
+def test_recover_of_a_genuinely_stale_running_task_transitions_to_failed(
+    tmp_path: Path,
+) -> None:
+    """WP-126: the headline recovery proof -- a real, stale task becomes retryable."""
+    create_outcome = _create(tmp_path, "a goal whose owner crashed")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal whose owner crashed", _NOW)
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id, past_threshold)
+
+    assert recover_outcome.recovered is True
+    assert recover_outcome.reason is None
+    assert recover_outcome.decision.granted is True
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "failed"
+    assert "stale" in str(data["reason"])
+    attempts = data["attempts"]
+    assert isinstance(attempts, list)
+    assert len(attempts) == 1
+    assert attempts[0]["status"] == "failed"
+    assert attempts[0]["started_at"] == _NOW.isoformat()
+
+
+def test_recover_refuses_a_task_that_is_not_running(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal never run")
+    assert create_outcome.task_id is not None
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id)
+
+    assert recover_outcome.recovered is False
+    assert "not 'running'" in str(recover_outcome.reason)
+
+
+def test_recover_refuses_a_running_task_that_is_not_yet_stale(tmp_path: Path) -> None:
+    """The real, deterministic staleness gate -- never recover a genuinely active task."""
+    create_outcome = _create(tmp_path, "a goal still genuinely running")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal still genuinely running", _NOW)
+    just_under = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS - 1)
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id, just_under)
+
+    assert recover_outcome.recovered is False
+    assert "not eligible for recovery" in str(recover_outcome.reason)
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "running"  # type: ignore[index]
+
+
+def test_recover_of_an_unknown_task_id_reports_not_found(tmp_path: Path) -> None:
+    recover_outcome = _recover(tmp_path, "mem:no-such-task")
+
+    assert recover_outcome.recovered is False
+    assert recover_outcome.reason == "No task found for this identifier."
+
+
+def test_recover_never_clobbers_a_task_that_legitimately_completed_first(
+    tmp_path: Path,
+) -> None:
+    """The real safety property: a genuine, concluded completion always wins.
+
+    `update_task_status(..., "completed", ...)` is the exact, real,
+    blind write `authorize_and_run_task` itself performs at its own
+    natural conclusion -- used directly here (rather than `_run`,
+    which cannot re-enter an already-"running" task at all, by
+    WP-120's own "running" -> "running" refusal) to put the task into
+    the state a real, still-alive owner would have left it in. A
+    recovery attempt against this exact task must see "completed", not
+    "running", via its own fresh, fast-path status check, and refuse
+    outright -- never touching the CAS, never overwriting real data.
+    The genuine, single-process-unreachable race against the CAS
+    itself (a completion landing *between* recovery's own read and its
+    write) is proven separately, by
+    `test_recover_never_wins_a_real_race_against_a_concurrent_completion`.
+    """
+    create_outcome = _create(tmp_path, "a goal that actually finishes")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal that actually finishes", _NOW)
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+
+    # The task genuinely, legitimately completes (the real write authorize_and_run_task
+    # itself performs at its own conclusion).
+    update_task_status(
+        create_outcome.task_id,
+        "a goal that actually finishes",
+        "completed",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(_NOW),
+        id_port=_SequentialIdPort(),
+    )
+    completed = _get(tmp_path, create_outcome.task_id)
+    assert completed.record is not None
+    assert completed.record.value.value["status"] == "completed"  # type: ignore[index]
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id, past_threshold)
+
+    assert recover_outcome.recovered is False
+    assert "not 'running'" in str(recover_outcome.reason)
+    still_completed = _get(tmp_path, create_outcome.task_id)
+    assert still_completed.record is not None
+    assert still_completed.record.value.value["status"] == "completed"  # type: ignore[index]
+
+
+async def test_recovered_task_can_then_be_retried_normally(tmp_path: Path) -> None:
+    """The real, whole point of WP-126 -- recovery re-opens the existing, unmodified retry path."""
+    create_outcome = _create(tmp_path, "a goal to recover then retry")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal to recover then retry", _NOW)
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+
+    recover_outcome = _recover(tmp_path, create_outcome.task_id, past_threshold)
+    assert recover_outcome.recovered is True
+
+    retry_outcome = await _retry(tmp_path, create_outcome.task_id)
+
+    assert retry_outcome.retried is True
+    assert retry_outcome.status == "completed"
+
+
+def test_recover_denied_without_confirmation_leaves_the_task_running(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, "a goal", _NOW)
+    past_threshold = _NOW + timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+
+    recover_outcome = _recover(
+        tmp_path,
+        create_outcome.task_id,
+        past_threshold,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+    )
+
+    assert recover_outcome.recovered is False
+    assert recover_outcome.decision.granted is False
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "running"  # type: ignore[index]
 
 
 async def test_get_of_a_completed_task_is_never_reported_stale_no_matter_how_old(

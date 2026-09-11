@@ -1481,6 +1481,24 @@ made public so it can be shared) now backs a new `TaskGetOutcome.due`/
 ADR. See `docs/architecture/wp125-scheduled-task-due-visibility.md`
 for the full account.
 
+## 35. ~~Stale running task recovery~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-126**. A task whose owning process genuinely
+crashed while `"running"` had no path back to a retryable state --
+cancel is terminal (WP-117/WP-118), retry only accepts `"failed"`
+(WP-121), and the atomic claim structurally refuses any `"running"` ->
+`"running"` transition (WP-120). `authorize_and_recover_task`
+(`jarvis task recover <task_id>`) closes this with the narrowest
+transition: `"running"` (and stale, WP-116's own already-computed
+signal) -> `"failed"`, via a direct call to WP-120's already-hardened
+compare-and-swap primitive (not `update_task_status`'s shared atomic
+branch, left completely untouched) -- so a task that legitimately
+completes between the check and the write is never clobbered, proven
+directly by a real test. A real, six-process `multiprocessing.Process`
+test proves exactly one racer ever recovers the same stale task. No
+new task status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp126-stale-task-recovery.md` for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

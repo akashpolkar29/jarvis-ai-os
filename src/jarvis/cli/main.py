@@ -252,6 +252,7 @@ from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
+    authorize_and_recover_task,
     authorize_and_retry_task,
     authorize_and_run_task,
     authorize_and_schedule_task,
@@ -747,6 +748,18 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     cancel_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
     _add_common_flags(cancel_parser)
+
+    recover_parser = task_subparsers.add_parser(
+        "recover",
+        help=(
+            "Recover a real task stuck 'running' past the staleness threshold (WP-126), "
+            "e.g. after its owning process crashed. Refuses outright unless the task is "
+            "genuinely stale (see 'task status'). Transitions it to 'failed' via a real "
+            "compare-and-swap, after which 'task retry' works normally."
+        ),
+    )
+    recover_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    _add_common_flags(recover_parser)
 
     retry_parser = task_subparsers.add_parser(
         "retry",
@@ -2085,6 +2098,20 @@ def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
             task_reason=cancel_outcome.reason,
         )
 
+    if args.task_command == "recover":
+        recover_outcome = authorize_and_recover_task(
+            args.task_id,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            recover_outcome.decision,
+            "task recover",
+            task_recovered=recover_outcome.recovered,
+            task_reason=recover_outcome.reason,
+        )
+
     if args.task_command == "retry":
         retry_outcome = asyncio.run(
             authorize_and_retry_task(
@@ -2569,6 +2596,7 @@ class _CommandOutcome:
     task_due: bool = False
     due_task_ids: frozenset[str] = frozenset()
     task_cancelled: bool | None = None
+    task_recovered: bool | None = None
     task_retried: bool | None = None
     task_scheduled: bool | None = None
     task_scheduled_at: str | None = None
@@ -2813,6 +2841,10 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- o
     if outcome.task_cancelled is not None:
         print(f"cancelled: {'true' if outcome.task_cancelled else 'false'}")
         if not outcome.task_cancelled and outcome.task_reason is not None:
+            print(f"reason: {outcome.task_reason}")
+    if outcome.task_recovered is not None:
+        print(f"recovered: {'true' if outcome.task_recovered else 'false'}")
+        if outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_retried is not None:
         print(f"retried: {'true' if outcome.task_retried else 'false'}")

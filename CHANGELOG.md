@@ -144,6 +144,19 @@ replacement for either.
   `stale_task_ids` shape exactly. No new stored field, no new task
   status, no ADR. See
   `docs/architecture/wp125-scheduled-task-due-visibility.md`.
+- WP-126: `jarvis task recover <task_id>` -- the narrowest possible
+  transition to close the real gap left after WP-116/WP-117/WP-120: a
+  task whose owning process crashed had no path back to a retryable
+  state (cancel is terminal, retry only accepts `"failed"`, and the
+  atomic claim refuses any `"running"` -> `"running"` transition).
+  Refuses outright unless the task is genuinely `"running"` and past
+  WP-116's own staleness threshold; transitions it to `"failed"` via a
+  direct call to WP-120's already-hardened compare-and-swap primitive
+  (not `update_task_status`'s shared atomic branch, left untouched),
+  so a task that legitimately completes between the check and the
+  write is never clobbered. No new task status, no new
+  `CapabilityId`/`Effect`/`Tier`, no ADR. See
+  `docs/architecture/wp126-stale-task-recovery.md`.
 
 ### Fixed
 

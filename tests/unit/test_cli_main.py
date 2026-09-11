@@ -88,6 +88,7 @@ from jarvis.kernel.tasks import (
     TaskCreateOutcome,
     TaskGetOutcome,
     TaskListOutcome,
+    TaskRecoverOutcome,
     TaskRetryOutcome,
     TaskRunOutcome,
     TaskScheduleOutcome,
@@ -3382,6 +3383,86 @@ def test_task_cancel_subcommand_reports_a_refused_cancellation_with_its_reason(
 def test_task_cancel_subcommand_requires_task_id() -> None:
     with pytest.raises(SystemExit):
         main(["task", "cancel"])
+
+
+def test_task_recover_subcommand_reports_a_granted_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_recover_task(
+        task_id: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRecoverOutcome:
+        received.append(task_id)
+        decision = _make_decision(granted=True, capability_id="memory.update")
+        return TaskRecoverOutcome(decision=decision, recovered=True, reason=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_recover_task",
+        fake_authorize_and_recover_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "recover",
+            "task:1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["task:1"]
+    assert exit_code == 0
+    assert "recovered: true" in captured.out
+
+
+def test_task_recover_subcommand_reports_a_refused_recovery_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_recover_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskRecoverOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskRecoverOutcome(
+            decision=decision,
+            recovered=False,
+            reason=(
+                "Task is 'running' but has not exceeded the staleness threshold "
+                "(1800s); not eligible for recovery."
+            ),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_recover_task",
+        fake_authorize_and_recover_task,
+    )
+
+    exit_code = main(
+        ["task", "recover", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "recovered: false" in captured.out
+    assert "not eligible for recovery" in captured.out
+
+
+def test_task_recover_subcommand_requires_task_id() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "recover"])
 
 
 def test_task_retry_subcommand_reports_a_successful_retry(

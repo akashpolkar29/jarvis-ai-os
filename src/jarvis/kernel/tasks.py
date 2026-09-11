@@ -1293,6 +1293,207 @@ def authorize_and_cancel_task(  # noqa: PLR0913 -- one per composition-function 
     )
 
 
+_STALE_RECOVERY_REASON_PREFIX = "Recovered from a stale 'running' state (no progress for over"
+
+
+@dataclass(frozen=True)
+class TaskRecoverOutcome:
+    """The result of one authorize_and_recover_task() call (WP-126).
+
+    Attributes:
+        decision: The most directly gating real ``Decision``. If no
+            task was found, its current status is not ``"running"``,
+            or it is ``"running"`` but not yet stale, this is the
+            ``memory.get`` lookup's own ``Decision`` (always granted,
+            ``Tier.ALLOW``) -- nothing past that point was attempted.
+            Otherwise it is the real ``memory.update`` ``Decision`` for
+            the actual compare-and-swap transition to ``"failed"``.
+        recovered: ``True`` only if a real compare-and-swap
+            transitioning the task to ``"failed"`` was attempted,
+            granted, *and* actually applied (won the race).
+        reason: A real, human-readable explanation whenever
+            ``recovered`` is ``False`` -- "no such task," that the
+            task is not currently ``"running"``, that it has not yet
+            crossed the staleness threshold, that the transition
+            itself was not authorized, or that a real, concurrent
+            writer changed the task's state first. ``None`` when
+            ``recovered`` is ``True``.
+    """
+
+    decision: Decision
+    recovered: bool
+    reason: str | None
+
+
+def authorize_and_recover_task(  # noqa: PLR0913 -- one per composition-function pass-through
+    task_id: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
+) -> TaskRecoverOutcome:
+    """Recover a real task stuck ``"running"`` past WP-116's own staleness threshold (WP-126).
+
+    **The real gap this closes**: before this function existed, a task
+    whose owning process genuinely crashed (SIGKILL, OOM, machine
+    shutdown) had exactly one available action -- ``jarvis task
+    cancel`` -- which is terminal (WP-117/WP-118: a cancelled task can
+    never be retried or re-run). `jarvis task retry` only accepts
+    ``"failed"`` (WP-121), and `authorize_and_run_task`'s own atomic
+    claim structurally refuses any ``"running"`` -> ``"running"``
+    transition (WP-120's own decisive CI finding) -- so nothing could
+    ever move a genuinely abandoned task back to a retryable state.
+    This closes that gap with the narrowest possible transition:
+    ``"running"`` (and stale) -> ``"failed"``, after which
+    `jarvis task retry` already works, completely unmodified.
+
+    **The deterministic staleness gate, reused, not reinvented**: this
+    function refuses outright unless :attr:`TaskGetOutcome.stale` is
+    already ``True`` for this exact task -- the identical
+    :func:`_is_stale_running` predicate WP-116 already computes from
+    ``updated_at`` against a real ``ClockPort.now()``, with the
+    identical :data:`STALE_RUNNING_THRESHOLD_SECONDS` threshold. A
+    task that is merely old but still genuinely progressing (its own
+    ``updated_at`` keeps advancing) is never eligible, no matter how
+    many times this is called.
+
+    **Why this bypasses `update_task_status` and calls the real CAS
+    primitive directly, deliberately, not for convenience**: this
+    function's own initial staleness check is necessarily based on a
+    snapshot that can go stale itself between the read and the write
+    (the owning process might genuinely still be alive and about to
+    finish legitimately). `update_task_status`'s own ``atomic=True``
+    path already refuses a ``"running"`` -> ``"running"`` write, but
+    that check only protects the *claim* transition -- it does nothing
+    to stop a ``"running"`` -> ``"failed"`` write started against a
+    now-stale snapshot from silently overwriting a *different*,
+    genuinely-concluded real value (e.g. the owner legitimately
+    finished with ``"completed"`` moments before this call's own
+    write). Calling :func:`~jarvis.kernel.memory.authorize_and_compare_and_update`
+    directly, with the *exact* dict this function itself just read as
+    ``expected_value``, closes that gap precisely: the underlying
+    ``compare_and_update_value`` only ever applies if the record on
+    disk, at the moment of the write, is still byte-for-byte identical
+    to what was read -- any real, concurrent change (the owner
+    finishing, another recovery attempt, a cancellation) makes the
+    comparison fail cleanly, reporting ``recovered=False``, never
+    silently clobbering real data. This is the exact same, already-
+    audited primitive WP-120 built for the "created" -> "running" claim
+    -- reused unmodified for a second, narrow purpose, not a new
+    locking mechanism.
+
+    **Attempts history is preserved, not reset**: the new value keeps
+    every existing field (``created_at``, ``scheduled_at``, prior
+    ``attempts``) untouched except ``status``/``reason``/``updated_at``,
+    and appends one new attempt entry for this concluded "running"
+    span, mirroring :func:`update_task_status`'s own identical
+    attempts-append shape exactly -- so a recovered task's own history
+    shows a real, dated ``"failed"`` attempt, not a silent gap.
+
+    Returns:
+        A ``TaskRecoverOutcome`` -- see its own docstring.
+    """
+    get_outcome = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    if get_outcome.record is None:
+        return TaskRecoverOutcome(
+            decision=get_outcome.decision,
+            recovered=False,
+            reason="No task found for this identifier.",
+        )
+    data = get_outcome.record.value.value
+    current_status = data.get("status") if isinstance(data, dict) else None
+    goal = data.get("goal") if isinstance(data, dict) else None
+    if current_status != "running" or not isinstance(goal, str):
+        return TaskRecoverOutcome(
+            decision=get_outcome.decision,
+            recovered=False,
+            reason=(
+                f"Task is {current_status!r}, not 'running'; only a stale running "
+                "task can be recovered."
+            ),
+        )
+    if not get_outcome.stale:
+        return TaskRecoverOutcome(
+            decision=get_outcome.decision,
+            recovered=False,
+            reason=(
+                "Task is 'running' but has not exceeded the staleness threshold "
+                f"({int(STALE_RUNNING_THRESHOLD_SECONDS)}s); not eligible for recovery."
+            ),
+        )
+    resolved_clock = clock or SystemClockAdapter()
+    now = resolved_clock.now().isoformat()
+    assert isinstance(data, dict)  # noqa: S101 -- narrowed by the isinstance check above
+    existing_attempts = data.get("attempts")
+    attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
+    reason = f"{_STALE_RECOVERY_REASON_PREFIX} {int(STALE_RUNNING_THRESHOLD_SECONDS)}s)."
+    new_attempts = [
+        *attempts,
+        {
+            "attempt": len(attempts) + 1,
+            "started_at": data.get("updated_at"),
+            "ended_at": now,
+            "status": "failed",
+            "reason": reason,
+        },
+    ]
+    new_value: dict[str, object] = {
+        **data,
+        "status": "failed",
+        "reason": reason,
+        "updated_at": now,
+        "attempts": new_attempts,
+    }
+    cas_outcome = _authorize_and_cas_memory(
+        task_id,
+        data,
+        new_value,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=resolved_clock,
+        id_port=id_port,
+    )
+    if not cas_outcome.applied:
+        return TaskRecoverOutcome(
+            decision=cas_outcome.decision,
+            recovered=False,
+            reason=(
+                "Task changed state before recovery could be applied; not recovered."
+                if cas_outcome.decision.granted
+                else "Recovery was not authorized."
+            ),
+        )
+    (event_bus or EventBus()).publish(
+        TaskStatusChanged(
+            event_id=(id_port or UuidIdAdapter()).new_id(),
+            task_id=task_id,
+            goal=goal,
+            previous_status="running",
+            new_status="failed",
+            reason=reason,
+            timestamp=now,
+        )
+    )
+    return TaskRecoverOutcome(decision=cas_outcome.decision, recovered=True, reason=None)
+
+
 _RETRYABLE_STATUSES = frozenset({"failed"})
 """The only real status authorize_and_retry_task() will transition out of.
 
