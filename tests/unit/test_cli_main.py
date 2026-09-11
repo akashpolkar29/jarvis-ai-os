@@ -83,7 +83,13 @@ from jarvis.kernel.memory import MemoryRecallOutcome, MemoryWriteOutcome
 from jarvis.kernel.music import MusicCommand
 from jarvis.kernel.project import ProjectStartOutcome, ProjectStatusOutcome
 from jarvis.kernel.router import RouteOutcome
-from jarvis.kernel.tasks import TaskCreateOutcome, TaskGetOutcome, TaskListOutcome, TaskRunOutcome
+from jarvis.kernel.tasks import (
+    TaskCancelOutcome,
+    TaskCreateOutcome,
+    TaskGetOutcome,
+    TaskListOutcome,
+    TaskRunOutcome,
+)
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -3038,6 +3044,83 @@ def test_task_list_subcommand_prints_a_stale_warning_only_for_the_stale_task_id(
     fresh_index = next(i for i, line in enumerate(lines) if line.startswith("task:fresh:"))
     assert "may have crashed" in lines[stale_index + 1]
     assert fresh_index == len(lines) - 1 or "may have crashed" not in lines[fresh_index + 1]
+
+
+def test_task_cancel_subcommand_reports_a_granted_cancellation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received: list[str] = []
+
+    def fake_authorize_and_cancel_task(
+        task_id: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskCancelOutcome:
+        received.append(task_id)
+        decision = _make_decision(granted=True, capability_id="memory.update")
+        return TaskCancelOutcome(decision=decision, cancelled=True, reason=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_cancel_task",
+        fake_authorize_and_cancel_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "cancel",
+            "task:1",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received == ["task:1"]
+    assert exit_code == 0
+    assert "cancelled: true" in captured.out
+
+
+def test_task_cancel_subcommand_reports_a_refused_cancellation_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_cancel_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskCancelOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        return TaskCancelOutcome(
+            decision=decision,
+            cancelled=False,
+            reason="Task is already 'completed' and cannot be cancelled.",
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_cancel_task",
+        fake_authorize_and_cancel_task,
+    )
+
+    exit_code = main(
+        ["task", "cancel", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "cancelled: false" in captured.out
+    assert "Task is already 'completed' and cannot be cancelled." in captured.out
+
+
+def test_task_cancel_subcommand_requires_task_id() -> None:
+    with pytest.raises(SystemExit):
+        main(["task", "cancel"])
 
 
 def test_task_subcommand_requires_a_real_task_command() -> None:

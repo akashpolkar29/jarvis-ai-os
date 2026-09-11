@@ -247,6 +247,7 @@ from jarvis.kernel.router import authorize_and_route
 from jarvis.kernel.tasks import (
     STALE_RUNNING_THRESHOLD_SECONDS,
     VALID_TASK_STATUSES,
+    authorize_and_cancel_task,
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
@@ -727,6 +728,16 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         help="Only show tasks with this exact status.",
     )
     _add_common_flags(list_parser)
+
+    cancel_parser = task_subparsers.add_parser(
+        "cancel",
+        help=(
+            "Cancel a real task still 'created' or 'running' (WP-117). Does not interrupt "
+            "any in-flight execution -- there is none to interrupt in this architecture."
+        ),
+    )
+    cancel_parser.add_argument("task_id", help="A real identifier from a prior 'task create'.")
+    _add_common_flags(cancel_parser)
 
 
 def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1920,6 +1931,20 @@ def _run_task_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             task_stale=get_outcome.stale,
         )
 
+    if args.task_command == "cancel":
+        cancel_outcome = authorize_and_cancel_task(
+            args.task_id,
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        return _CommandOutcome(
+            cancel_outcome.decision,
+            "task cancel",
+            task_cancelled=cancel_outcome.cancelled,
+            task_reason=cancel_outcome.reason,
+        )
+
     list_outcome = authorize_and_list_tasks(
         status=args.status,
         physical_confirmation_available=args.physical_confirmation_available,
@@ -2367,6 +2392,7 @@ class _CommandOutcome:
     task_records: tuple[MemoryRecord, ...] | None = None
     task_stale: bool = False
     stale_task_ids: frozenset[str] = frozenset()
+    task_cancelled: bool | None = None
     route_result: RouteResult | None = None
     route_execution_result: object | None = None
     route_task_id: str | None = None
@@ -2576,6 +2602,10 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:
     if outcome.task_status is not None:
         print(f"status: {outcome.task_status}")
         if outcome.task_reason is not None:
+            print(f"reason: {outcome.task_reason}")
+    if outcome.task_cancelled is not None:
+        print(f"cancelled: {'true' if outcome.task_cancelled else 'false'}")
+        if not outcome.task_cancelled and outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_record is not None:
         _print_one_task_record(outcome.task_record, stale=outcome.task_stale)

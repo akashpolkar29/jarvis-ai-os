@@ -33,6 +33,7 @@ from jarvis.kernel.tasks import (
     STALE_RUNNING_THRESHOLD_SECONDS,
     TASK_KIND,
     VALID_TASK_STATUSES,
+    authorize_and_cancel_task,
     authorize_and_create_task,
     authorize_and_get_task,
     authorize_and_list_tasks,
@@ -45,7 +46,12 @@ if TYPE_CHECKING:
     import pytest
 
     from jarvis.domain.evidence import Attempt
-    from jarvis.kernel.tasks import TaskCreateOutcome, TaskGetOutcome, TaskRunOutcome
+    from jarvis.kernel.tasks import (
+        TaskCancelOutcome,
+        TaskCreateOutcome,
+        TaskGetOutcome,
+        TaskRunOutcome,
+    )
 
 _NOW = datetime(2026, 9, 9, tzinfo=UTC)
 _ALL_TASKS_COUNT = 2
@@ -108,6 +114,25 @@ def _create(  # noqa: PLR0913 -- one per fake-fixture pass-through
         clock=_FakeClock(),
         id_port=id_port or _SequentialIdPort(),
         event_bus=event_bus,
+    )
+
+
+def _cancel(
+    tmp_path: Path,
+    task_id: str,
+    *,
+    physical_confirmation_available: bool = True,
+    remote_confirmation_available: bool = False,
+) -> TaskCancelOutcome:
+    return authorize_and_cancel_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
     )
 
 
@@ -661,3 +686,141 @@ def test_omitting_event_bus_is_a_harmless_no_op_matching_prior_behavior(tmp_path
     outcome = _create(tmp_path, "build a thing")  # no event_bus at all
 
     assert outcome.task_id is not None  # unchanged, real behavior -- no crash, no new requirement
+
+
+def test_cancel_of_a_created_task_transitions_it_to_cancelled(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal nobody wants anymore")
+    assert create_outcome.task_id is not None
+
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+
+    assert cancel_outcome.cancelled is True
+    assert cancel_outcome.decision.granted is True
+    assert cancel_outcome.reason is None
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "cancelled"
+    assert data["goal"] == "a goal nobody wants anymore"
+    assert data["created_at"] == _NOW.isoformat()  # preserved, not clobbered
+
+
+def test_cancel_of_a_stale_running_task_transitions_it_to_cancelled(tmp_path: Path) -> None:
+    """A human giving up on a task whose owning process has already died (WP-116's own signal)."""
+    create_outcome = _create(tmp_path, "a task whose process died")
+    assert create_outcome.task_id is not None
+    long_ago = _NOW - timedelta(seconds=STALE_RUNNING_THRESHOLD_SECONDS + 1)
+    _set_running_at(tmp_path, create_outcome.task_id, "a task whose process died", long_ago)
+
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+
+    assert cancel_outcome.cancelled is True
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "cancelled"  # type: ignore[index]
+    assert get_outcome.stale is False  # no longer "running" at all, so no longer stale either
+
+
+def test_cancel_of_an_unknown_task_id_reports_not_found(tmp_path: Path) -> None:
+    cancel_outcome = _cancel(tmp_path, "task:no-such-id")
+
+    assert cancel_outcome.cancelled is False
+    assert cancel_outcome.reason == "No task found for this identifier."
+    assert cancel_outcome.decision.granted is True  # the lookup itself is Tier.ALLOW
+
+
+async def test_cancel_of_an_already_completed_task_is_refused_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    create_outcome = _create(tmp_path, "a trivial goal")
+    assert create_outcome.task_id is not None
+    await _run(tmp_path, create_outcome.task_id, "a trivial goal", "[]")
+
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+
+    assert cancel_outcome.cancelled is False
+    assert cancel_outcome.reason == "Task is already 'completed' and cannot be cancelled."
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "completed"  # type: ignore[index]
+
+
+def test_cancel_of_an_already_cancelled_task_is_refused(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "cancel me twice")
+    assert create_outcome.task_id is not None
+    first = _cancel(tmp_path, create_outcome.task_id)
+    assert first.cancelled is True
+
+    second = _cancel(tmp_path, create_outcome.task_id)
+
+    assert second.cancelled is False
+    assert second.reason == "Task is already 'cancelled' and cannot be cancelled."
+
+
+def test_cancel_denied_without_confirmation_leaves_the_task_at_created(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+
+    cancel_outcome = _cancel(
+        tmp_path, create_outcome.task_id, physical_confirmation_available=False
+    )
+
+    assert cancel_outcome.cancelled is False
+    assert cancel_outcome.decision.granted is False
+    assert cancel_outcome.reason == "Cancellation was not authorized."
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "created"  # type: ignore[index]
+
+
+def test_cancel_publishes_a_real_status_changed_event(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    published: list[TaskStatusChanged] = []
+    bus = EventBus()
+    bus.subscribe(TaskStatusChanged, published.append)
+
+    outcome = authorize_and_cancel_task(
+        create_outcome.task_id,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        event_bus=bus,
+    )
+
+    assert outcome.cancelled is True
+    assert len(published) == 1
+    assert published[0].previous_status == "created"
+    assert published[0].new_status == "cancelled"
+
+
+def test_cancel_refused_for_a_terminal_status_publishes_no_event(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal")
+    assert create_outcome.task_id is not None
+    _cancel(tmp_path, create_outcome.task_id)  # first cancel: created -> cancelled
+    published: list[TaskStatusChanged] = []
+    bus = EventBus()
+    bus.subscribe(TaskStatusChanged, published.append)
+
+    outcome = authorize_and_cancel_task(
+        create_outcome.task_id,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        event_bus=bus,
+    )
+
+    assert outcome.cancelled is False
+    assert published == []

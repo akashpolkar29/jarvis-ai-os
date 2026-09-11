@@ -126,6 +126,35 @@ already defers to a real person for) is the safe, honest choice here.
 No new capability, no new ``Effect``/``Tier``, no schema change to
 what is actually persisted -- ``stale`` is a derived value computed
 fresh on every real read, never written to storage.
+
+**WP-117 (2026-09-11): real task cancellation, the first code path to
+ever reach the long-reserved ``"cancelled"`` status.** Closes the
+other half of the gap WP-116 could only surface, not act on: a human
+who sees a task reported ``stale`` (WP-116) -- or who simply changes
+their mind about a task still sitting at ``"created"`` -- had no real
+way to retire it. :func:`authorize_and_cancel_task` reuses
+:func:`authorize_and_get_task` (to read the current record) and
+:func:`update_task_status` (the identical ``memory.update`` transition
+every other status change already uses, ADR-0063) completely
+unmodified -- no new capability, ``Effect``, ``Tier``, or ADR.
+
+**A real, deliberate, narrow semantic, stated precisely so it is never
+mistaken for more than it is**: cancelling a ``"running"`` task does
+**not** interrupt any real, in-flight execution. There is no real
+in-flight execution to interrupt -- ``authorize_and_run_task`` runs
+synchronously to completion within a single call (and, via ``jarvis
+ui``'s own deliberately single-threaded server, WP-108, no second
+request can even be handled concurrently with it). What cancellation
+actually does is let a human retire a task's own stored status by
+hand, most usefully for exactly the two real situations where no other
+code path ever will: a ``"created"`` task the human no longer wants to
+run, and a ``"running"`` task whose owning process has already died
+(WP-116's own stale signal) and will never update it again on its own.
+
+Only ``"created"`` and ``"running"`` tasks may be cancelled -- a task
+already ``"completed"``, ``"failed"``, or ``"cancelled"`` is refused
+with a real, honest reason naming its current status, never silently
+accepted or silently ignored.
 """
 
 from __future__ import annotations
@@ -761,4 +790,109 @@ def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function p
     )
     return TaskListOutcome(
         decision=recall_outcome.decision, records=matching, stale_task_ids=stale_task_ids
+    )
+
+
+_CANCELLABLE_STATUSES = frozenset({"created", "running"})
+"""The only two real statuses authorize_and_cancel_task() will transition out of.
+
+A task already `"completed"`/`"failed"`/`"cancelled"` is a terminal,
+already-decided outcome -- cancelling it would not reflect anything
+real, so it is refused rather than silently accepted.
+"""
+
+
+@dataclass(frozen=True)
+class TaskCancelOutcome:
+    """The result of one authorize_and_cancel_task() call.
+
+    Attributes:
+        decision: The most directly gating real ``Decision``. If no
+            task was found, or its current status is not cancellable,
+            this is the ``memory.get`` lookup's own ``Decision``
+            (always granted, ``Tier.ALLOW``) -- nothing past that
+            point was attempted. Otherwise it is the real
+            ``memory.update`` ``Decision`` for the actual "cancelled"
+            transition.
+        cancelled: ``True`` only if a real write transitioning the
+            task to ``"cancelled"`` was attempted and granted.
+        reason: A real, human-readable explanation whenever
+            ``cancelled`` is ``False`` -- "no such task," or naming
+            the task's own current, non-cancellable status, or that
+            the transition itself was not authorized. ``None`` when
+            ``cancelled`` is ``True``.
+    """
+
+    decision: Decision
+    cancelled: bool
+    reason: str | None
+
+
+def authorize_and_cancel_task(  # noqa: PLR0913 -- one per composition-function pass-through
+    task_id: str,
+    *,
+    physical_confirmation_available: bool,
+    remote_confirmation_available: bool,
+    chain_path: Path,
+    database_path: Path | None = None,
+    embedding_port: EmbeddingPort | None = None,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
+) -> TaskCancelOutcome:
+    """Cancel a real task currently "created" or "running" (WP-117).
+
+    See the module docstring's own WP-117 section for the real,
+    deliberate limit this has: cancelling a `"running"` task does not
+    interrupt any in-flight execution (there is none to interrupt in
+    this architecture) -- it only retires a task's own stored status
+    for a human who has decided not to run it, or given up waiting on
+    one whose owning process has already died.
+
+    Returns:
+        A ``TaskCancelOutcome`` -- see its own docstring.
+    """
+    get_outcome = authorize_and_get_task(
+        task_id,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+    )
+    if get_outcome.record is None:
+        return TaskCancelOutcome(
+            decision=get_outcome.decision,
+            cancelled=False,
+            reason="No task found for this identifier.",
+        )
+    data = get_outcome.record.value.value
+    current_status = data.get("status") if isinstance(data, dict) else None
+    goal = data.get("goal") if isinstance(data, dict) else None
+    if current_status not in _CANCELLABLE_STATUSES or not isinstance(goal, str):
+        return TaskCancelOutcome(
+            decision=get_outcome.decision,
+            cancelled=False,
+            reason=f"Task is already {current_status!r} and cannot be cancelled.",
+        )
+    update_decision = update_task_status(
+        task_id,
+        goal,
+        "cancelled",
+        None,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+        database_path=database_path,
+        embedding_port=embedding_port,
+        clock=clock,
+        id_port=id_port,
+        event_bus=event_bus,
+    )
+    return TaskCancelOutcome(
+        decision=update_decision,
+        cancelled=update_decision.granted,
+        reason=None if update_decision.granted else "Cancellation was not authorized.",
     )
