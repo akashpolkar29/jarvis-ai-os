@@ -1499,6 +1499,21 @@ test proves exactly one racer ever recovers the same stale task. No
 new task status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp126-stale-task-recovery.md` for the full account.
 
+## 36. ~~Cancel/schedule blind-write races~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-127**. Found while implementing WP-126:
+`authorize_and_cancel_task`/`authorize_and_schedule_task` both built a
+new record from a read, then wrote it *blindly*. Cancel could silently
+revert a task that legitimately completed moments earlier; scheduling
+could silently revert a task a worker legitimately claimed moments
+earlier (a genuine duplicate-execution hazard). Both now call WP-120's
+already-hardened `authorize_and_compare_and_update` directly, with
+each function's own already-read snapshot as `expected_value` --
+`update_task_status`'s own shared atomic claim logic is untouched. No
+new task status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp127-cancel-and-schedule-race-hardening.md` for
+the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

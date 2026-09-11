@@ -160,6 +160,15 @@ replacement for either.
 
 ### Fixed
 
+- WP-127: `authorize_and_cancel_task`/`authorize_and_schedule_task`
+  no longer blindly overwrite a task record -- both now use WP-120's
+  already-hardened compare-and-swap primitive directly, closing two
+  real races: cancel silently reverting a task that legitimately
+  completed moments earlier, and scheduling silently reverting a
+  task a worker legitimately claimed moments earlier (a genuine
+  duplicate-execution hazard, not merely a lost update).
+  `update_task_status`'s own shared atomic claim logic is untouched.
+  See `docs/architecture/wp127-cancel-and-schedule-race-hardening.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

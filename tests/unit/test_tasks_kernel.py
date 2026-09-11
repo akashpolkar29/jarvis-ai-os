@@ -1166,6 +1166,60 @@ def test_cancel_refused_for_a_terminal_status_publishes_no_event(tmp_path: Path)
     assert published == []
 
 
+def test_cancel_never_clobbers_a_task_that_legitimately_completed_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP-127: the real safety property -- a genuine, concluded completion always wins.
+
+    Before WP-127, `authorize_and_cancel_task` built its new record
+    from whatever it read and wrote it *blindly* -- if a real, still-
+    alive owner legitimately completed this exact task between that
+    read and the write, cancel's own blind write would silently revert
+    the real completion back to "cancelled", discarding it. This is
+    now a real compare-and-swap instead. Simulated here in a single
+    process by making `authorize_and_cancel_task`'s own internal
+    lookup return a snapshot captured *before* a real, genuine
+    completion that has already landed on disk by the time the write
+    is attempted -- the exact, real ordering a genuine race would
+    produce, without needing multiprocessing to reproduce reliably for
+    an operation with no slow step to widen the window against.
+    """
+    create_outcome = _create(tmp_path, "a goal that finishes during cancel's own read")
+    assert create_outcome.task_id is not None
+    _set_running_at(
+        tmp_path, create_outcome.task_id, "a goal that finishes during cancel's own read", _NOW
+    )
+    stale_snapshot = _get(tmp_path, create_outcome.task_id)
+    assert stale_snapshot.record is not None
+    assert stale_snapshot.record.value.value["status"] == "running"  # type: ignore[index]
+
+    update_task_status(
+        create_outcome.task_id,
+        "a goal that finishes during cancel's own read",
+        "completed",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(_NOW),
+        id_port=_SequentialIdPort(),
+    )
+    monkeypatch.setattr(
+        "jarvis.kernel.tasks.authorize_and_get_task", lambda *_a, **_k: stale_snapshot
+    )
+
+    cancel_outcome = _cancel(tmp_path, create_outcome.task_id)
+
+    assert cancel_outcome.cancelled is False
+    assert "changed state" in str(cancel_outcome.reason)
+    monkeypatch.undo()
+    final = _get(tmp_path, create_outcome.task_id)
+    assert final.record is not None
+    assert final.record.value.value["status"] == "completed"  # type: ignore[index]
+
+
 async def test_run_refuses_to_resume_an_already_cancelled_task(tmp_path: Path) -> None:
     """WP-118: the real gap WP-117 itself opened -- run must not silently undo a cancel."""
     create_outcome = _create(tmp_path, "a goal a human gave up on")
@@ -1587,6 +1641,62 @@ async def test_schedule_of_an_already_running_task_is_refused(tmp_path: Path) ->
 
     assert schedule_outcome.scheduled is False
     assert schedule_outcome.reason == "Task is 'running'; only a 'created' task can be scheduled."
+
+
+def test_schedule_never_reverts_a_task_a_worker_legitimately_claimed_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP-127: the real safety property -- a genuine, concurrent claim always wins.
+
+    Before WP-127, `authorize_and_schedule_task` built its new record
+    from whatever it read -- including the task's own `status` -- and
+    wrote it *blindly*. If a real worker legitimately claimed this
+    exact task ("created" -> "running") between that read and the
+    write, scheduling's own blind write would silently revert the real
+    claim back to "created", making the task claimable *again* by a
+    second worker -- a genuine duplicate-execution hazard, not merely
+    a lost update. Simulated here exactly like the identical cancel
+    regression test: `authorize_and_schedule_task`'s own internal
+    lookup is made to return a snapshot from before the real claim
+    that has already landed on disk by the time the write is
+    attempted.
+    """
+    goal = "a goal a worker claims during scheduling's own read"
+    create_outcome = _create(tmp_path, goal)
+    assert create_outcome.task_id is not None
+    stale_snapshot = _get(tmp_path, create_outcome.task_id)
+    assert stale_snapshot.record is not None
+    assert stale_snapshot.record.value.value["status"] == "created"  # type: ignore[index]
+
+    update_task_status(
+        create_outcome.task_id,
+        goal,
+        "running",
+        None,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(_NOW),
+        id_port=_SequentialIdPort(),
+        atomic=True,
+    )
+    monkeypatch.setattr(
+        "jarvis.kernel.tasks.authorize_and_get_task", lambda *_a, **_k: stale_snapshot
+    )
+
+    schedule_outcome = _schedule(tmp_path, create_outcome.task_id, "2026-09-12T09:00:00+00:00")
+
+    assert schedule_outcome.scheduled is False
+    assert "changed state" in str(schedule_outcome.reason)
+    monkeypatch.undo()
+    final = _get(tmp_path, create_outcome.task_id)
+    assert final.record is not None
+    final_data = final.record.value.value
+    assert isinstance(final_data, dict)
+    assert final_data["status"] == "running"
+    assert final_data.get("scheduled_at") is None
 
 
 async def test_schedule_of_an_already_completed_task_is_refused(tmp_path: Path) -> None:

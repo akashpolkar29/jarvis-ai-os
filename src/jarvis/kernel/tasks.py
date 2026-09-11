@@ -1272,25 +1272,65 @@ def authorize_and_cancel_task(  # noqa: PLR0913 -- one per composition-function 
             cancelled=False,
             reason=f"Task is already {current_status!r} and cannot be cancelled.",
         )
-    update_decision, _applied = update_task_status(
+    resolved_clock = clock or SystemClockAdapter()
+    now = resolved_clock.now().isoformat()
+    assert isinstance(data, dict)  # noqa: S101 -- narrowed by the isinstance check above
+    existing_attempts = data.get("attempts")
+    attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
+    if current_status == "running":
+        # Mirrors update_task_status's own identical attempts-append condition --
+        # concluding a genuinely "running" span, never for "created" -> "cancelled".
+        attempts = [
+            *attempts,
+            {
+                "attempt": len(attempts) + 1,
+                "started_at": data.get("updated_at"),
+                "ended_at": now,
+                "status": "cancelled",
+                "reason": None,
+            },
+        ]
+    new_value: dict[str, object] = {
+        **data,
+        "status": "cancelled",
+        "reason": None,
+        "updated_at": now,
+        "attempts": attempts,
+    }
+    cas_outcome = _authorize_and_cas_memory(
         task_id,
-        goal,
-        "cancelled",
-        None,
+        data,
+        new_value,
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
         chain_path=chain_path,
         database_path=database_path,
         embedding_port=embedding_port,
-        clock=clock,
+        clock=resolved_clock,
         id_port=id_port,
-        event_bus=event_bus,
     )
-    return TaskCancelOutcome(
-        decision=update_decision,
-        cancelled=update_decision.granted,
-        reason=None if update_decision.granted else "Cancellation was not authorized.",
+    if not cas_outcome.applied:
+        return TaskCancelOutcome(
+            decision=cas_outcome.decision,
+            cancelled=False,
+            reason=(
+                "Task changed state before cancellation could be applied; not cancelled."
+                if cas_outcome.decision.granted
+                else "Cancellation was not authorized."
+            ),
+        )
+    (event_bus or EventBus()).publish(
+        TaskStatusChanged(
+            event_id=(id_port or UuidIdAdapter()).new_id(),
+            task_id=task_id,
+            goal=goal,
+            previous_status=current_status,
+            new_status="cancelled",
+            reason=None,
+            timestamp=now,
+        )
     )
+    return TaskCancelOutcome(decision=cas_outcome.decision, cancelled=True, reason=None)
 
 
 _STALE_RECOVERY_REASON_PREFIX = "Recovered from a stale 'running' state (no progress for over"
@@ -1798,8 +1838,16 @@ def authorize_and_schedule_task(  # noqa: PLR0913 -- one per composition-functio
         "attempts": list(attempts) if isinstance(attempts, list) else [],
         "scheduled_at": canonical_scheduled_at,
     }
-    update_decision = _authorize_and_update_memory(
+    # WP-127: a real compare-and-swap, not a blind overwrite -- `record` above was
+    # built from `data`, read moments earlier. Without this, a worker legitimately
+    # claiming this exact task ("created" -> "running") between that read and this
+    # write would have its own real claim silently reverted back to "created" by
+    # this call's own stale `current_status` snapshot -- a genuine, real hazard for
+    # duplicate execution (the reverted task becomes claimable again), not merely a
+    # lost update. See docs/architecture/wp127-cancel-and-schedule-race-hardening.md.
+    cas_outcome = _authorize_and_cas_memory(
         task_id,
+        data,
         record,
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
@@ -1809,9 +1857,20 @@ def authorize_and_schedule_task(  # noqa: PLR0913 -- one per composition-functio
         clock=clock,
         id_port=id_port,
     )
+    if not cas_outcome.applied:
+        return TaskScheduleOutcome(
+            decision=cas_outcome.decision,
+            scheduled=False,
+            scheduled_at=None,
+            reason=(
+                "Task changed state before scheduling could be applied; not scheduled."
+                if cas_outcome.decision.granted
+                else "Scheduling was not authorized."
+            ),
+        )
     return TaskScheduleOutcome(
-        decision=update_decision,
-        scheduled=update_decision.granted,
-        scheduled_at=canonical_scheduled_at if update_decision.granted else None,
-        reason=None if update_decision.granted else "Scheduling was not authorized.",
+        decision=cas_outcome.decision,
+        scheduled=True,
+        scheduled_at=canonical_scheduled_at,
+        reason=None,
     )
