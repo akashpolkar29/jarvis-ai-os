@@ -1736,6 +1736,14 @@ default the intended, accepted behavior for them too? See
 `docs/architecture/wp151-task-retention-review.md` for the full
 investigation.
 
+**Update 2026-09-12 (WP-162)**: a real, already-existing, opt-in
+mitigation was found and live-verified, needing no new code --
+`jarvis memory pin <task_id>` already works on any task record today
+(`memory.pin` is identifier-agnostic, no `"kind"`-specific logic
+exists). This does not resolve the *default*-policy question above,
+still genuinely open, but means a user is not left with zero real
+control in the meantime. See `docs/architecture/wp162-task-retention-policy-preparation.md`.
+
 ## 53. ~~Configuration validation: worker flags~~ -- RESOLVED/BUILT 2026-09-12
 
 **Resolved/built, WP-152**. This project has no config-file loading
@@ -1871,6 +1879,18 @@ in place of the raw `FileNotFoundError`, naming the real binary and an
 install command. No change to sandboxing logic itself, no new
 capability/`Effect`/`Tier`, no ADR. See
 `docs/architecture/wp161-sandbox-missing-binary-diagnostics.md`.
+
+## 62. Task retention policy preparation -- infrastructure found, policy still open (WP-162)
+
+**Investigated, WP-162**. Per this work package's own explicit
+instruction not to choose the retention policy (item 52) on the
+user's behalf: checked whether safe, neutral infrastructure could
+help without deciding it. Found `jarvis memory pin <task_id>` already
+works on any task record today, needing no new code (`memory.pin` has
+no `"kind"`-specific logic) — live-verified end to end. Documented as
+an available, opt-in mitigation; the real, system-wide default-policy
+question in item 52 remains genuinely open, unresolved by design. See
+`docs/architecture/wp162-task-retention-policy-preparation.md`.
 
 ## Maintaining this index
 

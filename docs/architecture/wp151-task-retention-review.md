@@ -80,3 +80,24 @@ See `docs/OPEN_DECISIONS.md` item 52. The real question for the user:
 should task records (and/or the job-application ledger) be pinned, or
 given their own longer retention, or is the shared 90-day default
 memory retention the intended, accepted behavior for them too?
+
+## Update 2026-09-12 (WP-162): a real, already-existing, opt-in mitigation
+
+Investigated whether any real, neutral infrastructure could be added
+that helps without choosing the policy above on the user's behalf.
+**Found, live-verified, and confirmed to need no new code**: `memory.pin`
+(`jarvis memory pin <identifier>`) already operates on any record by
+identifier regardless of its own `"kind"` marker — `SqliteMemoryAdapter.pin()`
+is a plain `UPDATE ... SET expires_at = NULL WHERE identifier = ?`,
+with no `"kind"`-specific logic anywhere. A real task id is a valid
+identifier for it. Verified directly: `jarvis task create` → `jarvis
+memory pin <task_id>` → `jarvis task status <task_id>` still reads and
+prints the pinned task's own record correctly, unaffected by pinning.
+
+This means a user who wants a *specific* task's history preserved
+indefinitely can already do so today, one task at a time, with zero
+new code — a real, safe, opt-in tool while the broader default-policy
+question above remains genuinely open. This does not resolve item 52
+(a *default*, system-wide retention policy is still undecided) — it
+only means the user is not left with zero real options in the
+meantime. No code changed; this is a documentation-only finding.
