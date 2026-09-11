@@ -1468,6 +1468,19 @@ no new stored field, no kernel change, no ADR. See
 `docs/architecture/wp124-task-observability-presentation.md` for the
 full account.
 
+## 34. ~~Scheduled task due/not-due visibility~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-125**. `jarvis task status`/`jarvis task list`
+printed a scheduled task's raw `scheduled_at` timestamp but never
+whether it had actually passed yet. `is_task_due` (WP-122's own
+due-time predicate, moved from `kernel.worker` into `kernel.tasks` and
+made public so it can be shared) now backs a new `TaskGetOutcome.due`/
+`TaskListOutcome.due_task_ids` pair, mirroring WP-116's `stale`/
+`stale_task_ids` shape exactly -- printed only alongside
+`scheduled_at` itself. No new stored field, no new task status, no
+ADR. See `docs/architecture/wp125-scheduled-task-due-visibility.md`
+for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

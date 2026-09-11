@@ -966,6 +966,37 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
     return TaskRunOutcome(decision=plan_decision, status=status, reason=reason)
 
 
+def is_task_due(data: object, now: datetime) -> bool:
+    """Whether a real `"created"` task record's own `scheduled_at` (if any) has passed (WP-122).
+
+    `True` for every task with no real `scheduled_at` string at all --
+    the existing, unchanged, immediately-eligible behavior WP-122
+    established. `True` once a real, stored `scheduled_at` is at or
+    before `now`. A malformed, unparseable `scheduled_at` (should
+    never happen through `authorize_and_schedule_task`'s own real
+    validation, but a hand-edited or legacy-adjacent record is not
+    assumed impossible) is treated as due -- an honest, logged warning
+    is the caller's own responsibility, not this pure predicate's.
+
+    **WP-124**: moved here from `kernel.worker` (which now imports
+    this exact, unmodified function instead of defining its own copy)
+    so `authorize_and_get_task`/`authorize_and_list_tasks` can also
+    derive a real, read-only "due" signal for display -- the same
+    "compute fresh, never persist, expose via the outcome" shape
+    :func:`_is_stale_running` already established for WP-116.
+    """
+    if not isinstance(data, dict):
+        return True
+    scheduled_at = data.get("scheduled_at")
+    if not isinstance(scheduled_at, str):
+        return True
+    try:
+        parsed = datetime.fromisoformat(scheduled_at)
+    except ValueError:
+        return True
+    return parsed <= now
+
+
 def _is_stale_running(data: object, now: datetime) -> bool:
     """Return whether a real task record's own dict is `"running"` and stale (WP-116).
 
@@ -1005,11 +1036,20 @@ class TaskGetOutcome:
             signal that the process running it may have crashed, never
             an automatic verdict (see module docstring's own WP-116
             section for why this is detection only).
+        due: WP-124, real, read-only, computed fresh on every call,
+            never persisted. ``True`` only if ``record`` is real,
+            currently ``"created"``, has a real ``scheduled_at``, and
+            that time has passed a real ``ClockPort.now()`` --
+            meaningless (left ``False``) whenever ``scheduled_at`` is
+            absent or the task is no longer ``"created"``; callers
+            should gate display on ``scheduled_at is not None`` first,
+            exactly as they already do for ``stale``.
     """
 
     decision: Decision
     record: MemoryRecord | None
     stale: bool = False
+    due: bool = False
 
 
 def authorize_and_get_task(  # noqa: PLR0913 -- one per composition-function pass-through
@@ -1050,10 +1090,16 @@ def authorize_and_get_task(  # noqa: PLR0913 -- one per composition-function pas
         not isinstance(record.value.value, dict) or record.value.value.get("kind") != TASK_KIND
     ):
         record = None
-    stale = record is not None and _is_stale_running(
-        record.value.value, (clock or SystemClockAdapter()).now()
+    now = (clock or SystemClockAdapter()).now()
+    stale = record is not None and _is_stale_running(record.value.value, now)
+    data = record.value.value if record is not None else None
+    is_created_and_scheduled = (
+        isinstance(data, dict)
+        and data.get("status") == "created"
+        and isinstance(data.get("scheduled_at"), str)
     )
-    return TaskGetOutcome(decision=get_outcome.decision, record=record, stale=stale)
+    due = bool(is_created_and_scheduled) and is_task_due(data, now)
+    return TaskGetOutcome(decision=get_outcome.decision, record=record, stale=stale, due=due)
 
 
 @dataclass(frozen=True)
@@ -1075,11 +1121,17 @@ class TaskListOutcome:
             field, not a mutation of ``records`` itself, so the raw,
             real, stored record content stays exactly what was stored
             -- see module docstring's own WP-116 section.
+        due_task_ids: WP-124, real, read-only, computed fresh on every
+            call, never persisted -- the identifiers of every returned
+            record that is currently ``"created"``, has a real
+            ``scheduled_at``, and that time has passed. Mirrors
+            ``stale_task_ids``'s own shape exactly.
     """
 
     decision: Decision
     records: tuple[MemoryRecord, ...]
     stale_task_ids: frozenset[str] = frozenset()
+    due_task_ids: frozenset[str] = frozenset()
 
 
 def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function pass-through
@@ -1120,8 +1172,19 @@ def authorize_and_list_tasks(  # noqa: PLR0913 -- one per composition-function p
     stale_task_ids = frozenset(
         record.identifier for record in matching if _is_stale_running(record.value.value, now)
     )
+    due_task_ids = frozenset(
+        record.identifier
+        for record in matching
+        if isinstance(record.value.value, dict)
+        and record.value.value.get("status") == "created"
+        and isinstance(record.value.value.get("scheduled_at"), str)
+        and is_task_due(record.value.value, now)
+    )
     return TaskListOutcome(
-        decision=recall_outcome.decision, records=matching, stale_task_ids=stale_task_ids
+        decision=recall_outcome.decision,
+        records=matching,
+        stale_task_ids=stale_task_ids,
+        due_task_ids=due_task_ids,
     )
 
 

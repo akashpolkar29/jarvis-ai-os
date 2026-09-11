@@ -135,6 +135,15 @@ replacement for either.
   neither previously surfaced. Purely additive presentation; no new
   stored field, no ADR. See
   `docs/architecture/wp124-task-observability-presentation.md`.
+- WP-125: `jarvis task status`/`jarvis task list` now print a real
+  `due: true`/`due: false` line alongside `scheduled_at`. The due-time
+  predicate WP-122 originally wrote inside `kernel.worker` was moved
+  into `kernel.tasks` (made public) so it can be shared by the worker
+  and the two task-lookup composition functions -- `TaskGetOutcome.due`/
+  `TaskListOutcome.due_task_ids` mirror WP-116's `stale`/
+  `stale_task_ids` shape exactly. No new stored field, no new task
+  status, no ADR. See
+  `docs/architecture/wp125-scheduled-task-due-visibility.md`.
 
 ### Fixed
 

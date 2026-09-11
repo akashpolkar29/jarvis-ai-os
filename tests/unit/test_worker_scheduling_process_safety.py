@@ -8,7 +8,7 @@ real thing two independent `jarvis task worker` invocations would each
 call), not `authorize_and_run_task`/`authorize_and_retry_task`
 directly. This is the faithful, real-world shape WP-122 actually
 introduces: a task's own real `scheduled_at` due-time check
-(`jarvis.kernel.worker._is_due`) is a pure, local, read-only filter
+(`jarvis.kernel.tasks.is_task_due`, WP-124) is a pure, local, read-only filter
 over what one pass will *attempt* -- it adds no new locking of its
 own. The real mutual-exclusion guarantee this test proves still comes
 entirely from the exact, unmodified WP-120 claim mechanism inside

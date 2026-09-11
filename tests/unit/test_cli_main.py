@@ -3110,6 +3110,94 @@ def test_task_status_subcommand_prints_no_stale_warning_when_the_kernel_reports_
     assert "may have crashed" not in captured.out
 
 
+def test_task_status_subcommand_prints_due_alongside_scheduled_at(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-125: mirrors the stale-warning tests' own shape -- `due` is only printed with a schedule."""  # noqa: E501
+
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "created",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                    "scheduled_at": "2020-01-01T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record, due=True)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "scheduled_at: 2020-01-01T00:00:00+00:00" in captured.out
+    assert "due: true" in captured.out
+
+
+def test_task_status_subcommand_prints_no_due_line_when_there_is_no_schedule(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_get_task(
+        task_id: str,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskGetOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.get")
+        record = MemoryRecord(
+            identifier="task:1",
+            value=Tainted(
+                {
+                    "kind": "task",
+                    "goal": "a goal",
+                    "status": "created",
+                    "reason": None,
+                    "created_at": "2026-09-09T00:00:00+00:00",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                },
+                Provenance.user(),
+            ),
+            written_at=datetime(2026, 9, 9, tzinfo=UTC),
+            expires_at=None,
+        )
+        return TaskGetOutcome(decision=decision, record=record, due=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_get_task", fake_authorize_and_get_task
+    )
+
+    exit_code = main(
+        ["task", "status", "task:1", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "due:" not in captured.out
+
+
 def test_task_list_subcommand_prints_a_stale_warning_only_for_the_stale_task_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3161,6 +3249,62 @@ def test_task_list_subcommand_prints_a_stale_warning_only_for_the_stale_task_id(
     fresh_block = lines[fresh_index:]
     assert any("may have crashed" in line for line in stale_block)
     assert not any("may have crashed" in line for line in fresh_block)
+
+
+def test_task_list_subcommand_prints_due_true_only_for_the_due_task_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-125: mirrors the stale-task-ids list test's own shape exactly."""
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+
+        def _record(identifier: str) -> MemoryRecord:
+            return MemoryRecord(
+                identifier=identifier,
+                value=Tainted(
+                    {
+                        "kind": "task",
+                        "goal": identifier,
+                        "status": "created",
+                        "reason": None,
+                        "created_at": "2026-09-09T00:00:00+00:00",
+                        "updated_at": "2026-09-09T00:00:00+00:00",
+                        "scheduled_at": "2020-01-01T00:00:00+00:00",
+                    },
+                    Provenance.user(),
+                ),
+                written_at=datetime(2026, 9, 9, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        return TaskListOutcome(
+            decision=decision,
+            records=(_record("task:due"), _record("task:not-due")),
+            due_task_ids=frozenset({"task:due"}),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(["task", "list", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    lines = captured.out.splitlines()
+    due_index = next(i for i, line in enumerate(lines) if line.startswith("task:due:"))
+    not_due_index = next(i for i, line in enumerate(lines) if line.startswith("task:not-due:"))
+    due_block = lines[due_index:not_due_index]
+    not_due_block = lines[not_due_index:]
+    assert any("due: true" in line for line in due_block)
+    assert any("due: false" in line for line in not_due_block)
 
 
 def test_task_cancel_subcommand_reports_a_granted_cancellation(

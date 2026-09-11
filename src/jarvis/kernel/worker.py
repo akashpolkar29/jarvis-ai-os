@@ -94,11 +94,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from jarvis.adapters.clock import SystemClockAdapter
-from jarvis.kernel.tasks import authorize_and_list_tasks, authorize_and_run_task
+from jarvis.kernel.tasks import authorize_and_list_tasks, authorize_and_run_task, is_task_due
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -116,31 +115,6 @@ _ELIGIBLE_STATUS = "created"
 new "queued" status (see this module's own originating work package: do not activate a
 reserved status, or invent a new one, without proving it is genuinely needed). A task already
 "running" is never re-discovered by a later pass -- it is not `"created"` anymore."""
-
-
-def _is_due(data: object, now: datetime) -> bool:
-    """Whether a real `"created"` task record's own `scheduled_at` (if any) has passed (WP-122).
-
-    `True` for every task with no real `scheduled_at` string at all --
-    the existing, unchanged, immediately-eligible behavior this work
-    package does not alter. `True` once a real, stored `scheduled_at`
-    is at or before `now`. A malformed, unparseable `scheduled_at`
-    (should never happen through `authorize_and_schedule_task`'s own
-    real validation, but a hand-edited or legacy-adjacent record is not
-    assumed impossible) is treated as due -- an honest, logged warning
-    is the caller's own responsibility, not this pure predicate's; see
-    `run_pending_tasks_once`'s own real handling immediately below.
-    """
-    if not isinstance(data, dict):
-        return True
-    scheduled_at = data.get("scheduled_at")
-    if not isinstance(scheduled_at, str):
-        return True
-    try:
-        parsed = datetime.fromisoformat(scheduled_at)
-    except ValueError:
-        return True
-    return parsed <= now
 
 
 @dataclass(frozen=True)
@@ -191,7 +165,7 @@ class WorkerPassOutcome:
             `"created"` task that is scheduled but not yet due is
             excluded from this tuple entirely -- not attempted, not an
             error, and not distinguishable here from never having
-            existed at all (see `_is_due`).
+            existed at all (see `jarvis.kernel.tasks.is_task_due`).
     """
 
     attempted: tuple[WorkerTaskOutcome, ...] = field(default_factory=tuple)
@@ -232,7 +206,7 @@ async def run_pending_tasks_once(  # noqa: PLR0913 -- one per composition-functi
     yet passed `now` is silently excluded from `attempted` entirely --
     not attempted, not reported, exactly as if discovery had not
     returned it (see module docstring's own WP-122 section and
-    `_is_due`).
+    `jarvis.kernel.tasks.is_task_due`).
 
     A real exception from one task's own `authorize_and_run_task` call
     is caught and recorded in that task's own `WorkerTaskOutcome.error`
@@ -257,7 +231,7 @@ async def run_pending_tasks_once(  # noqa: PLR0913 -- one per composition-functi
     attempted: list[WorkerTaskOutcome] = []
     for record in list_outcome.records:
         data = record.value.value
-        if not _is_due(data, now):
+        if not is_task_due(data, now):
             continue
         goal = data.get("goal") if isinstance(data, dict) else None
         if not isinstance(goal, str):

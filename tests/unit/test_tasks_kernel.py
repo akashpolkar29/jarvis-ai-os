@@ -606,6 +606,33 @@ def test_list_reports_no_stale_task_ids_when_nothing_is_running(tmp_path: Path) 
     assert list_outcome.stale_task_ids == frozenset()
 
 
+def test_list_reports_due_task_ids_for_scheduled_tasks_whose_time_has_passed(
+    tmp_path: Path,
+) -> None:
+    """WP-125: mirrors `test_list_reports_stale_task_ids_...`'s own shape exactly."""
+    id_port = _SequentialIdPort()
+    due_one = _create(tmp_path, "a due goal", id_port=id_port)
+    not_due_one = _create(tmp_path, "a not-yet-due goal", id_port=id_port)
+    unscheduled_one = _create(tmp_path, "an unscheduled goal", id_port=id_port)
+    assert due_one.task_id is not None
+    assert not_due_one.task_id is not None
+    assert unscheduled_one.task_id is not None
+    _schedule(tmp_path, due_one.task_id, (_NOW - timedelta(hours=1)).isoformat())
+    _schedule(tmp_path, not_due_one.task_id, (_NOW + timedelta(hours=1)).isoformat())
+
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(_NOW),
+        id_port=id_port,
+    )
+
+    assert list_outcome.due_task_ids == {due_one.task_id}
+
+
 async def test_list_filters_by_status_and_ignores_ordinary_memories(tmp_path: Path) -> None:
     id_port = _SequentialIdPort()
     completed = _create(tmp_path, "task one", id_port=id_port)
@@ -1571,3 +1598,48 @@ def test_a_legacy_task_record_with_no_scheduled_at_field_can_still_be_scheduled(
     get_outcome_after = _get(tmp_path, write_outcome.identifier)
     assert get_outcome_after.record is not None
     assert get_outcome_after.record.value.value["scheduled_at"] == "2026-09-12T09:00:00+00:00"  # type: ignore[index]
+
+
+def test_get_reports_due_true_for_a_created_task_scheduled_in_the_past(tmp_path: Path) -> None:
+    """WP-125: mirrors TaskGetOutcome.stale's own "compute fresh, never persist" shape."""
+    create_outcome = _create(tmp_path, "a goal due right now")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, (_NOW - timedelta(hours=1)).isoformat())
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+
+    assert get_outcome.due is True
+
+
+def test_get_reports_due_false_for_a_created_task_scheduled_in_the_future(tmp_path: Path) -> None:
+    create_outcome = _create(tmp_path, "a goal not due yet")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, (_NOW + timedelta(hours=1)).isoformat())
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+
+    assert get_outcome.due is False
+
+
+def test_get_reports_due_false_for_an_unscheduled_created_task(tmp_path: Path) -> None:
+    """Not applicable (no real schedule to be due against) -- reported as False, not True."""
+    create_outcome = _create(tmp_path, "a goal with no schedule at all")
+    assert create_outcome.task_id is not None
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+
+    assert get_outcome.due is False
+
+
+async def test_get_reports_due_false_for_a_scheduled_task_that_already_ran(
+    tmp_path: Path,
+) -> None:
+    """A scheduled task that already ran is no longer "created" -- due is not meaningful."""
+    create_outcome = _create(tmp_path, "a goal that already ran")
+    assert create_outcome.task_id is not None
+    _schedule(tmp_path, create_outcome.task_id, (_NOW - timedelta(hours=1)).isoformat())
+    await _run(tmp_path, create_outcome.task_id, "a goal that already ran", "[]")
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+
+    assert get_outcome.due is False

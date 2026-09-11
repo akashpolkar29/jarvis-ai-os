@@ -20,11 +20,11 @@ from jarvis.kernel.tasks import (
     authorize_and_cancel_task,
     authorize_and_create_task,
     authorize_and_schedule_task,
+    is_task_due,
 )
 from jarvis.kernel.worker import (
     WorkerPassOutcome,
     WorkerTaskOutcome,
-    _is_due,
     run_pending_tasks_once,
 )
 
@@ -382,26 +382,27 @@ async def test_a_legacy_created_task_record_with_no_scheduled_at_key_is_immediat
 
 def test_is_due_treats_a_non_dict_record_value_as_due() -> None:
     """A real, defensive branch -- never reachable via the real pipeline (see module docstring
-    and `_is_due`'s own), since `authorize_and_list_tasks` already filters to real task dicts,
-    but `_is_due` is a general-purpose pure predicate, tested directly on its own terms."""
-    assert _is_due("not a dict", _NOW) is True
+    and `is_task_due`'s own, now living in `jarvis.kernel.tasks` per WP-124), since
+    `authorize_and_list_tasks` already filters to real task dicts, but `is_task_due` is a
+    general-purpose pure predicate, tested directly on its own terms."""
+    assert is_task_due("not a dict", _NOW) is True
 
 
 def test_is_due_treats_a_malformed_scheduled_at_string_as_due() -> None:
     """Mirrors `authorize_and_schedule_task`'s own real validation guarantee that this should
     never occur through the real write path -- still handled honestly, not assumed impossible."""
     data = {"kind": "task", "status": "created", "scheduled_at": "not a real timestamp"}
-    assert _is_due(data, _NOW) is True
+    assert is_task_due(data, _NOW) is True
 
 
 def test_is_due_treats_no_scheduled_at_key_at_all_as_due() -> None:
-    assert _is_due({"kind": "task", "status": "created"}, _NOW) is True
+    assert is_task_due({"kind": "task", "status": "created"}, _NOW) is True
 
 
 def test_is_due_treats_a_none_scheduled_at_as_due() -> None:
-    assert _is_due({"kind": "task", "status": "created", "scheduled_at": None}, _NOW) is True
+    assert is_task_due({"kind": "task", "status": "created", "scheduled_at": None}, _NOW) is True
 
 
 def test_is_due_treats_a_future_scheduled_at_as_not_due() -> None:
     future = (_NOW + timedelta(hours=1)).isoformat()
-    assert _is_due({"kind": "task", "status": "created", "scheduled_at": future}, _NOW) is False
+    assert is_task_due({"kind": "task", "status": "created", "scheduled_at": future}, _NOW) is False

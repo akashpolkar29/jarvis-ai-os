@@ -2068,6 +2068,7 @@ def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
             "task status",
             task_record=get_outcome.record,
             task_stale=get_outcome.stale,
+            task_due=get_outcome.due,
         )
 
     if args.task_command == "cancel":
@@ -2128,6 +2129,7 @@ def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
         "task list",
         task_records=list_outcome.records,
         stale_task_ids=list_outcome.stale_task_ids,
+        due_task_ids=list_outcome.due_task_ids,
     )
 
 
@@ -2564,6 +2566,8 @@ class _CommandOutcome:
     task_records: tuple[MemoryRecord, ...] | None = None
     task_stale: bool = False
     stale_task_ids: frozenset[str] = frozenset()
+    task_due: bool = False
+    due_task_ids: frozenset[str] = frozenset()
     task_cancelled: bool | None = None
     task_retried: bool | None = None
     task_scheduled: bool | None = None
@@ -2743,7 +2747,7 @@ def _print_project_outcome(outcome: _CommandOutcome) -> None:
         print("No project-goal record found for this goal.")
 
 
-def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None:
+def _print_one_task_record(record: MemoryRecord, *, stale: bool = False, due: bool = False) -> None:
     """Print one real task record's own fields -- shared by `task status` and `task list`.
 
     ``stale`` is WP-116's own real, read-only staleness signal (see
@@ -2756,8 +2760,12 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
     compact rendering of WP-121's own durable ``attempts`` history
     (every concluded execution attempt, not just the current one) --
     both already stored on every real task record, neither previously
-    printed anywhere. Purely additive presentation: no new stored
-    field, no change to `TaskGetOutcome`/`TaskListOutcome`'s own shape.
+    printed anywhere.
+
+    **WP-125**: ``due`` mirrors ``stale``'s own shape exactly (see
+    ``jarvis.kernel.tasks.is_task_due``) -- printed only alongside
+    ``scheduled_at`` itself, since due-ness is meaningless without a
+    real schedule to be due (or not yet due) against.
     """
     data = record.value.value
     if not isinstance(data, dict):
@@ -2768,6 +2776,7 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False) -> None
         print(f"    reason: {data.get('reason')}")
     if data.get("scheduled_at") is not None:
         print(f"    scheduled_at: {data.get('scheduled_at')}")
+        print(f"    due: {'true' if due else 'false'}")
     print(f"    updated_at: {data.get('updated_at')}")
     attempts = data.get("attempts")
     if isinstance(attempts, list) and attempts:
@@ -2821,12 +2830,16 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- o
         elif outcome.task_reason is not None:
             print(f"reason: {outcome.task_reason}")
     if outcome.task_record is not None:
-        _print_one_task_record(outcome.task_record, stale=outcome.task_stale)
+        _print_one_task_record(outcome.task_record, stale=outcome.task_stale, due=outcome.task_due)
     elif outcome.command_label == "task status":
         print("No task found for this identifier.")
     if outcome.task_records is not None:
         for record in outcome.task_records:
-            _print_one_task_record(record, stale=record.identifier in outcome.stale_task_ids)
+            _print_one_task_record(
+                record,
+                stale=record.identifier in outcome.stale_task_ids,
+                due=record.identifier in outcome.due_task_ids,
+            )
 
 
 def _print_do_outcome(outcome: _CommandOutcome) -> None:
