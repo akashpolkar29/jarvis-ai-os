@@ -716,6 +716,7 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
                 "goal": data.get("goal"),
                 "status": data.get("status"),
                 "reason": data.get("reason"),
+                "created_at": data.get("created_at"),
                 "updated_at": data.get("updated_at"),
                 "scheduled_at": data.get("scheduled_at"),
                 "due": get_outcome.due,

@@ -1627,6 +1627,16 @@ scheduler, no recurrence, no new `CapabilityId`/`Effect`/`Tier`, no
 ADR. See `docs/architecture/wp140-scheduler-inspection.md` for the
 full account.
 
+## 46. ~~Task diagnostic snapshot~~ -- RESOLVED (no new command) 2026-09-12
+
+**Resolved, WP-141**. Investigated a dedicated `jarvis task inspect
+<id>` command; found `jarvis task status`/`GET /api/tasks/<id>`
+already print/return everything asked for except `created_at`. Added
+that one field to the existing, shared output instead of building a
+near-duplicate command. No new persistence, no ADR. See
+`docs/architecture/wp141-task-diagnostic-created-at.md` for the full
+account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

@@ -234,6 +234,14 @@ replacement for either.
   inlined copy). Mutually exclusive with `--status`. No new
   `CapabilityId`/`Effect`/`Tier`, no ADR, no second scheduler. See
   `docs/architecture/wp140-scheduler-inspection.md`.
+- WP-141: `jarvis task status`/`jarvis task list`/`GET
+  /api/tasks/<id>` now also print/return `created_at` -- the one
+  real field investigation found missing from an otherwise-complete
+  diagnostic view (goal/status/reason/schedule/attempts/stale/due
+  already present since WP-124/125/130). A dedicated `jarvis task
+  inspect` command was considered and rejected as near-total
+  duplication of this existing output. See
+  `docs/architecture/wp141-task-diagnostic-created-at.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

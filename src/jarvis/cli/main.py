@@ -2848,6 +2848,14 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False, due: bo
     ``jarvis.kernel.tasks.is_task_due``) -- printed only alongside
     ``scheduled_at`` itself, since due-ness is meaningless without a
     real schedule to be due (or not yet due) against.
+
+    **WP-141**: also surfaces ``created_at`` (the one real, already-
+    stored timestamp this function had never printed) -- investigated
+    directly against WP-141's own "task inspect" ask and found this
+    output already covers goal/status/reason/schedule/attempts/stale/
+    due; a genuinely new, separate `jarvis task inspect` command would
+    have been near-total duplication of this exact function, so the
+    one real, missing field was added here instead.
     """
     data = record.value.value
     if not isinstance(data, dict):
@@ -2856,6 +2864,7 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False, due: bo
     print(f"{record.identifier}: goal={data.get('goal')!r} status={data.get('status')}")
     if data.get("reason") is not None:
         print(f"    reason: {data.get('reason')}")
+    print(f"    created_at: {data.get('created_at')}")
     if data.get("scheduled_at") is not None:
         print(f"    scheduled_at: {data.get('scheduled_at')}")
         print(f"    due: {'true' if due else 'false'}")

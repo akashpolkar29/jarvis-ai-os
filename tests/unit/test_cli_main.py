@@ -2833,6 +2833,7 @@ def test_task_status_subcommand_prints_a_found_record(
     assert received == ["task:1"]
     assert exit_code == 0
     assert "task:1: goal='continue the LiDAR project' status=completed" in captured.out
+    assert "created_at: 2026-09-09T00:00:00+00:00" in captured.out
     assert "updated_at: 2026-09-09T00:05:00+00:00" in captured.out
 
 

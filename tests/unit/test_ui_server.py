@@ -548,6 +548,7 @@ def test_get_task_status_includes_updated_at_scheduled_at_due_stale_and_attempts
     data = json.loads(resp.read())
 
     assert resp.status == HTTPStatus.OK
+    assert data["created_at"] is not None
     assert data["updated_at"] is not None
     assert data["scheduled_at"] is None
     assert data["due"] is False
