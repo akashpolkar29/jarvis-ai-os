@@ -443,6 +443,24 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
             # Nothing to atomically swap against -- the most honest real
             # answer is "this attempt did not apply," never a blind write.
             return get_outcome.decision, False
+        if status == "running" and previous_status == "running":
+            # WP-120's own real, decisive CI finding: a CAS alone is not
+            # enough. A second, later caller that reads the task as
+            # already "running" (because an earlier claimant already won)
+            # would otherwise have its OWN "running" write's own
+            # `expected_value` trivially match what is actually stored --
+            # nothing else changed in between its own read and its own
+            # write -- so the compare-and-swap itself would correctly
+            # succeed, even though "running" -> "running" is never a
+            # valid transition for ANY real caller to make. This check
+            # closes that gap directly: a "running" claim attempt is
+            # refused outright, with no CAS write even attempted, the
+            # moment the most recently read prior status is itself
+            # already "running" -- regardless of whether that status is
+            # fresh or stale. See the module docstring's own WP-120
+            # section for the full account of the real, multi-attempt CI
+            # investigation this closes.
+            return get_outcome.decision, False
         cas_outcome = _authorize_and_cas_memory(
             task_id,
             existing,

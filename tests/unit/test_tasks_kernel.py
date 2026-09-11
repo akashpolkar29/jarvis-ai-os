@@ -859,6 +859,38 @@ async def test_run_publishes_no_status_changed_event_for_an_already_cancelled_ta
     assert published == []
 
 
+async def test_run_refuses_to_claim_an_already_running_task(tmp_path: Path) -> None:
+    """WP-120's own real, decisive CI finding: a CAS alone is not enough.
+
+    A second, independent `run` call reaching `update_task_status`
+    after the task is *already* `"running"` would otherwise have its
+    own `expected_value` trivially match what is actually stored
+    (nothing else changed between its own read and its own write), so
+    the compare-and-swap itself would incorrectly succeed at a bogus
+    "running" -> "running" transition -- exactly what let two real,
+    independent processes both believe they owned the same task at
+    the same real instant on CI. This is the single-process,
+    deterministic regression test for that exact bug: a task already
+    `"running"` must never be re-claimed, regardless of staleness.
+    """
+    goal = "a task someone else is already running"
+    create_outcome = _create(tmp_path, goal)
+    assert create_outcome.task_id is not None
+    _set_running_at(tmp_path, create_outcome.task_id, goal, _NOW)
+
+    run_outcome = await _run(tmp_path, create_outcome.task_id, goal, "[]")
+
+    assert run_outcome.claimed is False
+    assert run_outcome.status == "running"
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    assert get_outcome.record.value.value["status"] == "running"  # type: ignore[index]
+    # The original updated_at (when it started "running") must be untouched --
+    # a bogus re-claim would have overwritten it with a fresh timestamp.
+    assert get_outcome.record.value.value["updated_at"] == _NOW.isoformat()  # type: ignore[index]
+
+
 async def test_run_still_works_normally_on_a_task_that_was_never_cancelled(
     tmp_path: Path,
 ) -> None:
