@@ -219,6 +219,14 @@ replacement for either.
   local, read-only filter over the same real result. No new
   registered `CapabilityId`/`Effect`/`Tier`, no ADR, no voice
   grammar. See `docs/architecture/wp136-task-list-status-filter.md`.
+- WP-139: `jarvis task worker --dry-run` -- a real, read-only
+  inspection of which `"created"` tasks are currently eligible/due,
+  reusing `authorize_and_list_tasks`'s own already-computed
+  `due_task_ids` (WP-125) directly. Never claims or runs anything;
+  takes priority over `--once`/`--max-passes`/
+  `--poll-interval-seconds`. No change to
+  `kernel.worker.run_pending_tasks_once` itself. See
+  `docs/architecture/wp139-worker-dry-run.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

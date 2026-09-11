@@ -1586,6 +1586,36 @@ No new kernel function, no new registered `CapabilityId`/`Effect`/
 `docs/architecture/wp136-task-list-status-filter.md` for the full
 account.
 
+## 42. ~~Task CLI status filter (`--status`)~~ -- ALREADY SOLVED
+
+**Checked 2026-09-12 (WP-137)**. `jarvis task list --status <status>`
+already existed (`list_parser.add_argument("--status", ...,
+choices=VALID_TASK_STATUSES, ...)`), already reusing
+`authorize_and_list_tasks`'s own existing `status` parameter directly
+-- no duplicate filtering logic anywhere. No code change; recorded
+here only so this pass isn't mistaken for having skipped an unchecked
+gap.
+
+## 43. ~~Task failure/error presentation~~ -- ALREADY SOLVED
+
+**Checked 2026-09-12 (WP-138)**. `jarvis task status <id>` and `GET
+/api/tasks/<id>` (`jarvis ui`) already print task id (the record's own
+identifier), status, reason, and full `attempts` history (WP-124,
+WP-130) -- the latest attempt is simply the last entry, and the
+top-level `reason` field already mirrors it. No real gap found; no
+code change.
+
+## 44. ~~Worker dry-run visibility~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-139**. `jarvis task worker --dry-run` shows which
+`"created"` tasks are currently eligible/due without claiming or
+running any of them, reusing `authorize_and_list_tasks`'s own
+already-computed `due_task_ids` (WP-125) directly -- no worker
+redesign needed, since `run_pending_tasks_once`/
+`authorize_and_run_task` are never called at all in this mode. No new
+`CapabilityId`/`Effect`/`Tier`, no ADR. See
+`docs/architecture/wp139-worker-dry-run.md` for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

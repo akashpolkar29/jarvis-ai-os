@@ -806,6 +806,15 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         help="Run exactly one pass over currently-eligible tasks, then exit (default: false).",
     )
     worker_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Show which real 'created' tasks are currently eligible/due, without claiming or "
+            "running any of them -- never executes anything, takes priority over --once/"
+            "--max-passes/--poll-interval-seconds if given."
+        ),
+    )
+    worker_parser.add_argument(
         "--poll-interval-seconds",
         type=float,
         default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
@@ -1475,6 +1484,27 @@ def _run_task_worker(args: argparse.Namespace) -> int:
 
     def _pass_had_a_real_error(pass_outcome: WorkerPassOutcome) -> bool:
         return any(outcome.error is not None for outcome in pass_outcome.attempted)
+
+    if args.dry_run:
+        # WP-139: a real, read-only inspection -- reuses authorize_and_list_tasks's own
+        # already-computed due_task_ids (WP-125) directly; never calls
+        # authorize_and_run_task/run_pending_tasks_once, so nothing is ever claimed or
+        # run, no matter what --once/--max-passes/--poll-interval-seconds were given.
+        list_outcome = authorize_and_list_tasks(
+            status="created",
+            physical_confirmation_available=args.physical_confirmation_available,
+            remote_confirmation_available=args.remote_confirmation_available,
+            chain_path=args.chain_path,
+        )
+        if not list_outcome.records:
+            print("worker: no eligible ('created') tasks found.")
+            return 0
+        for record in list_outcome.records:
+            data = record.value.value
+            goal = data.get("goal") if isinstance(data, dict) else None
+            due = record.identifier in list_outcome.due_task_ids
+            print(f"worker: task {record.identifier} -- goal={goal!r}, due={due}")
+        return 0
 
     if args.once:
         pass_outcome = asyncio.run(_one_pass())

@@ -3922,6 +3922,99 @@ def test_task_worker_max_passes_exits_non_zero_if_any_pass_had_a_real_error(
     assert call_count == _WORKER_MAX_PASSES
 
 
+def test_task_worker_dry_run_reports_no_eligible_tasks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        return TaskListOutcome(
+            decision=_make_decision(granted=True, capability_id="memory.retrieve"), records=()
+        )
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        ["task", "worker", "--dry-run", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "no eligible" in captured.out
+
+
+def test_task_worker_dry_run_reports_eligible_tasks_with_due_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-139: a real, read-only inspection -- never claims or runs anything."""
+    run_calls: list[object] = []
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        def _record(identifier: str, goal: str) -> MemoryRecord:
+            return MemoryRecord(
+                identifier=identifier,
+                value=Tainted(
+                    {
+                        "kind": "task",
+                        "goal": goal,
+                        "status": "created",
+                        "reason": None,
+                        "created_at": "2026-09-09T00:00:00+00:00",
+                        "updated_at": "2026-09-09T00:00:00+00:00",
+                    },
+                    Provenance.user(),
+                ),
+                written_at=datetime(2026, 9, 9, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        return TaskListOutcome(
+            decision=_make_decision(granted=True, capability_id="memory.retrieve"),
+            records=(_record("task:due", "a due goal"), _record("task:not-due", "a future goal")),
+            due_task_ids=frozenset({"task:due"}),
+        )
+
+    async def fake_run_pending_tasks_once(**_kwargs: object) -> WorkerPassOutcome:
+        run_calls.append(object())
+        return WorkerPassOutcome(attempted=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "run_pending_tasks_once", fake_run_pending_tasks_once
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "worker",
+            "--dry-run",
+            "--once",  # WP-139: --dry-run must take priority, never falling through to --once
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "task:due -- goal='a due goal', due=True" in captured.out
+    assert "task:not-due -- goal='a future goal', due=False" in captured.out
+    assert run_calls == []  # never claims or runs anything, no matter what other flags were given
+
+
 def test_task_subcommand_requires_a_real_task_command() -> None:
     with pytest.raises(SystemExit):
         main(["task"])
