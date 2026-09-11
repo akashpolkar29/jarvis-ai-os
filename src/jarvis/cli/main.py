@@ -1425,6 +1425,36 @@ def _check_audit_chain_directory_writable() -> tuple[str, bool, str]:
     )
 
 
+def _check_memory_database_accessible() -> tuple[str, bool, str]:
+    """Check the real, default memory/task-store database -- read-only, no side effects.
+
+    WP-147: a deliberately narrow, safe check -- `sqlite3.connect`
+    against a non-existent path silently creates an empty file, which
+    a read-only diagnostic must never do, so a missing file is
+    reported as a real, honest, non-failing informational state, not
+    probed further. An existing file is opened strictly read-only
+    (``mode=ro``) and a trivial query run against it, catching real
+    corruption/permission issues a bare directory-writability check
+    would miss (mirrors the real, documented `sqlite3.DatabaseError`
+    finding from this project's own "Phase 2" resilience pass).
+    """
+    default_path = Path("memory.sqlite3").resolve()
+    label = f"Default memory/task-store database ({default_path})"
+    if not default_path.exists():
+        return (label, True, "not yet created -- will be created on first write")
+    try:
+        with sqlite3.connect(f"file:{default_path}?mode=ro", uri=True) as connection:
+            # A bare `SELECT 1` is a constant expression -- SQLite never touches the
+            # real file's own schema/b-tree to answer it, so it would not actually
+            # detect a garbage, non-SQLite file (confirmed empirically before fixing).
+            # Querying the real sqlite_master schema table forces SQLite to validate
+            # the file's own header/format for real.
+            connection.execute("SELECT name FROM sqlite_master LIMIT 1")
+    except sqlite3.Error as exc:
+        return (label, False, f"exists but not accessible ({exc})")
+    return (label, True, "accessible")
+
+
 def _run_doctor() -> int:
     """Check this machine's real environment readiness. Always returns 0.
 
@@ -1451,6 +1481,7 @@ def _run_doctor() -> int:
         ),
         _check_ollama_reachable(),
         _check_audit_chain_directory_writable(),
+        _check_memory_database_accessible(),
     ]
     for name, ok, detail in checks:
         status = "OK" if ok else "MISSING"

@@ -1685,6 +1685,18 @@ No new memory metadata/architecture, no ADR. See
 `docs/architecture/wp144-memory-retrieve-empty-result-message.md` for
 the full account.
 
+## 50. ~~`jarvis doctor` memory-database check~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-147**. `jarvis doctor` (built 2026-09-05) checked
+the audit-chain directory but never the memory/task-store database.
+Added a real, read-only, side-effect-free check -- missing is a real,
+non-failing informational state (never creates the file); present is
+opened `mode=ro` and validated via a real `sqlite_master` query, not a
+no-op `SELECT 1` (a real bug caught by the test itself before this was
+committed). No repairs, no ADR. See
+`docs/architecture/wp147-doctor-memory-database-check.md` for the
+full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

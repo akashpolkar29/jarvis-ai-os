@@ -255,6 +255,12 @@ replacement for either.
   printed nothing at all, indistinguishable from a silent failure.
   Matches `jarvis ui`'s own identical, already-correct message. See
   `docs/architecture/wp144-memory-retrieve-empty-result-message.md`.
+- WP-147: `jarvis doctor` now also checks the default memory/task-store
+  database (`_check_memory_database_accessible`) -- real, read-only,
+  no side effects (never creates the file if missing; opens strictly
+  read-only if present, forcing real schema validation via
+  `sqlite_master`, catching corruption a bare `SELECT 1` would miss).
+  See `docs/architecture/wp147-doctor-memory-database-check.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

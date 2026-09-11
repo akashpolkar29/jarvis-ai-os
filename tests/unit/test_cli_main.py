@@ -47,7 +47,12 @@ from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanStep
 from jarvis.application.routing.router import RouteKind, RouteResult
-from jarvis.cli.main import _check_binary, _check_ollama_reachable, main
+from jarvis.cli.main import (
+    _check_binary,
+    _check_memory_database_accessible,
+    _check_ollama_reachable,
+    main,
+)
 from jarvis.domain.browser import PageHandle
 from jarvis.domain.calendar import CalendarEvent
 from jarvis.domain.capability import (
@@ -6726,6 +6731,61 @@ def test_check_ollama_reachable_reports_unreachable_for_a_real_closed_port(
     assert ok is False
     assert "not reachable" in detail
     assert "Ollama" in name
+
+
+def test_check_memory_database_accessible_reports_not_yet_created(tmp_path: Path) -> None:
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        name, ok, detail = _check_memory_database_accessible()
+    finally:
+        os.chdir(original_cwd)
+
+    assert ok is True
+    assert "not yet created" in detail
+    assert "memory" in name.lower()
+    assert not (tmp_path / "memory.sqlite3").exists()  # never created as a side effect
+
+
+def test_check_memory_database_accessible_reports_accessible_for_a_real_existing_database(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "memory.sqlite3").write_bytes(b"")  # a real, valid empty SQLite file
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        _name, ok, detail = _check_memory_database_accessible()
+    finally:
+        os.chdir(original_cwd)
+
+    assert ok is True
+    assert detail == "accessible"
+
+
+def test_check_memory_database_accessible_reports_a_real_corrupted_database(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "memory.sqlite3").write_bytes(b"not a real sqlite file at all")
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        _name, ok, detail = _check_memory_database_accessible()
+    finally:
+        os.chdir(original_cwd)
+
+    assert ok is False
+    assert "not accessible" in detail
+
+
+def test_doctor_subcommand_never_creates_a_memory_database(tmp_path: Path) -> None:
+    """A real, empirical proof doctor never touches the memory database -- no file appears."""
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        main(["doctor"])
+        assert not (tmp_path / "memory.sqlite3").exists()
+    finally:
+        os.chdir(original_cwd)
 
 
 def test_version_flag_prints_the_real_installed_package_version(
