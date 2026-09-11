@@ -292,6 +292,37 @@ enough that a newly-created task is picked up promptly, long enough not to hamme
 SQLite store/audit chain with an authorize_and_list_tasks call many times a second."""
 
 
+def _non_negative_float(raw: str) -> float:
+    """Argparse ``type=`` for ``--poll-interval-seconds`` (WP-152).
+
+    A negative value previously reached ``time.sleep()`` unvalidated,
+    raising a raw ``ValueError: sleep length must be non-negative`` --
+    a real, unhandled crash, confirmed directly before this fix.
+    Rejected here instead, with a clean, argparse-native error.
+    """
+    value = float(raw)
+    if value < 0:
+        msg = f"must be non-negative, got {value!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+def _positive_int(raw: str) -> int:
+    """Argparse ``type=`` for ``--max-passes`` (WP-152).
+
+    Zero or negative previously made continuous mode's own ``while``
+    loop condition false immediately -- the worker silently ran zero
+    passes and exited 0, printing only its own "Running..." banner,
+    with no indication anything unusual happened. Rejected here
+    instead, with a clean, argparse-native error.
+    """
+    value = int(raw)
+    if value < 1:
+        msg = f"must be a positive integer, got {value!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
     """Add the confirmation/chain-path flags every subcommand shares."""
     parser.add_argument(
@@ -827,21 +858,21 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     worker_parser.add_argument(
         "--poll-interval-seconds",
-        type=float,
+        type=_non_negative_float,
         default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
         help=(
             "Seconds to sleep between passes in continuous mode (ignored with --once); "
-            f"default: {_DEFAULT_WORKER_POLL_INTERVAL_SECONDS}."
+            f"default: {_DEFAULT_WORKER_POLL_INTERVAL_SECONDS}. Must be non-negative."
         ),
     )
     worker_parser.add_argument(
         "--max-passes",
-        type=int,
+        type=_positive_int,
         default=None,
         help=(
             "Stop after this many passes in continuous mode (ignored with --once) -- a real, "
             "deterministic alternative to Ctrl+C for scripted or automated runs. Unbounded "
-            "if omitted."
+            "if omitted. Must be a positive integer."
         ),
     )
     _add_common_flags(worker_parser)

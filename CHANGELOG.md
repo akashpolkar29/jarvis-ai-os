@@ -268,6 +268,10 @@ replacement for either.
   surfaced: three existing worker tests were exercising the real,
   unmocked default database. See
   `docs/architecture/wp150-scheduled-task-worker-visibility.md`.
+- WP-152: `jarvis task worker --poll-interval-seconds`/`--max-passes`
+  now reject invalid values (negative/zero) with a clean argparse
+  error instead of a raw `time.sleep()` crash or a silent zero-pass
+  no-op. See `docs/architecture/wp152-worker-flag-validation.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

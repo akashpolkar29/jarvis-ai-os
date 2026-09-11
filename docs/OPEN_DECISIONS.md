@@ -1736,6 +1736,20 @@ default the intended, accepted behavior for them too? See
 `docs/architecture/wp151-task-retention-review.md` for the full
 investigation.
 
+## 53. ~~Configuration validation: worker flags~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-152**. This project has no config-file loading
+mechanism, so "configuration validation" was scoped to CLI arguments.
+Found two real bugs on `jarvis task worker`: a negative
+`--poll-interval-seconds` reached a raw, unhandled `time.sleep()`
+crash; a zero/negative `--max-passes` silently ran zero passes and
+exited `0` with no indication. Fixed with two small `argparse` `type=`
+validators (`_non_negative_float`/`_positive_int`), producing a clean,
+argparse-native error instead. Other numeric flags (`--limit`) were
+spot-checked and found to already degrade gracefully -- left
+unchanged. See `docs/architecture/wp152-worker-flag-validation.md`
+for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

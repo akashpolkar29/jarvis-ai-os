@@ -4237,6 +4237,40 @@ def test_task_worker_dry_run_reports_eligible_tasks_with_due_state(
     assert run_calls == []  # never claims or runs anything, no matter what other flags were given
 
 
+def test_task_worker_rejects_a_negative_poll_interval(tmp_path: Path) -> None:
+    """WP-152: previously reached a raw, unhandled time.sleep(-1) ValueError."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "task",
+                "worker",
+                "--poll-interval-seconds",
+                "-1",
+                "--max-passes",
+                "1",
+                "--chain-path",
+                str(tmp_path / "audit_chain.json"),
+            ]
+        )
+    assert exc_info.value.code != 0
+
+
+def test_task_worker_rejects_a_non_positive_max_passes(tmp_path: Path) -> None:
+    """WP-152: previously silently ran zero passes and exited 0 with no indication."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "task",
+                "worker",
+                "--max-passes",
+                "0",
+                "--chain-path",
+                str(tmp_path / "audit_chain.json"),
+            ]
+        )
+    assert exc_info.value.code != 0
+
+
 def test_task_subcommand_requires_a_real_task_command() -> None:
     with pytest.raises(SystemExit):
         main(["task"])
