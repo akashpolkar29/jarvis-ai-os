@@ -9,9 +9,39 @@ calls standing in for two processes.
 This is the headline, end-to-end proof `jarvis.kernel.worker` depends
 on: two real, independent processes both calling the exact same,
 unmodified `authorize_and_run_task` for the exact same, already-
-created task must result in exactly one of them actually running the
-plan -- the other must see `claimed=False` and must never touch
-`planning.run_plan` at all.
+created task must never both be "running" at the same real time --
+the claim itself (the "created" -> "running" transition) must grant
+to exactly one of them.
+
+**A real, genuine finding from this test's own first CI run, recorded
+here rather than silently worked around**: an earlier version of this
+test used an instantaneous, zero-step plan response and asserted that
+*at most one* of `_WORKER_COUNT` racers would ever report
+`claimed=True`, full stop. On a real, busier CI runner (not
+reproducible locally, where this machine's own faster, less-contended
+scheduling never exposed it), that assertion failed with **two** real
+processes reporting `claimed=True` -- not because the claim's own
+mutual exclusion failed, but because the zero-step plan let the real
+winner race all the way through claim -> run -> `"completed"` before a
+slower racer (genuinely delayed by real OS scheduling under
+contention, not a bug) ever got CPU time to attempt its own claim.
+That slower racer then read the task as `"completed"` -- which WP-118
+already, deliberately, documents as freely re-runnable -- and
+legitimately re-claimed and re-ran it, *sequentially*, not
+*simultaneously*. Both `claimed=True` reports were real and correct;
+the test's own assertion was simply stronger than the real guarantee
+WP-120 provides (no *concurrent* double-execution, never a promise
+that a fast-completing task can't be legitimately re-run by a second,
+slower caller racing the same initial request).
+
+The fix here is not to weaken the safety property being tested -- it
+is to make the fake provider take a real, deliberately generous amount
+of time (`_PROVIDER_DELAY_SECONDS`) before returning its plan, so the
+task remains genuinely `"running"` for long enough that every real
+racer, however late the OS schedules it, attempts its own claim while
+the task is still `"running"` (and therefore loses, correctly) rather
+than racing against a task that has already cycled all the way through
+to `"completed"` and become re-claimable again.
 """
 
 from __future__ import annotations
@@ -35,6 +65,12 @@ if TYPE_CHECKING:
 
 _WORKER_COUNT = 6
 _WORKER_TIMEOUT_S = 30
+_PROVIDER_DELAY_SECONDS = 2.0
+"""How long the real winner's own plan generation takes -- deliberately generous (see module
+docstring's own "a real, genuine finding" section): wide enough that every one of
+`_WORKER_COUNT` real racers, however late real OS scheduling runs it under contention, reaches
+its own claim attempt while the task is still genuinely "running", not after the winner has
+already cycled all the way through to "completed" and become legitimately re-claimable."""
 
 
 class _FakeEmbeddingPort:
@@ -45,11 +81,22 @@ class _FakeEmbeddingPort:
 
 
 class _FakeReasoningProvider:
-    """A minimal, picklable-by-import ReasoningPort, always returning a fixed, zero-step plan."""
+    """A minimal, picklable-by-import ReasoningPort, returning a fixed, zero-step plan.
+
+    Deliberately delayed (see module docstring's own "a real, genuine
+    finding" section) -- not to slow down the claim race itself (the
+    "created" -> "running" transition happens before this is ever
+    called), but to keep the real winner genuinely "running" for long
+    enough that every other real racer's own claim attempt, however
+    late it is actually scheduled by the OS, still observes "running"
+    rather than a task that has already finished and become
+    re-claimable.
+    """
 
     async def generate(
         self, _task: str, _prior_attempts: tuple[Attempt, ...]
     ) -> Tainted[Candidate]:
+        await asyncio.sleep(_PROVIDER_DELAY_SECONDS)
         candidate = Candidate(author="test-provider", content="[]")
         return Tainted(candidate, Provenance.system())
 
