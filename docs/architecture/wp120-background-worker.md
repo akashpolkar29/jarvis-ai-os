@@ -73,15 +73,18 @@ original, unconditional blind-write behavior unchanged).
 
 **The mechanism**: `MemoryWritePort.compare_and_update_value(identifier,
 expected_value, value)` (new), implemented in `SqliteMemoryAdapter`
-using SQLite's own `BEGIN IMMEDIATE` -- a real write lock acquired
-*before* reading anything, empirically verified (not merely assumed
-from documentation) to block a second, genuinely independent
-`sqlite3.connect()` to the same file from starting its own write
-transaction until the first commits or rolls back, across real,
-separate OS processes. The current row is re-read *inside* that lock
+using a real, dedicated `fcntl.flock()` on a permanent sibling lock
+file -- the exact, already-CI-proven mechanism
+`JsonFileAuditStorageAdapter` already uses for the audit chain's own
+identical cross-process race (WP-115). **This is a real, empirical
+correction partway through this work package, not the original
+design** -- see "two real findings from CI" below for why this
+module's own first attempt (SQLite's own `BEGIN IMMEDIATE`) was
+replaced. The current row is re-read *inside* the real OS-level lock
 and compared, by plain Python value equality, against `expected_value`
--- no SQLite JSON1/`json_extract` dependency, so this works on any
-SQLite build. `kernel.memory.authorize_and_compare_and_update` is the
+-- no SQLite JSON1/`json_extract` dependency. `":memory:"` stores skip
+the lock entirely (no real cross-process race is possible for them).
+`kernel.memory.authorize_and_compare_and_update` is the
 composition-root counterpart, reusing the *exact* same `memory.update`
 authorization path (`MemoryWriteAuthorizer.authorize_update`, same
 `Effect` derivation) as the existing `authorize_and_update` -- only the
@@ -246,12 +249,12 @@ mechanism WP-115 already made process-safe -- no changes needed there.
   with `--max-passes 2` (one real pass ran a newly-created task, the
   second found nothing, then stopped cleanly on its own).
 
-## Two real findings from CI, not silently worked around
+## Three real findings from CI, not silently worked around
 
 This work package's own real CI runs genuinely failed
-`test_tasks_claim_process_safety.py` twice -- neither reproducible on
-this machine's own far higher core count, which never exposed either
-one locally.
+`test_tasks_claim_process_safety.py` three times -- none reproducible
+on this machine's own far higher core count, which never exposed any
+of them locally.
 
 **First failure**: two of six racers reported `claimed=True`, not
 one. The claim mechanism's own mutual exclusion had not failed -- the
@@ -274,17 +277,34 @@ claimed ("never simultaneous"): on a real, contended, CI runner, it
 cannot by itself distinguish a genuine concurrent race from two real,
 legitimate, sequential claims, no matter how generous the delay.
 
-**The real fix**: measure the right thing. Each real worker now
-records its own real `time.time()` immediately after the barrier
-release and immediately after its own call returns; the test asserts
-that no two real winners' own `[start, end]` wall-clock intervals
-overlap -- the literal, real-world meaning of "never simultaneous." A
-later, non-overlapping winner remains a real, legitimate, sequential
-re-run; two genuinely overlapping winners would be the real race
-violation. This did not weaken the safety property under test -- it
-corrected which property the test's own assertion actually measured.
-Verified multiple consecutive real passes locally before each
-re-push.
+**The fix to the test itself**: measure the right thing. Each real
+worker now records its own real `time.time()` immediately after the
+barrier release and immediately after its own call returns; the test
+asserts that no two real winners' own `[start, end]` wall-clock
+intervals overlap -- the literal, real-world meaning of "never
+simultaneous." A later, non-overlapping winner remains a real,
+legitimate, sequential re-run; two genuinely overlapping winners would
+be the real race violation. This did not weaken the safety property
+under test -- it corrected which property the test's own assertion
+actually measured.
+
+**Third failure, with the corrected test -- the decisive one**: two
+real winners' own measured intervals genuinely *overlapped*, by
+roughly two full seconds, with start times within milliseconds of each
+other. This was conclusive, direct evidence that two separate
+processes really did hold a granted claim on the same record at the
+same real instant -- not a test-design artifact, a genuine failure of
+the underlying lock. SQLite's own `BEGIN IMMEDIATE` file locking was
+not reliably exclusive on that specific CI runner's filesystem (a
+real, known class of caveat for some container/overlay filesystems).
+
+**The real fix to the mechanism**: replace `BEGIN IMMEDIATE` with a
+real, dedicated `fcntl.flock()` on a permanent sibling lock file --
+the exact mechanism WP-115 already proved process-safe, on this exact
+CI environment, for the audit chain's own identical race. No new
+dependency. Verified multiple consecutive real passes locally before
+each re-push; the underlying lock mechanism itself is not novel --
+it is the same one already validated on CI by WP-115.
 
 ## Residual limitations, stated plainly
 
