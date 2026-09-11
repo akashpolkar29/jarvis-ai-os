@@ -1782,6 +1782,31 @@ shape). No ADR, no new `CapabilityId`/`Effect`/`Tier`. See
 `docs/architecture/wp154-browser-url-scheme-precondition.md` for the
 full account.
 
+## 56. ~~Memory CLI/search quality~~ -- ALREADY SOLVED (WP-155)
+
+**Already solved, WP-155**. Re-checked `jarvis memory retrieve` beyond
+what item 49 (WP-144, the empty-result-message fix) and the existing
+retrieval-quality evaluation (`docs/architecture/
+retrieval-quality-eval-results.md`, 84.0% top-1/92.0% top-3) already
+cover. Live-checked an empty query string, `--limit 0`, and a negative
+`--limit` -- all degrade gracefully, no crash. No new gap found. No
+code changed. See
+`docs/architecture/wp155-memory-cli-search-quality-recheck.md`.
+
+## 57. ~~`jarvis` end-to-end smoke suite~~ -- ALREADY SOLVED (WP-156)
+
+**Already solved, WP-156**. Confirmed two real, complementary
+mechanisms already exist and both still pass: `tests/e2e/
+test_cli_smoke.py` (a real, freshly-spawned OS-process invocation
+catching packaging/import-time breakage) and `tests/integration/
+test_end_to_end_scenarios.py` (three real capability-chaining scenario
+tests). Expanding the subprocess-level smoke test to more subcommands
+was considered and rejected -- its own docstring already states the
+precise, narrow reason it exists (packaging breakage, not
+argument-level correctness), a class of bug either present or absent
+for the whole package, not per-subcommand. No code changed. See
+`docs/architecture/wp156-e2e-smoke-suite-recheck.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
