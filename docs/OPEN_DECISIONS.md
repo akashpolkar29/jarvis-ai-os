@@ -1650,6 +1650,30 @@ manual check. No ADR. See
 `docs/architecture/wp142-dependency-security-hygiene.md` for the full
 account.
 
+## 48. Browser automation foundation review -- INVESTIGATED, SKIPPED 2026-09-12
+
+**Investigated, WP-143**. Checked `adapters/browser_automation.py`/
+`ports/browser_automation.py` directly against the work package's own
+named risk areas: timeout handling is already comprehensive and real
+(`_DEVTOOLS_PORT_TIMEOUT`, `_PAGE_READY_TIMEOUT`, `_CDP_CALL_TIMEOUT`,
+`_GRACEFUL_EXIT_TIMEOUT`, all real, bounded waits); `close()` already
+handles the PID-reuse hazard safely (WP-115's own
+`_process_is_really_gone` fix, `PermissionError`/`ProcessLookupError`
+both treated as "already gone"); failure reporting already
+distinguishes launch failure from action failure
+(`BrowserLaunchFailedError`/`BrowserActionFailedError`). The one real,
+honest, already-known gap (M5's own closeout, never previously tracked
+here): `browser.close_page` requires the caller to have kept the
+exact `PageHandle` a prior `open_page` call returned -- since every
+`jarvis` invocation is a fresh, stateless process (no cross-invocation
+handle registry exists), a lost handle means an orphaned headless
+browser process with no CLI-level way to discover or clean it up
+afterward (only a manual `ps`/`kill` by PID). Closing this properly
+would mean a new, real, persistent handle-tracking mechanism -- a
+genuinely new subsystem, not "the smallest missing reliability
+improvement" this work package asked for. Skipped rather than built;
+recorded here since it was never tracked as an open item before.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
