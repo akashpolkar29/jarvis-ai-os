@@ -242,6 +242,14 @@ replacement for either.
   inspect` command was considered and rejected as near-total
   duplication of this existing output. See
   `docs/architecture/wp141-task-diagnostic-created-at.md`.
+- WP-142: `pip-audit>=2.10.1` added as a real dev dependency (it was
+  previously only ever available ad hoc, never declared). Run once
+  against this project's real, resolved `.venv`: no known
+  vulnerabilities found. Deliberately **not** wired into CI -- its
+  own result can change over time with no code change, a genuine
+  non-determinism a CI gate should not have; kept as the same,
+  established, periodic manual check this project has always used
+  it as. See `docs/architecture/wp142-dependency-security-hygiene.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

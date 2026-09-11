@@ -1637,6 +1637,19 @@ near-duplicate command. No new persistence, no ADR. See
 `docs/architecture/wp141-task-diagnostic-created-at.md` for the full
 account.
 
+## 47. ~~Dependency/security hygiene~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-142**. `pip-audit` was used in several past,
+real, periodic passes but never declared as a project dependency --
+now `pip-audit>=2.10.1` in `[dependency-groups].dev`. Run once: no
+known vulnerabilities found. Deliberately not wired into CI (a
+security-advisory-database-backed check can fail on an untouched
+commit purely from a newly-published CVE -- a real non-determinism a
+CI gate should not have); kept as the same, established, periodic
+manual check. No ADR. See
+`docs/architecture/wp142-dependency-security-hygiene.md` for the full
+account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
