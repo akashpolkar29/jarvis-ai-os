@@ -1750,6 +1750,38 @@ spot-checked and found to already degrade gracefully -- left
 unchanged. See `docs/architecture/wp152-worker-flag-validation.md`
 for the full account.
 
+## 54. ~~Local browser automation reliability~~ -- ALREADY SOLVED (WP-153)
+
+**Already solved, WP-153**. Re-checked `adapters/browser_automation.py`/
+`ports/browser_automation.py` against this work package's own named
+risk areas -- identical scope to item 48 (WP-143), re-verified rather
+than re-investigated from scratch: timeout handling is comprehensive
+and real; `close()` already handles PID reuse safely (WP-115); failure
+reporting already distinguishes launch failure from action failure.
+No new gap found beyond the one item 48 already recorded (orphaned
+headless processes with no CLI-level discovery mechanism, a genuinely
+new subsystem, out of "smallest improvement" scope). No code changed.
+
+## 55. ~~Safe web action preconditions~~ -- RESOLVED/BUILT 2026-09-12
+
+**Resolved/built, WP-154**. `browser.open_page` accepted any URL
+scheme unvalidated, including `file://` -- confirmed live that a
+`file:///etc/passwd` URL was accepted exactly like a real web address.
+Real risk: this headless page's content can be pulled out
+programmatically (`browser.screenshot`/`inspect_dom`), so a non-web
+scheme let a "browse the web" capability instead read local filesystem
+content or run inline script, under a confirmation prompt that only
+ever shows a URL string. Fixed with `_require_web_scheme`, rejecting
+any scheme but `http`/`https` (plus the one, narrow, already-used-by-a-
+real-test exception, `about:blank`) before any authorization attempt
+-- mirroring `PathOutsideAllowedScopeError`'s own precedent exactly,
+including its identical "not recorded in the audit chain" limitation.
+`desktop.brave_open_url` deliberately untouched (a visible desktop
+window under the human's own ongoing control is a different risk
+shape). No ADR, no new `CapabilityId`/`Effect`/`Tier`. See
+`docs/architecture/wp154-browser-url-scheme-precondition.md` for the
+full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

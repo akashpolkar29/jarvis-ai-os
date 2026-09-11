@@ -32,6 +32,7 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
 from jarvis.domain.browser import PageHandle
 from jarvis.kernel.browser import (
+    UnsupportedUrlSchemeError,
     authorize_and_capture_screenshot,
     authorize_and_close_page,
     authorize_and_open_page,
@@ -149,6 +150,58 @@ async def test_denied_open_page_never_touches_the_browser(tmp_path: Path) -> Non
     assert decision.granted is False
     assert browser.opened == []
     assert handle is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "ftp://example.com/file",
+        "not-a-url-at-all",
+    ],
+)
+async def test_open_page_rejects_a_non_web_url_before_any_authorization(
+    tmp_path: Path, url: str
+) -> None:
+    """WP-154: a non-http(s) scheme is rejected before authorize_by_id is ever called."""
+    browser = _StubBrowserAutomation()
+
+    with pytest.raises(UnsupportedUrlSchemeError):
+        await authorize_and_open_page(
+            url,
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            browser_automation=browser,
+        )
+
+    assert browser.opened == []
+    # WP-154: rejected before any CapabilityInvocation is constructed -- no audit record.
+    chain = JsonFileAuditStorageAdapter(tmp_path / "audit_chain.json").load()
+    assert len(chain) == 0
+
+
+@pytest.mark.parametrize("url", ["http://example.com", "HTTPS://Example.com/path?q=1"])
+async def test_open_page_accepts_http_and_https_case_insensitively(
+    tmp_path: Path, url: str
+) -> None:
+    """WP-154: only the scheme is checked -- a real http/https URL is unaffected."""
+    browser = _StubBrowserAutomation()
+
+    decision, handle = await authorize_and_open_page(
+        url,
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        browser_automation=browser,
+        console=_StubConsole(),
+    )
+
+    assert decision.granted is True
+    assert browser.opened == [url]
+    assert handle == _FAKE_HANDLE
 
 
 async def test_remote_confirmation_alone_is_sufficient_to_grant_open_page(tmp_path: Path) -> None:

@@ -6452,6 +6452,27 @@ def test_browser_open_subcommand_requires_url() -> None:
         main(["browser", "open"])
 
 
+def test_browser_open_subcommand_rejects_a_non_web_url_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-154: a real, unmocked call -- proves cli/main.py's own except tuple catches it."""
+    exit_code = main(
+        [
+            "browser",
+            "open",
+            "file:///etc/passwd",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+    assert "http/https" in captured.err
+
+
 def test_browser_screenshot_subcommand_reconstructs_handle_and_writes_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

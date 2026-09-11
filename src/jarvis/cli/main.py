@@ -179,6 +179,7 @@ from jarvis.domain.browser import PageHandle
 from jarvis.domain.errors import JarvisError
 from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.browser import (
+    UnsupportedUrlSchemeError,
     authorize_and_capture_screenshot,
     authorize_and_close_page,
     authorize_and_open_page,
@@ -3253,6 +3254,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one earl
         NoMediaPlayerRunningError,
         MediaPlayerCommandFailedError,
         PathOutsideAllowedScopeError,
+        UnsupportedUrlSchemeError,
         MemoryRecordNotFoundError,
         UnsupportedMemoryValueError,
         MemoryIntegrityViolationError,

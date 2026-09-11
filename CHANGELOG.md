@@ -272,6 +272,13 @@ replacement for either.
   now reject invalid values (negative/zero) with a clean argparse
   error instead of a raw `time.sleep()` crash or a silent zero-pass
   no-op. See `docs/architecture/wp152-worker-flag-validation.md`.
+- WP-154: `browser.open_page` now rejects any non-http(s) URL (e.g.
+  `file://`, `javascript:`, `data:`) before any authorization attempt
+  -- previously a `file:///etc/passwd` URL was accepted exactly like a
+  real web address, letting a headless, programmatically-inspectable
+  page read arbitrary local filesystem content under a confirmation
+  prompt that only ever showed a URL string. See
+  `docs/architecture/wp154-browser-url-scheme-precondition.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

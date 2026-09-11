@@ -91,6 +91,7 @@ own narrow scope does not call for.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.browser_automation import CdpBrowserAutomationAdapter
@@ -114,6 +115,65 @@ if TYPE_CHECKING:
     from jarvis.domain.policy import Decision
     from jarvis.ports.browser_automation import BrowserAutomationPort
     from jarvis.ports.console import ConsolePort
+
+
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+_ALLOWED_NON_WEB_URL = "about:blank"
+"""The one, real, pre-existing exception: a genuinely inert, content-free page (no
+filesystem access, no script execution, no external network reach) already used by this
+codebase's own real, skipif-guarded live test
+(test_granted_close_page_really_kills_the_real_process) specifically to avoid depending
+on a real external site's availability. Not "about:" broadly -- about:config/
+about:net-internals-style pages can expose real browser-internal state, which this
+check's own reasoning (see UnsupportedUrlSchemeError's docstring) still wants to keep out."""
+
+
+class UnsupportedUrlSchemeError(Exception):
+    """Raised when ``browser.open_page``'s own ``url`` is not a real web URL (WP-154).
+
+    Not a :class:`~jarvis.domain.errors.JarvisError` subclass -- a
+    kernel-level operational rejection, not a domain-raised exception,
+    the same reasoning ``kernel.files.PathOutsideAllowedScopeError``
+    already uses. Raised *before* any
+    :class:`~jarvis.domain.capability.CapabilityInvocation` is
+    constructed, for the identical reason: this headless, CDP-
+    controlled page can be screenshotted/DOM-inspected programmatically
+    after opening, so a ``file://`` (or ``javascript:``/``data:``/etc.)
+    URL would let a capability whose own tier/confirmation model is
+    built entirely around "browsing the web" instead read local
+    filesystem content or run inline script -- a real privilege
+    widening `browser.open_page`'s own ``Tier.CONFIRM`` confirmation
+    prompt was never designed to convey to the confirming human, who
+    sees only a URL string, not what scheme it uses.
+
+    Only ``browser.open_page`` gets this check, not
+    ``desktop.brave_open_url``: that capability opens a real, visible
+    desktop browser window under the human's own direct, ongoing
+    control (they see the address bar, can inspect it, can close it) --
+    a fundamentally different, already-mitigated risk shape than a
+    headless page whose content is read back programmatically.
+
+    LIMITATION, STATED PLAINLY, mirroring
+    ``PathOutsideAllowedScopeError``'s own identical one: because this
+    rejection happens before any ``CapabilityInvocation`` is
+    constructed, a rejected URL is NOT recorded in the audit chain.
+    """
+
+
+def _require_web_scheme(url: str) -> None:
+    """Reject any ``url`` whose scheme is not ``http``/``https`` (WP-154).
+
+    Raises:
+        UnsupportedUrlSchemeError: If ``url`` is not
+            :data:`_ALLOWED_NON_WEB_URL` and its scheme is not in
+            :data:`_ALLOWED_URL_SCHEMES`.
+    """
+    if url == _ALLOWED_NON_WEB_URL:
+        return
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        msg = f"browser.open_page only accepts http/https URLs, got scheme {scheme!r} for {url!r}."
+        raise UnsupportedUrlSchemeError(msg)
 
 
 def _adapter(browser_automation: BrowserAutomationPort | None) -> BrowserAutomationPort:
@@ -158,7 +218,13 @@ async def authorize_and_open_page(  # noqa: PLR0913 -- one per composition-funct
         ``(decision, handle)`` -- ``handle`` is the real, reconnectable
         ``PageHandle`` if granted, ``None`` if denied. Not tainted (see
         module docstring).
+
+    Raises:
+        UnsupportedUrlSchemeError: If ``url``'s scheme is not
+            ``http``/``https`` (WP-154) -- checked before any
+            authorization attempt, see that exception's own docstring.
     """
+    _require_web_scheme(url)
     registry = build_default_registry()
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()
