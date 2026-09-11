@@ -57,6 +57,14 @@ replacement for either.
   `CapabilityId`/`Effect`/`Tier`; `communications.send_email`/
   `create_calendar_event` remain untouched, still `Tier.MANUAL_ONLY`.
   See `docs/architecture/wp114-conversational-execution-surface.md`.
+- WP-116: real, read-only stale-running-task detection -- a task still
+  `"running"` more than 30 minutes past its own last `updated_at` (a
+  process crash leaves no in-process exception to catch) is now
+  surfaced as a warning by `jarvis task status`/`list`, never
+  auto-transitioned -- only a human can safely tell a crashed task
+  apart from a genuinely slow one. No new `CapabilityId`/`Effect`/
+  `Tier`, no ADR. See
+  `docs/architecture/stale-running-task-detection.md`.
 
 ### Fixed
 

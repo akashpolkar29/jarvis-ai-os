@@ -75,13 +75,18 @@ optional email/calendar connection flags; and the audit chain's
 real cross-process lost-write race (item 5, 2026-09-11, WP-115),
 closed via a real `fcntl.flock()`-protected re-read-and-merge inside
 `save()`, proven by real `multiprocessing.Process` tests -- no
-`AuditStoragePort` contract change, no new dependency. All items 1-24
+`AuditStoragePort` contract change, no new dependency. All items 1-25
 below are resolved, decided, or built -- nothing in this index remains
 open as of 2026-09-11 (a real, separate, narrower residual limitation
 of item 5's own fix -- a privileged adversary fabricating a wholesale
 replacement chain, a genuinely different threat model -- is named in
 item 5 itself and in `docs/architecture/audit-log-integrity-scoping-notes.md`,
-not tracked as its own numbered item here).
+not tracked as its own numbered item here); and real, read-only
+stale-running-task detection (item 25, 2026-09-11, WP-116) --
+`jarvis task status`/`list` now surface a task still `"running"` more
+than 30 minutes after its own last `updated_at` as stale, a real,
+derived, ephemeral signal computed at read time, never an automatic
+status mutation.
 
 **Standing, accepted limitations** (not bugs -- real, named, deliberate
 scope boundaries, none silently dropped): CV templates are always
@@ -1092,6 +1097,39 @@ first -- WP-114 was genuinely the next available number. See
 `docs/architecture/wp114-conversational-execution-surface.md` for the
 full account, including the real inspection table (which capabilities
 already had what) and every named limitation.
+
+## 25. ~~Stale-running-task detection~~ -- RESOLVED/BUILT 2026-09-11
+
+**Resolved/built, WP-116**. Closes a real, pre-existing gap neither
+item 16 (WP-107) nor item 17 (WP-109) addressed: a task's owning
+**process** crashing (SIGKILL, OOM, machine shutdown) while its stored
+`status` is still `"running"` leaves that status stuck forever -- no
+in-process exception ever fires, so item 23's own `except Exception`
+widening (which only catches exceptions raised *within* a running
+process) never runs, and the record is silently stale with no
+indication to a human reading `jarvis task status`/`list`.
+
+**The fix, detection-only, per the overnight session's own explicit
+instruction** ("if a process crashes, investigate whether the current
+task state can recover safely before adding recovery behavior"): a
+task still `"running"` more than `STALE_RUNNING_THRESHOLD_SECONDS`
+(1800s, chosen well above `adapters/reasoning/local.py`'s own 120s
+per-call timeout) past its own `updated_at` is now reported, never
+auto-transitioned -- a pure, total `_is_stale_running()` helper feeds
+a new `TaskGetOutcome.stale`/`TaskListOutcome.stale_task_ids` field,
+each computed at read time against a real injected `ClockPort`,
+wired into `jarvis task status`/`list`'s own existing print functions
+as a real, human-readable warning line. No automatic mutation was
+added -- a task legitimately still running past the threshold (a slow
+model, a long coding-loop climb) is, from the stored fields alone,
+indistinguishable from a crashed one; only a human (or a future,
+separately-decided mechanism) can safely resolve that ambiguity.
+
+No new `CapabilityId`/`Effect`/`Tier`, no ADR -- purely additive,
+read-only visibility on top of `memory.get`/`memory.retrieve`'s own
+already-classified, unmodified authorization path. See
+`docs/architecture/stale-running-task-detection.md` for the full
+account.
 
 ## Maintaining this index
 

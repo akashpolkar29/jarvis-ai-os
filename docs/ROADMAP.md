@@ -398,6 +398,23 @@ it.
   own record survives, the final chain validates, sequences are
   contiguous. See `docs/architecture/audit-chain-process-safety.md`
   and `docs/OPEN_DECISIONS.md` item 5.
+  **Updated 2026-09-11 (WP-116)**: real, read-only stale-running-task
+  detection. Neither WP-107 nor WP-109 addressed a task's owning
+  *process* crashing (SIGKILL, OOM, machine shutdown) while its stored
+  `status` is still `"running"` — no in-process exception ever fires,
+  so item 23's own `except Exception` widening never runs, and the
+  record is silently stale with no indication to a human. A pure
+  `_is_stale_running()` helper (status `"running"` and `updated_at`
+  more than `STALE_RUNNING_THRESHOLD_SECONDS` (1800s) in the past)
+  now feeds a new `TaskGetOutcome.stale`/`TaskListOutcome.stale_task_ids`
+  field, computed at read time against a real injected `ClockPort`,
+  surfaced as a real warning line by `jarvis task status`/`list`.
+  Detection-only, per explicit instruction — a task legitimately still
+  running past the threshold is, from the stored fields alone,
+  indistinguishable from a crashed one, so no automatic status
+  mutation was added. No new `CapabilityId`/`Effect`/`Tier`, no ADR.
+  See `docs/architecture/stale-running-task-detection.md` and
+  `docs/OPEN_DECISIONS.md` item 25.
 - **Real, open gap (not yet a real ROADMAP row): audit-log
   wholesale-replacement protection.** [`docs/architecture/audit-log-integrity-scoping-notes.md`](architecture/audit-log-integrity-scoping-notes.md) —
   research and one real test fix only, written 2026-09-05. The real
