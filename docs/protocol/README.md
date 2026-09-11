@@ -27,6 +27,18 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
+**Updated 2026-09-12 (WP-159, release-readiness audit) — five real,
+already-shipped `task` subcommands (`cancel`/`retry`/`schedule`/
+`recover`/`worker`, from WP-117/121/122/126/120) were missing from
+this table entirely; added below. This table now has 80 real
+subcommand rows** — stated as a direct count of this table, not a
+continuation of the older "56 → 57 → 58" running-total convention
+below, which had already fallen behind (several real rows, e.g.
+`browser *`/`fs find`/`fs search-content`/`fs recent`/`audit-history`/
+`memory backup`/`restore`/`wipe`, were added over time without that
+count ever being incremented) before this audit found the five listed
+above.
+
 **Updated 2026-09-10 (WP-114, expanding the conversational execution
 surface) — no new subcommand (still 58); `jarvis ui` gained seven new,
 entirely optional flags** (`--email-imap-host`/`--email-smtp-host`/
@@ -208,7 +220,12 @@ not to duplicate the policy engine's own reasoning.
 | `task create <goal>` | `memory.write` (reused unmodified, no new capability) | `goal` |
 | `task run <task-id> <goal>` | `planning.run_plan` (reused unmodified, no new capability — updates the task's own status in place via `memory.update`, WP-107) | `task-id`, `goal` (must match the id/goal from a prior `task create`) |
 | `task status <task-id>` | `memory.get` (WP-107 — a real, exact, O(1)-by-identifier lookup, not an approximate query) | `task-id` |
-| `task list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, one of `created`/`running`/`waiting_approval`/`completed`/`failed`/`cancelled`) |
+| `task list` | `memory.retrieve` (reused unmodified, no new capability) | `--status` (optional, one of `created`/`running`/`waiting_approval`/`completed`/`failed`/`cancelled`), `--scheduled-only` (mutually exclusive with `--status`) |
+| `task cancel <task-id>` | `memory.update` (ADR-0063 — the same status-transition primitive every other task-status change uses; only a `"created"`/`"running"` task may be cancelled) | `task-id` |
+| `task retry <task-id>` | `planning.run_plan` (delegates directly, unmodified, to the same `authorize_and_run_task` `task run` calls; only a `"failed"` task may be retried) | `task-id` |
+| `task schedule <task-id> --at <iso8601>` | `memory.update` (only a `"created"` task may be scheduled; a naive/timezone-less timestamp is rejected) | `task-id`, `--at` |
+| `task recover <task-id>` | `memory.update` (only a stale `"running"` task, past a fixed threshold with no owning process update, may be recovered to `"failed"`) | `task-id` |
+| `task worker` | (no single capability of its own — discovers every due `"created"` task and delegates each to `authorize_and_run_task`, the exact same function `task run` calls) | `--once`, `--dry-run`, `--poll-interval-seconds` (non-negative), `--max-passes` (positive integer) |
 | `do "<text>"` | Deterministic, via `PLAN_STEP_EXECUTORS`: `fs.read_file`/`fs.list_dir`/`git.status`/`memory.retrieve`/`fs.find`/`fs.search_content`/`fs.recent`, all `Tier.ALLOW`. Deterministic, via a real, direct `await` (WP-114, only when `email_port`/`calendar_port` is configured -- never for bare `jarvis do`, which has no flag to supply either): `communications.list_email`/`read_email`/`list_calendar_events`, all `Tier.ALLOW`. Complex-goal: `memory.write` (via `authorize_and_create_task`, same as `task create`). A recognized-but-unwired/unconfigured or ambiguous/unknown request authorizes nothing at all (WP-104) | `text` |
 | `email list` | `communications.list_email` | `--folder` (default `INBOX`), `--limit` (default 10), `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |
 | `email read <message-id>` | `communications.read_email` | `message-id`, `--imap-host`, `--smtp-host`, `--username`, `--password-reference` |

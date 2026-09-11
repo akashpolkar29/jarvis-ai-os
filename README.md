@@ -190,14 +190,21 @@ to the machine is the real auth boundary, mechanically enforced (see
 `tests/meta/test_speaker_id_isolation.py`), not merely a stated
 principle.
 
-**Two real, known license-compatibility findings, not yet resolved**:
-`piper-tts` (the real text-to-speech engine, imported directly
-in-process) is GPL-3.0-or-later; `icalendar-searcher` (a real,
-exercised transitive dependency of the CalDAV calendar adapter) is
-AGPL-3.0-or-later. Both raise real questions for this MIT-licensed
-project that have not yet been decided — see
-`docs/architecture/secrets-license-sbom-audit-phase9.md` for the full
-finding. A real, current CycloneDX SBOM is available at
+**Two real license-compatibility findings, both resolved by direct user
+decision (2026-09-05)**: `piper-tts` (the real text-to-speech engine,
+imported directly in-process) is GPL-3.0-or-later — kept, on the
+user's own judgment that GPL's copyleft triggers on distribution and
+this project is currently personal/private use only, flagged for
+re-examination if that ever changes. `icalendar-searcher` (a real,
+transitive dependency of the CalDAV calendar adapter) is
+AGPL-3.0-or-later — mitigated, not removed: `adapters/calendar.py` now
+always passes `server_expand=True`, empirically verified against a
+real local CalDAV server to bring real invocation of that dependency's
+own code to zero; it remains in `uv.lock` transitively but is no
+longer exercised at runtime. See
+`docs/architecture/secrets-license-sbom-audit-phase9.md` and
+`docs/architecture/license-alternatives-research.md` for the full
+findings. A real, current CycloneDX SBOM is available at
 `docs/architecture/sbom.cyclonedx.json` (`scripts/generate_sbom.sh`
 regenerates it on demand).
 
@@ -256,5 +263,5 @@ conventions, and the process for proposing an architecture change.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). See "Privacy model" above for two real,
-unresolved dependency-license findings.
+MIT — see [LICENSE](LICENSE). See "Privacy model" above for two real
+dependency-license findings and how each was resolved.

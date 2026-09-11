@@ -1830,6 +1830,20 @@ to `docs/ROADMAP.md`'s own M7 entry, covering WP-124 through WP-157
 without repeating each work package's own already-existing detail
 (pointed at instead). Structure preserved, no redesign.
 
+## 59. ~~Release-readiness audit~~ -- RESOLVED/BUILT 2026-09-12 (WP-159)
+
+**Resolved/built, WP-159**. Two real, concrete documentation
+inconsistencies found and fixed: README.md's "Privacy model"/"License"
+sections still said the `piper-tts`/`icalendar-searcher` license
+findings were "not yet resolved," when both were genuinely decided on
+2026-09-05 (items 3a/3b) — fixed to state the real outcomes.
+`docs/protocol/README.md`'s own subcommand table was missing five
+real, already-shipped `task` subcommands (`cancel`/`retry`/`schedule`/
+`recover`/`worker`) — added. Version metadata (`0.9.0`), CI, tests,
+and the installation path were all confirmed already accurate; no
+version bump or tag made. See
+`docs/architecture/wp159-release-readiness-audit.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
