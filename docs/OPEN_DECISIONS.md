@@ -1935,6 +1935,21 @@ pointing at `docs/protocol/README.md` for the full list rather than
 duplicating it. No new router, no LLM, no grammar/behavior change. See
 `docs/architecture/wp166-do-command-discovery.md`.
 
+## 67. v0.10.0 milestone readiness -- assessed ready, tag deferred to the user (WP-167)
+
+**Investigated, WP-167**, the closing review of this session's second
+10-work-package queue (WP-158 through WP-167). All gates green, 83
+real commits since `v0.9.0`, no new `CapabilityId`/`Effect`/`Tier`
+introduced, documentation internally consistent. Assessed as coherent
+and ready for a version milestone -- `v0.10.0` would be the correct
+next sequential slot. No tag created; this project has no automated
+tagging convention (confirmed by checking `.github/workflows/ci.yml`
+directly) and tagging has always been the user's own, direct decision
+in this project's history. Two already-known open items (52, 48) and
+the separately-tracked audit-chain wholesale-replacement question
+remain unresolved by design, unaffected by this review. See
+`docs/architecture/wp167-v010-milestone-preparation.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
