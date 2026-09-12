@@ -306,6 +306,10 @@ replacement for either.
   `<capability>`." message, the CLI-side equivalent of WP-163's own
   fix (the UI has a separate summarizer). See
   `docs/architecture/wp168-ui-fs-empty-result-messages.md`.
+- WP-169: `jarvis list-dir`/`list-docker-containers`/`audit-history`/
+  `plan run` now print an honest message for a granted, genuinely
+  empty result -- previously printed nothing at all. See
+  `docs/architecture/wp169-cli-more-empty-result-messages.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

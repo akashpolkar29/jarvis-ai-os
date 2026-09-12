@@ -1398,6 +1398,23 @@ def test_audit_history_subcommand_respects_capability_id_filter(
     assert "fs.read_file" not in captured.out
 
 
+def test_audit_history_subcommand_reports_no_matches_for_a_filter_matching_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-169: previously printed nothing at all, indistinguishable from a silent failure."""
+    chain_path = tmp_path / "audit_chain.json"
+    main(["ping", "--chain-path", str(chain_path)])
+    capsys.readouterr()
+
+    exit_code = main(
+        ["audit-history", "--chain-path", str(chain_path), "--capability-id", "nonexistent.thing"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "No matching audit records found." in captured.out
+
+
 def test_send_email_subcommand_routes_to_and_subject_and_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2511,6 +2528,42 @@ def test_plan_run_subcommand_executes_and_reports_each_step(
     assert exit_code == 0
     assert "plan run: GRANTED" in captured.out
     assert "step: fs.read_file GRANTED" in captured.out
+
+
+def test_plan_run_subcommand_reports_no_steps_on_a_genuinely_empty_granted_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-169: a real, reachable state (generate_plan's own docstring) previously printed nothing."""  # noqa: E501
+
+    async def fake_authorize_and_run_plan(
+        goal: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, PlanExecutionResult]:
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        return decision, PlanExecutionResult(step_records=(), aborted=False)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_run_plan", fake_authorize_and_run_plan
+    )
+
+    exit_code = main(
+        [
+            "plan",
+            "run",
+            "an already-satisfied goal",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "The generated plan has no steps." in captured.out
+    assert exit_code == 0
 
 
 def test_plan_run_subcommand_denied_attempts_no_plan_steps(
@@ -5014,6 +5067,34 @@ def test_list_dir_subcommand_prints_each_entry(
     assert exit_code == 0
 
 
+def test_list_dir_subcommand_reports_empty_directory_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-169: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_list_dir(
+        path: Path,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DirListOutcome:
+        decision = _make_decision(granted=True, capability_id="fs.list_dir")
+        return DirListOutcome(decision=decision, entries=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_dir", fake_authorize_and_list_dir
+    )
+
+    exit_code = main(
+        ["list-dir", str(tmp_path), "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert "(empty directory)" in captured.out
+    assert exit_code == 0
+
+
 def test_list_dir_subcommand_denied_prints_no_entries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -5645,6 +5726,33 @@ def test_list_docker_containers_subcommand_prints_each_container(
     assert "list-docker-containers: GRANTED" in captured.out
     assert "web" in captured.out
     assert "db" in captured.out
+    assert exit_code == 0
+
+
+def test_list_docker_containers_subcommand_reports_none_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-169: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_list_docker_containers(
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> DockerListContainersOutcome:
+        decision = _make_decision(granted=True, capability_id="docker.list_containers")
+        return DockerListContainersOutcome(decision=decision, containers=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_list_docker_containers",
+        fake_authorize_and_list_docker_containers,
+    )
+
+    exit_code = main(["list-docker-containers", "--chain-path", str(tmp_path / "audit_chain.json")])
+    captured = capsys.readouterr()
+
+    assert "No containers found." in captured.out
     assert exit_code == 0
 
 

@@ -3202,15 +3202,25 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
         print(f"uid: {outcome.calendar_event_uid}")
     if outcome.reasoning_result_label is not None:
         print(f"result: {outcome.reasoning_result_label}")
+    # WP-169: dir_entries/docker_containers/audit_records all previously printed nothing
+    # at all for a granted, genuinely empty result -- the same silent-empty gap
+    # WP-144/WP-163/WP-164/WP-168 already fixed elsewhere. Each now matches this same,
+    # already-established "print an honest message when empty" pattern.
     if outcome.dir_entries is not None:
+        if not outcome.dir_entries:
+            print("(empty directory)")
         for entry in outcome.dir_entries:
             print(f"{entry.name}{'/' if entry.is_dir else ''}")
     if outcome.docker_containers is not None:
+        if not outcome.docker_containers:
+            print("No containers found.")
         for container in outcome.docker_containers:
             print(container)
     if outcome.git_status_text is not None:
         print(outcome.git_status_text)
     if outcome.audit_records is not None:
+        if not outcome.audit_records:
+            print("No matching audit records found.")
         for audit_record in outcome.audit_records:
             record_decision = audit_record.decision
             status = "GRANTED" if record_decision.granted else "DENIED"
@@ -3219,6 +3229,12 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
                 f"{status} (tier={record_decision.tier.name}, reasons={record_decision.reasons})"
             )
     if outcome.plan_step_records is not None:
+        if not outcome.plan_step_records:
+            # A real, reachable state, not an error: `generate_plan`'s own docstring
+            # states a zero-step plan is "valid, if useless" when the provider proposes
+            # one. Previously printed nothing at all here -- the same silent-empty gap
+            # already fixed above for dir_entries/docker_containers/audit_records.
+            print("The generated plan has no steps.")
         for step_record in outcome.plan_step_records:
             step_status = "GRANTED" if step_record.decision.granted else "DENIED"
             print(f"step: {step_record.step.capability_id.value} {step_status}")

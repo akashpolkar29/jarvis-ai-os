@@ -1965,6 +1965,23 @@ matching lines found."` messages CLI already uses for a granted-empty
 result, while a genuinely denied result still falls through unchanged.
 See `docs/architecture/wp168-ui-fs-empty-result-messages.md`.
 
+## 69. ~~CLI: more honest empty-result messages~~ -- RESOLVED/BUILT 2026-09-12 (WP-169)
+
+**Resolved/built, WP-169**. Audited the rest of `_print_outcome`'s
+`is not None: for x in ...: print(...)` loops for the same silent-
+empty gap already fixed four times this session. Found and fixed
+three more, live-confirmed: `list-dir` on a genuinely empty directory,
+`audit-history --capability-id <filter matching nothing>`, and
+`list-docker-containers` (reasoned structurally + a mocked test, since
+this dev machine has real containers running for other test
+infrastructure). A fourth, `plan run`, was initially assumed
+unreachable but checked directly against `generate_plan`'s own
+docstring first — a zero-step plan is real and "valid, if useless" —
+so it was fixed too. All four now print an honest message
+(`"(empty directory)"`, `"No containers found."`, `"No matching audit
+records found."`, `"The generated plan has no steps."`). See
+`docs/architecture/wp169-cli-more-empty-result-messages.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
