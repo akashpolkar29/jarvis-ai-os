@@ -398,26 +398,56 @@ def _summarize_dir_list(result: DirListOutcome) -> str | None:
 
 
 def _summarize_find_files(result: FileFindOutcome) -> str | None:
-    """Render a real `fs.find` result as chat text (WP-114). `None` if no matches."""
-    if not result.matches:
+    """Render a real `fs.find` result as chat text (WP-114).
+
+    `None` only for a denied result (`matches is None`), so the
+    caller's own dispatch loop correctly falls through to the generic
+    `"Ran fs.find."` fallback for that case, unchanged.
+
+    WP-168: a *granted*, zero-match result (`matches == ()`)
+    previously also returned `None` here -- conflating "denied" with
+    "granted but empty" -- which made a real, empty `fs.find` search
+    fall through to that same generic fallback instead of the honest,
+    already-established `"No files found."` message `jarvis fs find`'s
+    own CLI output (WP-163) and this server's `task list`/`memory
+    retrieve` summaries already use for an empty result. Confirmed
+    live before fixing.
+    """
+    if result.matches is None:
         return None
+    if not result.matches:
+        return "No files found."
     return "\n".join(str(match) for match in result.matches)
 
 
 def _summarize_search_content(result: ContentSearchOutcome) -> str | None:
-    """Render a real `fs.search_content` result as chat text (WP-114). `None` if no matches."""
-    if not result.matches:
+    """Render a real `fs.search_content` result as chat text (WP-114).
+
+    WP-168: see :func:`_summarize_find_files`'s identical fix note --
+    `None` only for a denied result (`matches is None`).
+    """
+    if result.matches is None:
         return None
-    lines = [f"{path}:{line_number}: {line}" for path, line_number, line in result.matches]
+    lines = (
+        ["No matching lines found."]
+        if not result.matches
+        else [f"{path}:{line_number}: {line}" for path, line_number, line in result.matches]
+    )
     if result.capped:
         lines.append("(capped -- not every file was scanned)")
     return "\n".join(lines)
 
 
 def _summarize_recent_files(result: RecentFilesOutcome) -> str | None:
-    """Render a real `fs.recent` result as chat text (WP-114). `None` if no files."""
-    if not result.files:
+    """Render a real `fs.recent` result as chat text (WP-114).
+
+    WP-168: see :func:`_summarize_find_files`'s identical fix note --
+    `None` only for a denied result (`files is None`).
+    """
+    if result.files is None:
         return None
+    if not result.files:
+        return "No files found."
     return "\n".join(str(recent_file) for recent_file in result.files)
 
 

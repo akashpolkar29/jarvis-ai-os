@@ -1950,6 +1950,21 @@ the separately-tracked audit-chain wholesale-replacement question
 remain unresolved by design, unaffected by this review. See
 `docs/architecture/wp167-v010-milestone-preparation.md`.
 
+## 68. ~~jarvis ui empty-result messages for fs.*~~ -- RESOLVED/BUILT 2026-09-12 (WP-168)
+
+**Resolved/built, WP-168**. `jarvis ui`'s own chat-response summarizer
+(`_summarize_find_files`/`_summarize_search_content`/
+`_summarize_recent_files`) conflated a *denied* result (`matches is
+None`) with a *granted, empty* result (`matches == ()`), both
+returning `None` and falling through to a generic `"Ran <capability
+id>."` message — confirmed live before fixing (the CLI-side
+equivalent was already fixed by WP-163, but the UI's own separate
+summarizer had the identical, unfixed gap). Now distinguishes the two
+states explicitly, returning the same honest `"No files found."`/`"No
+matching lines found."` messages CLI already uses for a granted-empty
+result, while a genuinely denied result still falls through unchanged.
+See `docs/architecture/wp168-ui-fs-empty-result-messages.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

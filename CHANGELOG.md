@@ -299,6 +299,13 @@ replacement for either.
   requests it recognizes -- previously gave zero indication of what
   it understood. No new router, no LLM, no grammar change. See
   `docs/architecture/wp166-do-command-discovery.md`.
+- WP-168: `jarvis ui`'s own chat responses for `fs.find`/
+  `search_content`/`recent` now say "No files found."/"No matching
+  lines found." for a granted, empty result -- previously conflated
+  with a denied result and fell through to a generic "Ran
+  `<capability>`." message, the CLI-side equivalent of WP-163's own
+  fix (the UI has a separate summarizer). See
+  `docs/architecture/wp168-ui-fs-empty-result-messages.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check

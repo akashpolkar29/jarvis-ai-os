@@ -1495,8 +1495,18 @@ def test_summarize_execution_result_for_a_non_empty_find_files() -> None:
     assert "b.py" in summary
 
 
-def test_summarize_execution_result_for_an_empty_find_files_falls_back() -> None:
+def test_summarize_execution_result_for_a_granted_empty_find_files() -> None:
+    """WP-168: previously fell all the way through to "Ran fs.find.", a real, confirmed bug."""
     result = FileFindOutcome(decision=_make_decision(granted=True, tier=Tier.ALLOW), matches=())
+
+    summary = _summarize_execution_result("fs.find", result)
+
+    assert summary == "No files found."
+
+
+def test_summarize_execution_result_for_a_denied_find_files_falls_back() -> None:
+    """A denied result (matches=None) is real, distinct state, still falls through correctly."""
+    result = FileFindOutcome(decision=_make_decision(granted=False, tier=Tier.ALLOW), matches=None)
 
     summary = _summarize_execution_result("fs.find", result)
 
@@ -1529,6 +1539,17 @@ def test_summarize_execution_result_for_search_content_reports_capping() -> None
     assert "capped" in summary
 
 
+def test_summarize_execution_result_for_a_granted_empty_search_content() -> None:
+    """WP-168: previously fell through to "Ran fs.search_content.", the same real bug."""
+    result = ContentSearchOutcome(
+        decision=_make_decision(granted=True, tier=Tier.ALLOW), matches=(), capped=False
+    )
+
+    summary = _summarize_execution_result("fs.search_content", result)
+
+    assert summary == "No matching lines found."
+
+
 def test_summarize_execution_result_for_a_non_empty_recent_files() -> None:
     result = RecentFilesOutcome(
         decision=_make_decision(granted=True, tier=Tier.ALLOW), files=(Path("/home/user/a.py"),)
@@ -1537,6 +1558,15 @@ def test_summarize_execution_result_for_a_non_empty_recent_files() -> None:
     summary = _summarize_execution_result("fs.recent", result)
 
     assert "a.py" in summary
+
+
+def test_summarize_execution_result_for_a_granted_empty_recent_files() -> None:
+    """WP-168: previously fell through to "Ran fs.recent.", the same real bug."""
+    result = RecentFilesOutcome(decision=_make_decision(granted=True, tier=Tier.ALLOW), files=())
+
+    summary = _summarize_execution_result("fs.recent", result)
+
+    assert summary == "No files found."
 
 
 def test_summarize_execution_result_for_list_email_with_summaries() -> None:
