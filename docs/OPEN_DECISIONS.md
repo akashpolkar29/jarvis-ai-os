@@ -1982,6 +1982,17 @@ so it was fixed too. All four now print an honest message
 records found."`, `"The generated plan has no steps."`). See
 `docs/architecture/wp169-cli-more-empty-result-messages.md`.
 
+## 70. ~~CLI: task list empty-result message~~ -- RESOLVED/BUILT 2026-09-12 (WP-170)
+
+**Resolved/built, WP-170**. Continuing WP-169's own sweep, found
+`jarvis task list --status <filter matching nothing>` shared the same
+silent-empty gap — confirmed live before fixing. `jarvis ui`'s own
+`_summarize_task_list` already handled this correctly; only the CLI's
+`_print_task_outcome` did not. Now prints `"No tasks found."`,
+matching the UI exactly. `--scheduled-only` (WP-140) shares the same
+field/print path, confirmed unaffected. See
+`docs/architecture/wp170-cli-task-list-empty-result-message.md`.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

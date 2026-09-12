@@ -3159,6 +3159,41 @@ def test_task_list_subcommand_prints_each_task(
     assert "task:1: goal='a goal' status=completed" in captured.out
 
 
+def test_task_list_subcommand_reports_no_tasks_found_on_a_granted_empty_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-170: previously printed nothing at all, indistinguishable from a silent failure."""
+
+    def fake_authorize_and_list_tasks(
+        *,
+        status: str | None = None,  # noqa: ARG001
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> TaskListOutcome:
+        decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        return TaskListOutcome(decision=decision, records=())
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_list_tasks", fake_authorize_and_list_tasks
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "list",
+            "--status",
+            "cancelled",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert "No tasks found." in captured.out
+    assert exit_code == 0
+
+
 def test_task_list_scheduled_only_filters_to_real_scheduled_tasks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

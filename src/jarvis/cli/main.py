@@ -3050,6 +3050,12 @@ def _print_task_outcome(outcome: _CommandOutcome) -> None:  # noqa: PLR0912 -- o
     elif outcome.command_label == "task status":
         print("No task found for this identifier.")
     if outcome.task_records is not None:
+        if not outcome.task_records:
+            # WP-170: a granted, zero-match `task list` previously printed nothing at
+            # all here -- the same silent-empty gap WP-144/WP-163/WP-164/WP-168/WP-169
+            # already fixed elsewhere. Mirrors `jarvis ui`'s own already-correct
+            # `_summarize_task_list` message exactly.
+            print("No tasks found.")
         for record in outcome.task_records:
             _print_one_task_record(
                 record,

@@ -310,6 +310,10 @@ replacement for either.
   `plan run` now print an honest message for a granted, genuinely
   empty result -- previously printed nothing at all. See
   `docs/architecture/wp169-cli-more-empty-result-messages.md`.
+- WP-170: `jarvis task list` now prints "No tasks found." for a
+  granted, zero-match result -- previously printed nothing at all,
+  matching `jarvis ui`'s own already-correct message. See
+  `docs/architecture/wp170-cli-task-list-empty-result-message.md`.
 - WP-118: `authorize_and_run_task` no longer silently resumes an
   already-`"cancelled"` task -- a real gap WP-117 itself opened (before
   it, no task could reach `"cancelled"`, so the missing status check
