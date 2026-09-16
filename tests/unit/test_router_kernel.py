@@ -421,6 +421,34 @@ async def test_a_genuinely_unknown_command_falls_back_to_reasoning(tmp_path: Pat
     assert outcome.decision is None
 
 
+async def test_stage_b_prompt_genuinely_includes_relevant_built_in_skill_context(
+    tmp_path: Path,
+) -> None:
+    """WP-175: the real prompt Stage B sends includes compact, relevant skill metadata.
+
+    Proves the wiring end to end, not just `generate_route`'s own
+    isolated unit tests: `authorize_and_route` really does build
+    `build_default_skill_registry(registry)` and pass it through to
+    the real reasoning call.
+    """
+    chain_path = tmp_path / "audit_chain.json"
+    provider = _FakeReasoningProvider(
+        json.dumps({"kind": "unknown", "capability_id": None, "arguments": {}, "goal": None})
+    )
+
+    await authorize_and_route(
+        "do something clever with the filesystem, whatever that means",
+        provider,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+    )
+
+    assert len(provider.calls) == 1
+    assert "filesystem" in provider.calls[0]
+    assert "fs.read_file" in provider.calls[0]
+
+
 # ---------------------------------------------------------------------------
 # Stage B: reasoning fallback
 # ---------------------------------------------------------------------------

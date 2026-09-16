@@ -47,6 +47,15 @@ no real cloud-provider default is invented here either; an explicit
 reasoning, and the local default path logs the identical, real,
 honest reliability warning.
 
+**WP-175**: Stage B is now given a compact, skill-aware context --
+`build_default_skill_registry(registry)`'s own output is passed
+straight through to `generate_route`, which deterministically filters
+it down to a small, text-relevant subset before it ever reaches a
+prompt (see that function's own module docstring). Purely advisory:
+`registry.__contains__` (the `is_registered` predicate above) still
+runs unconditionally on whatever `capability_id` the model actually
+returns, exactly as before this change.
+
 **The router never executes a capability directly, at any stage --
 this is a structural property, not just documentation.**
 :func:`authorize_and_route` only ever does one of three things once a
@@ -128,6 +137,7 @@ from jarvis.kernel.intent import (
     UnrecognizedIntent,
     resolve_intent,
 )
+from jarvis.kernel.skills import build_default_skill_registry
 from jarvis.kernel.tasks import (
     authorize_and_create_task,
     authorize_and_get_task,
@@ -688,11 +698,13 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
                 "shares. Pass an explicit, real cloud-backed ReasoningPort to avoid this."
             )
         real_provider = provider or LocalReasoningAdapter()
+        skills = build_default_skill_registry(registry)
         try:
             route = await generate_route(
                 Tainted(text, Provenance.user()),
                 real_provider,
                 lambda capability_id: capability_id in registry,
+                skills,
             )
         except RoutingError as exc:
             _logger.debug("router: reasoning fallback failed, reporting UNKNOWN: %s", exc)

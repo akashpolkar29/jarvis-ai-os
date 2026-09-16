@@ -7,25 +7,54 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from jarvis.application.routing.router import RouteKind, RoutingError, generate_route
+from jarvis.application.routing.router import (
+    RouteKind,
+    RoutingError,
+    _build_routing_prompt,
+    _select_relevant_skills,
+    generate_route,
+)
 from jarvis.domain.capability import CapabilityId
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.skill import SkillDescriptor, SkillId
 
 if TYPE_CHECKING:
     from jarvis.domain.evidence import Attempt
 
 
 class _FakeReasoningProvider:
-    """A minimal, test-local ReasoningPort, always returning a fixed Candidate."""
+    """A minimal, test-local ReasoningPort, always returning a fixed Candidate.
+
+    Records every prompt it was actually called with, so tests can
+    assert on what the real, final prompt text contained (WP-175).
+    """
 
     def __init__(self, content: str) -> None:
         self._content = content
+        self.received_prompts: list[str] = []
 
     async def generate(self, task: str, _prior_attempts: tuple[Attempt, ...]) -> Tainted[Candidate]:
-        del task
+        self.received_prompts.append(task)
         candidate = Candidate(author="test-provider", content=self._content)
         return Tainted(candidate, Provenance.system())
+
+
+def _skill(
+    skill_id: str,
+    *,
+    domain: str = "test",
+    name: str = "Test Skill",
+    tags: tuple[str, ...] = (),
+) -> SkillDescriptor:
+    return SkillDescriptor(
+        id=SkillId(skill_id),
+        name=name,
+        description=f"A test skill for {skill_id}.",
+        domain=domain,
+        capability_ids=(CapabilityId("fs.read_file"),),
+        tags=tags,
+    )
 
 
 def _always_registered(_capability_id: CapabilityId) -> bool:
@@ -190,3 +219,137 @@ async def test_generate_route_confidence_is_never_taken_from_the_model() -> None
     route = await generate_route(text, provider, _always_registered)
 
     assert route.confidence != pytest.approx(0.99)
+
+
+def test_select_relevant_skills_matches_on_domain_substring() -> None:
+    """A skill whose domain appears in the request text is selected."""
+    filesystem = _skill("filesystem", domain="filesystem")
+    calendar = _skill("calendar", domain="calendar")
+
+    matches = _select_relevant_skills("please search the filesystem", (filesystem, calendar))
+
+    assert matches == (filesystem,)
+
+
+def test_select_relevant_skills_matches_on_tag_substring() -> None:
+    """A skill whose tag appears in the request text is selected, even if id/domain don't match."""
+    filesystem = _skill("filesystem", domain="filesystem", tags=("files", "search"))
+
+    matches = _select_relevant_skills("please search my documents", (filesystem,))
+
+    assert matches == (filesystem,)
+
+
+def test_select_relevant_skills_returns_empty_when_nothing_matches() -> None:
+    """No fallback to the full list -- an irrelevant request yields no skill context at all."""
+    filesystem = _skill("filesystem", domain="filesystem")
+
+    matches = _select_relevant_skills("xyzzy plugh qux", (filesystem,))
+
+    assert matches == ()
+
+
+def test_select_relevant_skills_is_deterministic_regardless_of_input_order() -> None:
+    """Sorted by skill id internally -- the same candidates in any order give the same result."""
+    a = _skill("a-skill", domain="alpha")
+    b = _skill("b-skill", domain="alpha")
+
+    forward = _select_relevant_skills("alpha request", (a, b))
+    reversed_input = _select_relevant_skills("alpha request", (b, a))
+
+    assert forward == reversed_input == (a, b)
+
+
+def test_select_relevant_skills_respects_the_limit() -> None:
+    """At most `limit` skills are returned, even when more than that many match."""
+    skills = tuple(_skill(f"skill-{i}", domain="shared") for i in range(10))
+
+    matches = _select_relevant_skills("shared request", skills, limit=3)
+
+    expected_match_count = 3
+    assert len(matches) == expected_match_count
+
+
+def test_build_routing_prompt_without_skills_matches_the_original_prompt_shape() -> None:
+    """No skills supplied -> no skill-context section at all, byte-for-byte the pre-WP-175 shape."""
+    prompt = _build_routing_prompt("read my file")
+
+    assert "Potentially relevant" not in prompt
+    assert "read my file" in prompt
+
+
+def test_build_routing_prompt_with_skills_includes_compact_context_only() -> None:
+    """Relevant skills add a compact block naming id/domain/description/capabilities only."""
+    filesystem = _skill("filesystem", domain="filesystem")
+
+    prompt = _build_routing_prompt("read a file", (filesystem,))
+
+    assert "filesystem" in prompt
+    assert "fs.read_file" in prompt
+    assert "Potentially relevant" in prompt
+
+
+def test_build_routing_prompt_never_includes_skill_instructions() -> None:
+    """A skill's own free-text instructions never reach the prompt -- compact context only."""
+    skill = SkillDescriptor(
+        id=SkillId("filesystem"),
+        name="Filesystem",
+        description="Read and search local files.",
+        domain="filesystem",
+        capability_ids=(CapabilityId("fs.read_file"),),
+        instructions="SECRET_MARKER_SHOULD_NEVER_APPEAR_IN_A_PROMPT",
+    )
+
+    prompt = _build_routing_prompt("read a file", (skill,))
+
+    assert "SECRET_MARKER_SHOULD_NEVER_APPEAR_IN_A_PROMPT" not in prompt
+
+
+async def test_generate_route_with_no_matching_skills_sends_the_original_prompt_shape() -> None:
+    """A request matching none of the supplied skills is routed exactly as it was before WP-175."""
+    response = json.dumps({"kind": "unknown", "capability_id": None, "arguments": {}, "goal": None})
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("asdkjaslkdj", Provenance.user())
+    unrelated_skill = _skill("browser", domain="browser")
+
+    await generate_route(text, provider, _always_registered, (unrelated_skill,))
+
+    assert "Potentially relevant" not in provider.received_prompts[0]
+
+
+async def test_generate_route_with_a_matching_skill_includes_it_in_the_real_prompt() -> None:
+    """A relevant skill genuinely reaches the real prompt sent to the provider."""
+    response = json.dumps(
+        {
+            "kind": "deterministic_command",
+            "capability_id": "fs.read_file",
+            "arguments": {"path": "/tmp/a.txt"},
+            "goal": None,
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("read a file from the filesystem at /tmp/a.txt", Provenance.user())
+    filesystem_skill = _skill("filesystem", domain="filesystem")
+
+    route = await generate_route(text, provider, _always_registered, (filesystem_skill,))
+
+    assert "filesystem" in provider.received_prompts[0]
+    assert route.kind == RouteKind.DETERMINISTIC_COMMAND
+
+
+async def test_generate_route_still_rejects_unregistered_capability_with_skill_context() -> None:
+    """Skill context is purely advisory -- is_registered still runs unconditionally."""
+    response = json.dumps(
+        {
+            "kind": "deterministic_command",
+            "capability_id": "shell.execute_arbitrary_command",
+            "arguments": {},
+            "goal": None,
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("do something dangerous", Provenance.user())
+    filesystem_skill = _skill("filesystem", domain="filesystem")
+
+    with pytest.raises(RoutingError):
+        await generate_route(text, provider, _never_registered, (filesystem_skill,))
