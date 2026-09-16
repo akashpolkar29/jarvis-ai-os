@@ -1993,6 +1993,48 @@ matching the UI exactly. `--scheduled-only` (WP-140) shares the same
 field/print path, confirmed unaffected. See
 `docs/architecture/wp170-cli-task-list-empty-result-message.md`.
 
+## 71. Generic (non-job-specific) web-search capability -- real gap, documented, not built (WP-178)
+
+**Undecided.** Investigated while building the Research skill
+(WP-178): `browser.open_page` requires an already-known, literal URL
+-- it has no query parameter and builds no search URL of its own.
+`job_search.open_results`/`job_search.find_careers_page`
+(`kernel/job_search.py`) do build a real search-engine query URL, but
+both are narrowly, structurally scoped to job search (LinkedIn/Indeed
+result pages, or a DuckDuckGo "<company> careers" query) and are
+forbidden by a real meta-test
+(`tests/meta/test_job_search_no_content_reading.py`) from ever reading
+page content -- the opposite of what a general research "gather and
+read" step needs. A real, plausible design exists (mirror
+`job_search.find_careers_page`'s own already-proven, ToS-checked
+DuckDuckGo pattern: `Effect.EXECUTE`/`Tier.CONFIRM`, opens a real
+search-results page in the user's own ordinary Brave browser, no
+scraping), but building it was outside WP-178's own scope ("document
+the missing capability instead of inventing unsafe execution"). Real,
+practical consequence today: a research request naming a source by
+name rather than URL has no capability to discover that URL on its
+own. See `docs/architecture/wp178-research-skill-foundation.md` for
+the full account. Not resolved here -- the user's own decision whether
+to build it, and if so, under which real ADR (a new capability id,
+however small, still needs one per this project's own established
+review pattern for anything touching `browser.*`/egress).
+
+## 72. Desktop/Git skill -- deliberately deferred, not a decision needed yet (WP-173/WP-179)
+
+**Not undecided, just not yet built -- noted for completeness, not as
+an open question.** `kernel/desktop.py`'s own capabilities
+(`git.status`/`git.create_branch`/`git.commit`/`git.push`/
+`git.force_push`/`docker.*`/`desktop.*` app-control) have no `Skill`
+grouping of their own -- WP-173 explicitly scoped the first pass to
+six domains and named desktop control as one of several "equally
+stable" domains deferred, not rejected; WP-179's own Coding skill
+deliberately excluded every git write capability as outside its own
+five named areas. Extending coverage is purely additive (one more
+`registry.register(SkillDescriptor(...))` call in `kernel/skills.py`,
+matching every skill built so far) whenever a real work package asks
+for it -- listed here only so a future pass doesn't have to
+re-discover that this gap is intentional, not overlooked.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

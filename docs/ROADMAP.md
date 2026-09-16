@@ -627,3 +627,68 @@ it.
   separate write-once external anchor, or documenting the current
   guarantee as sufficient), no recommendation made — the user's own
   decision, not built.
+- **Note on WP-158 through WP-170**: this file was not updated
+  per-work-package across that stretch (a real, pre-existing staleness
+  gap, not introduced by the WP-171-180 entry below and not closed by
+  it — each of those work packages has its own real
+  `docs/architecture/wpNNN-*.md`/`docs/OPEN_DECISIONS.md` entry, just
+  not condensed here yet).
+- **WP-171 through WP-180, the M8 skills-platform queue, 2026-09-16**:
+  a new, real, purely declarative `Skill` abstraction
+  (`jarvis.domain.skill`/`skill_registry`) sitting above the existing
+  capability registry — never a second execution system, never a
+  bypass of `AuthorizationOrchestrator`. WP-171 designed the minimal
+  `SkillId`/`SkillDescriptor` types after confirming, by direct
+  inspection, that no existing abstraction covered "a named,
+  discoverable grouping of what JARVIS can already do." WP-172 built
+  `SkillRegistry` (mirrors `CapabilityRegistry` exactly) plus
+  `validate_skill_registry`, a pure read-time cross-check against the
+  real capability registry. WP-173 registered the first six built-in
+  skills (filesystem/tasks/memory/calendar/email/browser) — Tasks
+  names `memory.get`/`memory.retrieve`/`planning.run_plan` rather than
+  inventing a nonexistent `task.*` capability; Calendar/Email are
+  read-only, since their write counterparts are dynamic-effect and
+  never statically registered. A real bug (`capabilities or
+  build_default_registry()` silently treating an explicitly-passed
+  *empty* registry as falsy) was caught by this work package's own
+  test and fixed. WP-174 added `jarvis skills list`/`jarvis skills
+  show <id>` (mirrors `jarvis doctor`'s own "not a capability, no
+  audit record" design exactly) and a pointer from `jarvis do --help`.
+  WP-175 gave the router's Stage-B reasoning fallback a compact,
+  deterministically-filtered slice of relevant skill metadata as
+  prompt context — purely advisory, `is_registered` still runs
+  unconditionally regardless; a real premise correction was made
+  along the way (neither this module nor the planner ever sent *any*
+  capability list before this change, contrary to the work package's
+  own "trim the whole system description" framing — the real gap
+  closed was zero context, not excess context). WP-176 reviewed the
+  existing `ReasoningPort`/`ProviderProfile`/`ModelRouter`/`Dispatcher`
+  stack against OpenJarvis's engine-abstraction concept and concluded
+  it is already sufficient — no code changed. WP-177 reviewed
+  `EventBus`/audit-chain observability against six named trace types;
+  five were already fully covered (task started/completed/failed via
+  `TaskStatusChanged`; authorization decisions and capability
+  execution via the audit chain itself, deliberately not duplicated);
+  the one real gap (no way to ask "which audited calls belong to
+  skill X?") was closed with a purely read-time `--skill` filter on
+  `jarvis audit-history`, no `AuditRecord` schema change. WP-178 and
+  WP-179 added two more, cross-cutting skills — Research (filesystem +
+  browser + memory + planning capabilities, describing a real six-step
+  workflow; one real, honest gap documented rather than built around:
+  no generic, non-job-specific "search the web for X" capability
+  exists anywhere in this codebase) and Coding (`git.status` +
+  `fs.read_file`/`fs.find`/`fs.search_content` + `coding.run_task`,
+  deliberately excluding every git write capability as out of the
+  named scope). WP-180 (this entry) reviewed the whole queue directly
+  against its own hard rules — confirmed by diffing `domain/capability.py`/
+  `kernel/capabilities.py` (untouched, zero new `CapabilityId`/`Effect`/
+  `Tier`), confirmed exactly one router file extended (not duplicated),
+  confirmed no new `AuthorizationOrchestrator` construction site, and
+  live-smoke-tested `jarvis skills list/show`, `jarvis do --help`, and
+  `jarvis audit-history --skill` against a real chain file. All gates
+  green throughout (1911 tests passing by the end, up from 1863 at the
+  start of this queue); 8 skills now registered. No ADR was needed
+  anywhere in this queue — no new `CapabilityId`/`Effect`/`Tier`, no
+  authorization-semantics change. Not tagged — `v0.10.0` remains the
+  correct next sequential slot (WP-167's own assessment, still true),
+  tagging remains the user's own decision.
