@@ -37,11 +37,12 @@ from jarvis.kernel.skills import (
     EMAIL_SKILL_ID,
     FILESYSTEM_SKILL_ID,
     MEMORY_SKILL_ID,
+    RESEARCH_SKILL_ID,
     TASKS_SKILL_ID,
     build_default_skill_registry,
 )
 
-_EXPECTED_SKILL_COUNT = 6
+_EXPECTED_SKILL_COUNT = 7
 
 
 def test_build_default_skill_registry_does_not_raise() -> None:
@@ -69,6 +70,7 @@ def test_build_default_skill_registry_registers_exactly_the_expected_ids() -> No
         CALENDAR_SKILL_ID,
         EMAIL_SKILL_ID,
         BROWSER_SKILL_ID,
+        RESEARCH_SKILL_ID,
     }
     assert len(registry) == _EXPECTED_SKILL_COUNT
 
@@ -153,6 +155,30 @@ def test_browser_skill_groups_the_real_browser_capabilities() -> None:
         BROWSER_INSPECT_DOM_CAPABILITY_ID,
         BROWSER_CLOSE_PAGE_CAPABILITY_ID,
     }
+
+
+def test_research_skill_groups_real_capabilities_across_filesystem_browser_memory_planning() -> (
+    None
+):
+    """The Research skill (WP-178) is real, cross-cutting -- not job_search.*, never invented."""
+    registry = build_default_skill_registry()
+    skill = registry.get(RESEARCH_SKILL_ID)
+
+    assert skill.domain == "research"
+    assert set(skill.capability_ids) == {
+        FIND_FILES_CAPABILITY_ID,
+        SEARCH_CONTENT_CAPABILITY_ID,
+        RECENT_FILES_CAPABILITY_ID,
+        READ_FILE_CAPABILITY_ID,
+        BROWSER_OPEN_PAGE_CAPABILITY_ID,
+        BROWSER_INSPECT_DOM_CAPABILITY_ID,
+        BROWSER_SCREENSHOT_CAPABILITY_ID,
+        BROWSER_CLOSE_PAGE_CAPABILITY_ID,
+        MEMORY_RETRIEVE_CAPABILITY_ID,
+        MEMORY_GET_CAPABILITY_ID,
+        PLANNING_RUN_PLAN_CAPABILITY_ID,
+    }
+    assert skill.instructions is not None
 
 
 def test_every_skill_capability_id_is_registered_in_the_real_capability_registry() -> None:

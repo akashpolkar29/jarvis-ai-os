@@ -45,6 +45,21 @@ the outgoing content's classification, ADR-0057/ADR-0059) and are
 deliberately never statically registered either -- see
 `kernel/communications.py`'s own module docstring. A skill can only
 ever name what the real `CapabilityRegistry` actually contains.
+
+**WP-178, Research -- a real, cross-cutting skill, not an eighth
+single-domain one**: unlike the six domain-scoped skills above, this
+one groups already-registered capabilities *across* filesystem,
+browser, memory, and planning to describe a real, existing, six-step
+research workflow (understand the request, identify sources, gather,
+synthesize, return structured findings, preserve provenance) that
+already exists as usable primitives, just never named as one
+discoverable unit before. See
+`docs/architecture/wp178-research-skill-foundation.md` for the full
+account, including the one real, honest gap found and deliberately
+documented rather than closed with a new capability: no generic,
+non-job-specific "search the web for X" capability exists anywhere in
+this codebase -- `browser.open_page` requires an already-known,
+literal URL, not a query.
 """
 
 from __future__ import annotations
@@ -88,6 +103,7 @@ MEMORY_SKILL_ID = SkillId("memory")
 CALENDAR_SKILL_ID = SkillId("calendar")
 EMAIL_SKILL_ID = SkillId("email")
 BROWSER_SKILL_ID = SkillId("browser")
+RESEARCH_SKILL_ID = SkillId("research")
 
 
 def build_default_skill_registry(capabilities: CapabilityRegistry | None = None) -> SkillRegistry:
@@ -257,6 +273,59 @@ def build_default_skill_registry(capabilities: CapabilityRegistry | None = None)
                 "invocations."
             ),
             tags=("web", "automation", "screenshot"),
+        )
+    )
+
+    registry.register(
+        SkillDescriptor(
+            id=RESEARCH_SKILL_ID,
+            name="Research",
+            description=(
+                "Gather and synthesize information from local files and the web, using "
+                "only already-existing, individually-authorized capabilities -- never a "
+                "second execution system."
+            ),
+            domain="research",
+            capability_ids=(
+                FIND_FILES_CAPABILITY_ID,
+                SEARCH_CONTENT_CAPABILITY_ID,
+                RECENT_FILES_CAPABILITY_ID,
+                READ_FILE_CAPABILITY_ID,
+                BROWSER_OPEN_PAGE_CAPABILITY_ID,
+                BROWSER_INSPECT_DOM_CAPABILITY_ID,
+                BROWSER_SCREENSHOT_CAPABILITY_ID,
+                BROWSER_CLOSE_PAGE_CAPABILITY_ID,
+                MEMORY_RETRIEVE_CAPABILITY_ID,
+                MEMORY_GET_CAPABILITY_ID,
+                PLANNING_RUN_PLAN_CAPABILITY_ID,
+            ),
+            instructions=(
+                "A real, six-step workflow over already-existing capabilities, described "
+                "here, not executed here: (1) understand the request -- identify what is "
+                "actually being asked; (2) identify relevant sources -- an already-known "
+                "local path (fs.find/fs.search_content/fs.recent) or an already-known URL "
+                "(browser.open_page); this skill names no capability that discovers a "
+                "source from a bare query -- see this skill's own design note for the one "
+                "real, named gap that leaves open; (3) gather -- fs.read_file for local "
+                "content, browser.inspect_dom/browser.screenshot for an already-open "
+                "page's content, each individually authorized, never batched; (4) "
+                "synthesize -- reasoning over gathered content, e.g. via planning.run_plan "
+                "or coding.run_task for a structured goal, both outside this skill's own "
+                "capability_ids since they are already their own dedicated skills/"
+                "capabilities; (5) return structured findings -- the caller's own "
+                "responsibility, this skill invents no new output format; (6) preserve "
+                "provenance where supported -- already structural, not something this "
+                "skill adds: browser-sourced content is automatically tagged "
+                "Trust.UNTRUSTED_EXTERNAL, and memory.retrieve/memory.get (listed above) "
+                "recall whatever provenance a prior memory.write already recorded. To "
+                "persist a synthesized finding, use 'jarvis memory write'/'remember "
+                "<text>' directly -- memory.write is a dynamic-effect capability "
+                "(ADR-0049) and is deliberately not listed in capability_ids, the same "
+                "reason the Memory skill's own instructions give. Always call "
+                "browser.close_page when finished with a page -- no automatic cleanup "
+                "exists."
+            ),
+            tags=("research", "search", "synthesis", "web", "files"),
         )
     )
 
