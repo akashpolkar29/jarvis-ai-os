@@ -77,3 +77,35 @@ class CapabilityNotRegistered(JarvisError):  # noqa: N818 -- reads as a fact, no
     loop) may want to catch and handle deliberately, not an
     undifferentiated dict miss.
     """
+
+
+class SkillAlreadyRegistered(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when a skill id is registered a second time.
+
+    Mirrors :class:`CapabilityAlreadyRegistered` exactly, for the same
+    reason: registration is reject-on-collision, never overwrite, so a
+    later, less-scrutinized registration can never quietly redefine
+    what a skill id points at.
+    """
+
+
+class SkillNotRegistered(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when looking up a skill id that was never registered.
+
+    Mirrors :class:`CapabilityNotRegistered` exactly -- a domain-
+    meaningful missing-skill failure, not an undifferentiated dict miss.
+    """
+
+
+class SkillReferencesUnknownCapability(JarvisError):  # noqa: N818 -- reads as a fact
+    """Raised when a registered skill names a capability id that isn't real.
+
+    A skill is only ever a discoverability grouping over capabilities
+    that already, genuinely exist in the real
+    :class:`~jarvis.domain.registry.CapabilityRegistry` -- this is the
+    structural check that keeps that true. Raised by
+    :func:`~jarvis.domain.skill_registry.validate_skill_registry`, not
+    at skill-registration time itself, since validating against a real
+    capability registry requires one to already be built (see that
+    function's own docstring).
+    """

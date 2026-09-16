@@ -44,6 +44,9 @@ from .errors import (
     CapabilityAlreadyRegistered,
     CapabilityNotRegistered,
     JarvisError,
+    SkillAlreadyRegistered,
+    SkillNotRegistered,
+    SkillReferencesUnknownCapability,
     TaintViolation,
 )
 from .evidence import Attempt, Candidate, EscalationRung, Evidence, EvidenceKind, Verdict
@@ -52,6 +55,7 @@ from .provenance import Classification, Provenance, Tainted, Trust
 from .reasoning import ProviderProfile, TaskBudget
 from .registry import CapabilityRegistry
 from .skill import SkillDescriptor, SkillId
+from .skill_registry import SkillRegistry, validate_skill_registry
 from .speaker_id import SpeakerScore
 from .transcript import Transcript
 from .wake_word import WakeEvent
@@ -86,8 +90,12 @@ __all__ = [
     "Provenance",
     "ProviderProfile",
     "Segment",
+    "SkillAlreadyRegistered",
     "SkillDescriptor",
     "SkillId",
+    "SkillNotRegistered",
+    "SkillReferencesUnknownCapability",
+    "SkillRegistry",
     "SpeakerScore",
     "TaintViolation",
     "Tainted",
@@ -101,4 +109,5 @@ __all__ = [
     "digest_value",
     "evaluate",
     "minimum_tier_for",
+    "validate_skill_registry",
 ]
