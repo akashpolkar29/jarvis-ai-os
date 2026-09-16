@@ -60,6 +60,20 @@ documented rather than closed with a new capability: no generic,
 non-job-specific "search the web for X" capability exists anywhere in
 this codebase -- `browser.open_page` requires an already-known,
 literal URL, not a query.
+
+**WP-179, Coding/Development -- also cross-cutting, also deliberately
+narrow**: groups `git.status` (repository inspection), `fs.read_file`
+(file reading), `fs.find`/`fs.search_content` (code search), and
+`coding.run_task` (development workflows -- including tests, since
+`coding.run_task`'s own real escalation ladder already runs real
+tests internally, ADR-0056). **Deliberately excludes every git write
+capability** (`git.create_branch`/`git.commit`/`git.push`/
+`git.force_push`) -- none of the six bullet points this work package
+names ("repository inspection, file reading, code search, tests,
+development workflows") describe committing or pushing, and adding
+them would be exactly the scope creep the Research skill's own design
+note already reasoned against for `job_search.*`. See
+`docs/architecture/wp179-coding-skill-foundation.md`.
 """
 
 from __future__ import annotations
@@ -74,10 +88,12 @@ from jarvis.kernel.capabilities import (
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
     BROWSER_SCREENSHOT_CAPABILITY_ID,
     CALENDAR_LIST_EVENTS_CAPABILITY_ID,
+    CODING_RUN_TASK_CAPABILITY_ID,
     DELETE_FILE_CAPABILITY_ID,
     EMAIL_LIST_MESSAGES_CAPABILITY_ID,
     EMAIL_READ_MESSAGE_CAPABILITY_ID,
     FIND_FILES_CAPABILITY_ID,
+    GIT_STATUS_CAPABILITY_ID,
     LIST_DIR_CAPABILITY_ID,
     MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
@@ -104,6 +120,7 @@ CALENDAR_SKILL_ID = SkillId("calendar")
 EMAIL_SKILL_ID = SkillId("email")
 BROWSER_SKILL_ID = SkillId("browser")
 RESEARCH_SKILL_ID = SkillId("research")
+CODING_SKILL_ID = SkillId("coding")
 
 
 def build_default_skill_registry(capabilities: CapabilityRegistry | None = None) -> SkillRegistry:
@@ -326,6 +343,46 @@ def build_default_skill_registry(capabilities: CapabilityRegistry | None = None)
                 "exists."
             ),
             tags=("research", "search", "synthesis", "web", "files"),
+        )
+    )
+
+    registry.register(
+        SkillDescriptor(
+            id=CODING_SKILL_ID,
+            name="Coding",
+            description=(
+                "Inspect a repository, search and read its code, and run an autonomous "
+                "coding-agent task -- including real, internal test execution -- against "
+                "it."
+            ),
+            domain="coding",
+            capability_ids=(
+                GIT_STATUS_CAPABILITY_ID,
+                READ_FILE_CAPABILITY_ID,
+                FIND_FILES_CAPABILITY_ID,
+                SEARCH_CONTENT_CAPABILITY_ID,
+                CODING_RUN_TASK_CAPABILITY_ID,
+            ),
+            instructions=(
+                "A real development workflow over already-existing capabilities: "
+                "git.status for repository inspection; fs.find/fs.search_content for "
+                "locating relevant code; fs.read_file for reading it; coding.run_task "
+                "for the actual development workflow -- a real, already-built, "
+                "already-authorized autonomous coding-agent task (WP-71's coding-loop "
+                "wrapper) that writes code and runs real tests internally via its own "
+                "escalation ladder, in a disposable, sandboxed workspace per climb "
+                "(ADR-0055/ADR-0056), each real write separately gated by "
+                "Effect.CODE_WRITE/Effect.PROTECTED_PATH_WRITE. This skill deliberately "
+                "excludes every git write capability (git.create_branch/git.commit/"
+                "git.push/git.force_push) -- committing and pushing are real, separate, "
+                "already-discoverable capabilities of their own, not part of what "
+                "'repository inspection, file reading, code search, tests, development "
+                "workflows' names. This skill never runs a shell command directly and "
+                "never will -- terminal.run is a deliberate, narrow, separate exception "
+                "to this project's own no-shell principle (ADR-0046), always "
+                "MANUAL_ONLY, and is out of this skill's own scope."
+            ),
+            tags=("development", "code", "tests", "repository"),
         )
     )
 

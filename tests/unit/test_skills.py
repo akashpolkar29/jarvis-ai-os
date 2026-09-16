@@ -12,10 +12,12 @@ from jarvis.kernel.capabilities import (
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
     BROWSER_SCREENSHOT_CAPABILITY_ID,
     CALENDAR_LIST_EVENTS_CAPABILITY_ID,
+    CODING_RUN_TASK_CAPABILITY_ID,
     DELETE_FILE_CAPABILITY_ID,
     EMAIL_LIST_MESSAGES_CAPABILITY_ID,
     EMAIL_READ_MESSAGE_CAPABILITY_ID,
     FIND_FILES_CAPABILITY_ID,
+    GIT_STATUS_CAPABILITY_ID,
     LIST_DIR_CAPABILITY_ID,
     MEMORY_BACKUP_CAPABILITY_ID,
     MEMORY_FORGET_CAPABILITY_ID,
@@ -34,6 +36,7 @@ from jarvis.kernel.capabilities import (
 from jarvis.kernel.skills import (
     BROWSER_SKILL_ID,
     CALENDAR_SKILL_ID,
+    CODING_SKILL_ID,
     EMAIL_SKILL_ID,
     FILESYSTEM_SKILL_ID,
     MEMORY_SKILL_ID,
@@ -42,7 +45,7 @@ from jarvis.kernel.skills import (
     build_default_skill_registry,
 )
 
-_EXPECTED_SKILL_COUNT = 7
+_EXPECTED_SKILL_COUNT = 8
 
 
 def test_build_default_skill_registry_does_not_raise() -> None:
@@ -71,6 +74,7 @@ def test_build_default_skill_registry_registers_exactly_the_expected_ids() -> No
         EMAIL_SKILL_ID,
         BROWSER_SKILL_ID,
         RESEARCH_SKILL_ID,
+        CODING_SKILL_ID,
     }
     assert len(registry) == _EXPECTED_SKILL_COUNT
 
@@ -177,6 +181,22 @@ def test_research_skill_groups_real_capabilities_across_filesystem_browser_memor
         MEMORY_RETRIEVE_CAPABILITY_ID,
         MEMORY_GET_CAPABILITY_ID,
         PLANNING_RUN_PLAN_CAPABILITY_ID,
+    }
+    assert skill.instructions is not None
+
+
+def test_coding_skill_groups_the_real_dev_capabilities_and_excludes_git_writes() -> None:
+    """The Coding skill (WP-179) is inspection/search/read/run-task only -- no git writes."""
+    registry = build_default_skill_registry()
+    skill = registry.get(CODING_SKILL_ID)
+
+    assert skill.domain == "coding"
+    assert set(skill.capability_ids) == {
+        GIT_STATUS_CAPABILITY_ID,
+        READ_FILE_CAPABILITY_ID,
+        FIND_FILES_CAPABILITY_ID,
+        SEARCH_CONTENT_CAPABILITY_ID,
+        CODING_RUN_TASK_CAPABILITY_ID,
     }
     assert skill.instructions is not None
 
