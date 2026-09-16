@@ -7234,6 +7234,95 @@ def test_doctor_subcommand_never_creates_an_audit_chain_file(tmp_path: Path) -> 
         os.chdir(original_cwd)
 
 
+def test_skills_list_subcommand_always_returns_zero_and_lists_every_built_in_skill(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WP-174: 'skills list' is a real, unmocked read over the built-in skill registry."""
+    exit_code = main(["skills", "list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    for skill_id in ("filesystem", "tasks", "memory", "calendar", "email", "browser"):
+        assert skill_id in captured.out
+
+
+def test_skills_list_subcommand_does_not_accept_chain_path_or_confirmation_flags() -> None:
+    """Real, structural proof: skills is not a capability -- it shares none of the common flags."""
+    with pytest.raises(SystemExit):
+        main(["skills", "list", "--chain-path", "/tmp/audit_chain.json"])
+
+
+def test_skills_list_subcommand_never_creates_an_audit_chain_file(tmp_path: Path) -> None:
+    """A real, empirical proof 'skills list' never touches the audit chain -- no file appears."""
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        main(["skills", "list"])
+        assert not (tmp_path / "audit_chain.json").exists()
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_skills_show_subcommand_prints_capabilities_and_required_tier(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """'skills show filesystem' names its real capabilities and each one's real Tier."""
+    exit_code = main(["skills", "show", "filesystem"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "fs.read_file" in captured.out
+    assert "ALLOW" in captured.out
+    assert "fs.delete_file" in captured.out
+    assert "MANUAL_ONLY" in captured.out
+    assert "never be satisfied remotely" in captured.out
+
+
+def test_skills_show_subcommand_reports_an_unknown_skill_id_without_crashing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unregistered skill id is a clean, reported failure, never a raw traceback."""
+    exit_code = main(["skills", "show", "not-a-real-skill"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "No skill named" in captured.out
+
+
+def test_skills_show_subcommand_reports_an_invalid_skill_id_without_crashing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed (whitespace-containing) skill id is reported cleanly, not a raw ValueError."""
+    exit_code = main(["skills", "show", "not a valid id"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "No skill named" in captured.out
+
+
+def test_skills_subcommand_requires_a_sub_subcommand() -> None:
+    """'jarvis skills' alone (no list/show) is rejected by argparse, not silently a no-op."""
+    with pytest.raises(SystemExit):
+        main(["skills"])
+
+
+def test_skills_show_subcommand_requires_skill_id_argument() -> None:
+    with pytest.raises(SystemExit):
+        main(["skills", "show"])
+
+
+def test_do_subcommand_help_points_at_skills_list_for_broader_discovery(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WP-174: jarvis do --help now points at 'jarvis skills list' for the fuller picture."""
+    with pytest.raises(SystemExit):
+        main(["do", "--help"])
+    captured = capsys.readouterr()
+
+    assert "jarvis skills list" in captured.out
+    assert "jarvis skills show <skill_id>" in captured.out
+
+
 def test_check_binary_reports_missing_for_a_real_nonexistent_binary() -> None:
     name, ok, detail = _check_binary("definitely-not-a-real-binary-xyz123", why="test")
 

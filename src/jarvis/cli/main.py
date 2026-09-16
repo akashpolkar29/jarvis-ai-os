@@ -176,7 +176,8 @@ from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind, RouteResult
 from jarvis.cli.ui_server import UiServerConfig, create_server, run_ui_server
 from jarvis.domain.browser import PageHandle
-from jarvis.domain.errors import JarvisError
+from jarvis.domain.errors import JarvisError, SkillNotRegistered
+from jarvis.domain.skill import SkillId
 from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.browser import (
     UnsupportedUrlSchemeError,
@@ -185,6 +186,7 @@ from jarvis.kernel.browser import (
     authorize_and_open_page,
     authorize_and_query_dom,
 )
+from jarvis.kernel.capabilities import build_default_registry
 from jarvis.kernel.coding import authorize_and_run_coding_task
 from jarvis.kernel.communications import (
     authorize_and_create_calendar_event,
@@ -246,6 +248,7 @@ from jarvis.kernel.ping import authorize_ping
 from jarvis.kernel.planning import authorize_and_run_plan
 from jarvis.kernel.project import authorize_and_get_project_status, authorize_and_start_project
 from jarvis.kernel.router import authorize_and_route
+from jarvis.kernel.skills import build_default_skill_registry
 from jarvis.kernel.tasks import (
     STALE_RUNNING_THRESHOLD_SECONDS,
     VALID_TASK_STATUSES,
@@ -880,6 +883,37 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_common_flags(worker_parser)
 
 
+def _add_skills_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `skills list`/`skills show` -- WP-174's real "what can I do?" discovery commands.
+
+    Mirrors `doctor`'s own real, deliberate design choice exactly: not
+    a capability. Both commands only ever read pure, static,
+    already-in-source-tree metadata (`kernel.skills.build_default_skill_registry`,
+    `kernel.capabilities.build_default_registry`) -- no action, no
+    sensitive data, no `Effect`, no audit record, no
+    `--chain-path`/confirmation flags (`_add_common_flags` is
+    deliberately not called here, matching `doctor`'s own parser).
+    """
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Discover what jarvis can do, grouped by skill -- no capability, no audit record.",
+    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
+
+    skills_subparsers.add_parser(
+        "list", help="List every registered skill's id, domain, and short description."
+    )
+
+    show_parser = skills_subparsers.add_parser(
+        "show",
+        help=(
+            "Show one skill's full detail: grouped capabilities, each one's real "
+            "authorization tier, and any usage notes."
+        ),
+    )
+    show_parser.add_argument("skill_id", help="The skill id to show (see 'jarvis skills list').")
+
+
 def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add `do` -- WP-104's one, canonical typed freeform command router entry point.
 
@@ -912,7 +946,12 @@ def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPars
             "\n"
             "A request that matches none of these falls back to a real\n"
             "reasoning provider; one matching no real, wired capability at\n"
-            "all is reported back, never executed."
+            "all is reported back, never executed.\n"
+            "\n"
+            'For a broader, structured answer to "what can jarvis do?", grouped\n'
+            "by skill rather than by exact phrasing, see:\n"
+            "  jarvis skills list\n"
+            "  jarvis skills show <skill_id>"
         ),
     )
     do_parser.add_argument("text", help="The real, typed natural-language request.")
@@ -1297,6 +1336,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_job_search_parsers(subparsers)
     _add_prepare_application_parsers(subparsers)
     _add_job_application_parsers(subparsers)
+    _add_skills_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -1540,6 +1580,75 @@ def _run_doctor() -> int:
         status = "OK" if ok else "MISSING"
         print(f"[{status:>7}] {name}: {detail}")
     return 0
+
+
+_TIER_AUTHORIZATION_NOTE: dict[str, str] = {
+    "ALLOW": "runs immediately, no confirmation needed",
+    "CONFIRM": "requires confirmation (voice or physical)",
+    "MANUAL_ONLY": "requires physical, in-person confirmation -- can never be satisfied remotely",
+    "DENY": "always denied, unconditionally",
+}
+"""A plain-language gloss for each real `Tier` name (WP-174), for `jarvis skills show`'s own
+"explain when authorization may be required" requirement. Purely descriptive -- reads
+`descriptor.required_tier.name` back from the real, unmodified `Tier` enum; invents no new
+authorization concept and changes no real decision."""
+
+
+def _run_skills_list() -> int:
+    """List every registered skill's id, domain, and short description. Always returns 0.
+
+    Real, deliberate design choice, mirroring `_run_doctor`'s own:
+    `skills` is not a capability -- it only ever reads pure, static,
+    already-in-source-tree metadata, so it has no `Effect`, produces
+    no audit record, and needs no confirmation of any kind.
+    """
+    skills = build_default_skill_registry()
+    print("jarvis skills -- what jarvis can do, grouped by skill\n")
+    for skill in sorted(skills, key=lambda descriptor: descriptor.id.value):
+        print(f"{skill.id} ({skill.domain}): {skill.name} -- {skill.description}")
+    print(
+        "\nRun 'jarvis skills show <skill_id>' for that skill's real capabilities, "
+        "each one's required authorization tier, and any usage notes."
+    )
+    return 0
+
+
+def _run_skills_show(skill_id_value: str) -> int:
+    """Show one skill's full detail: grouped capabilities, each one's real tier, usage notes.
+
+    Returns:
+        0 if ``skill_id_value`` names a real, registered skill; 1 if it
+        does not (an invalid token or an unregistered id are reported
+        identically -- neither names anything real to show).
+    """
+    capabilities = build_default_registry()
+    skills = build_default_skill_registry(capabilities)
+    try:
+        skill = skills.get(SkillId(skill_id_value))
+    except (ValueError, SkillNotRegistered):
+        print(f"No skill named {skill_id_value!r}. Run 'jarvis skills list' to see what exists.")
+        return 1
+
+    print(f"{skill.name} ({skill.id}) -- domain: {skill.domain}\n")
+    print(skill.description)
+    if skill.instructions:
+        print(f"\nNotes: {skill.instructions}")
+    if skill.tags:
+        print(f"\nTags: {', '.join(skill.tags)}")
+    print("\nCapabilities:")
+    for capability_id in skill.capability_ids:
+        descriptor = capabilities.get(capability_id)
+        tier_name = descriptor.required_tier.name
+        print(f"  - {capability_id} [{tier_name}]: {descriptor.description}")
+        print(f"    {_TIER_AUTHORIZATION_NOTE[tier_name]}")
+    return 0
+
+
+def _run_skills(args: argparse.Namespace) -> int:
+    """Dispatch `skills list`/`skills show` -- pure, read-only discovery over static metadata."""
+    if args.skills_command == "list":
+        return _run_skills_list()
+    return _run_skills_show(args.skill_id)
 
 
 def _print_worker_pass(pass_outcome: WorkerPassOutcome, *, not_due_count: int = 0) -> None:
@@ -3301,6 +3410,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one earl
         return _run_listen(args.chain_path, verbose=args.verbose)
     if args.command == "doctor":
         return _run_doctor()
+    if args.command == "skills":
+        return _run_skills(args)
     if args.command == "ui":
         return _run_ui(args)
     if args.command == "task" and args.task_command == "worker":
