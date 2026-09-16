@@ -27,6 +27,20 @@ directly). Adding a timestamp field would be exactly the kind of
 audit-chain-format change this pass's own hard gate forbids; this
 module works honestly within what already exists rather than silently
 proposing that change.
+
+**WP-177, ``skill_id`` filtering, a real, read-time correlation, not a
+new source of truth**: the "which real capability calls trace back to
+a given skill" question (part of the observability/trace review's own
+"skill invocation" requirement) is answered here by looking up
+``skill_id``'s own real ``capability_ids`` (WP-171/172/173's
+``SkillRegistry``, reused completely unmodified) and filtering the
+already-loaded, already-authoritative chain against that set -- no new
+storage, no ``AuditRecord`` schema change, and the audit chain itself
+remains the one place a decision's own record actually lives. A
+``skill_id`` naming an unregistered or malformed skill matches nothing
+(an honest empty result), never a crash -- mirrors
+``cli.main._run_skills_show``'s own identical treatment of the same
+failure mode.
 """
 
 from __future__ import annotations
@@ -38,8 +52,11 @@ from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
 from jarvis.application.policy import AuthorizationOrchestrator
+from jarvis.domain.errors import SkillNotRegistered
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.skill import SkillId
 from jarvis.kernel.capabilities import AUDIT_HISTORY_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.skills import build_default_skill_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,13 +84,14 @@ class AuditHistoryOutcome:
     records: tuple[AuditRecord, ...]
 
 
-def authorize_and_view_audit_history(
+def authorize_and_view_audit_history(  # noqa: PLR0913 -- one per composition-function pass-through
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
     chain_path: Path,
     limit: int | None = None,
     capability_id: str | None = None,
+    skill_id: str | None = None,
 ) -> AuditHistoryOutcome:
     """Wire up the stack, authorize viewing the real audit history, and return it if granted.
 
@@ -90,6 +108,12 @@ def authorize_and_view_audit_history(
             ``decision.invocation.descriptor.id.value`` matches this
             exactly. ``None`` (the default) returns records for every
             capability.
+        skill_id: Only return records whose capability id is one of
+            this real, registered skill's own ``capability_ids``
+            (WP-177) -- combinable with ``capability_id`` (both must
+            match). An unregistered or malformed skill id matches
+            nothing, never raises. ``None`` (the default) applies no
+            skill filter.
 
     Returns:
         An ``AuditHistoryOutcome`` -- see its own docstring.
@@ -112,14 +136,29 @@ def authorize_and_view_audit_history(
         orchestrator.get_current_context(),
     )
 
+    skill_capability_ids: frozenset[str] | None = None
+    if skill_id is not None:
+        skills = build_default_skill_registry(registry)
+        try:
+            skill = skills.get(SkillId(skill_id))
+            skill_capability_ids = frozenset(str(cap_id) for cap_id in skill.capability_ids)
+        except (ValueError, SkillNotRegistered):
+            skill_capability_ids = frozenset()
+
     records: tuple[AuditRecord, ...] = ()
     try:
         if decision.granted:
             matching = tuple(
                 record
                 for record in chain
-                if capability_id is None
-                or record.decision.invocation.descriptor.id.value == capability_id
+                if (
+                    capability_id is None
+                    or record.decision.invocation.descriptor.id.value == capability_id
+                )
+                and (
+                    skill_capability_ids is None
+                    or record.decision.invocation.descriptor.id.value in skill_capability_ids
+                )
             )
             records = matching[-limit:] if limit is not None else matching
     finally:

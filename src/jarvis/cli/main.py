@@ -1252,6 +1252,13 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
         default=None,
         help="Only show records for this exact capability id (e.g. 'git.status').",
     )
+    audit_history_parser.add_argument(
+        "--skill",
+        dest="skill_id",
+        default=None,
+        help="Only show records for a capability grouped under this skill id (see 'jarvis "
+        "skills list'). Combinable with --capability-id.",
+    )
     _add_common_flags(audit_history_parser)
 
     play_parser = subparsers.add_parser("play", help="Resume playback.")
@@ -2915,6 +2922,7 @@ def _run_basic_subcommand(
             chain_path=args.chain_path,
             limit=args.limit,
             capability_id=args.capability_id,
+            skill_id=args.skill_id,
         )
         return _CommandOutcome(
             history_outcome.decision, args.command, audit_records=history_outcome.records

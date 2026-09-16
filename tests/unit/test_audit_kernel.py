@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jarvis.kernel.audit import authorize_and_view_audit_history
+from jarvis.kernel.files import authorize_and_list_dir
 from jarvis.kernel.ping import authorize_ping
 
 if TYPE_CHECKING:
@@ -142,3 +143,100 @@ def test_the_view_call_itself_is_durably_appended_to_the_chain(tmp_path: Path) -
 
     assert len(second_outcome.records) == 2  # noqa: PLR2004 -- both real, prior view calls
     assert second_outcome.records[-1].decision.invocation.descriptor.id.value == "audit.history"
+
+
+def test_skill_filter_returns_only_records_belonging_to_that_skill(tmp_path: Path) -> None:
+    """WP-177: --skill filters real audit records via the real, unmodified skill registry."""
+    chain_path = tmp_path / "audit_chain.json"
+    authorize_ping(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+    )
+    authorize_and_list_dir(
+        tmp_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        allowed_root=tmp_path,
+    )
+
+    outcome = authorize_and_view_audit_history(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        skill_id="filesystem",
+    )
+
+    # "ping" and "audit.history" (this view's own record) both belong to no
+    # skill at all -- only the real fs.list_dir call is grouped under
+    # "filesystem" (WP-173).
+    assert len(outcome.records) == 1
+    assert outcome.records[0].decision.invocation.descriptor.id.value == "fs.list_dir"
+
+
+def test_skill_filter_combines_with_capability_id_filter(tmp_path: Path) -> None:
+    """Both filters apply together (AND), not either-or."""
+    chain_path = tmp_path / "audit_chain.json"
+    authorize_and_list_dir(
+        tmp_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        allowed_root=tmp_path,
+    )
+
+    matching = authorize_and_view_audit_history(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        skill_id="filesystem",
+        capability_id="fs.list_dir",
+    )
+    assert len(matching.records) == 1
+
+    non_matching = authorize_and_view_audit_history(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        skill_id="filesystem",
+        capability_id="fs.read_file",
+    )
+    assert non_matching.records == ()
+
+
+def test_skill_filter_with_an_unregistered_skill_id_returns_empty_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """An unknown skill id is an honest empty result, mirroring 'jarvis skills show'."""
+    chain_path = tmp_path / "audit_chain.json"
+    authorize_and_list_dir(
+        tmp_path,
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        allowed_root=tmp_path,
+    )
+
+    outcome = authorize_and_view_audit_history(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=chain_path,
+        skill_id="not-a-real-skill",
+    )
+
+    assert outcome.records == ()
+
+
+def test_skill_filter_with_a_malformed_skill_id_returns_empty_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """A whitespace-containing (invalid SkillId token) skill id is also an honest empty result."""
+    outcome = authorize_and_view_audit_history(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        skill_id="not a valid id",
+    )
+
+    assert outcome.records == ()
