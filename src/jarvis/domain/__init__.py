@@ -51,6 +51,7 @@ from .policy import Decision, DecisionReason, PolicyContext, evaluate
 from .provenance import Classification, Provenance, Tainted, Trust
 from .reasoning import ProviderProfile, TaskBudget
 from .registry import CapabilityRegistry
+from .skill import SkillDescriptor, SkillId
 from .speaker_id import SpeakerScore
 from .transcript import Transcript
 from .wake_word import WakeEvent
@@ -85,6 +86,8 @@ __all__ = [
     "Provenance",
     "ProviderProfile",
     "Segment",
+    "SkillDescriptor",
+    "SkillId",
     "SpeakerScore",
     "TaintViolation",
     "Tainted",
