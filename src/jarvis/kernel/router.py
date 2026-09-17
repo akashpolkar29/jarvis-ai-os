@@ -155,7 +155,13 @@ from jarvis.kernel.tasks import (
     authorize_and_list_tasks,
     filter_scheduled_tasks,
 )
-from jarvis.kernel.workflows import authorize_and_run_workflow
+from jarvis.kernel.workflows import (
+    CODING_ASSISTANT_WORKFLOW_ID,
+    JOB_SEARCH_ASSISTANT_WORKFLOW_ID,
+    RESEARCH_WORKFLOW_ID,
+    authorize_and_run_workflow,
+    build_default_workflow_registry,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -385,6 +391,121 @@ read-only filter (`scheduled_at is not None`) before returning -- not something
 `authorize_and_list_tasks` itself does, so this is not simply `TASK_LIST_COMMAND_LABEL` with a
 different argument."""
 
+_WORKFLOW_RUN_PREFIX = "run "
+_WORKFLOW_RUN_SUFFIX = " workflow"
+"""Together, the real, fixed "run <name> workflow" shape (WP-192) -- collision-checked directly
+against `kernel/intent.py`'s own real command keywords (ping/pause/play/next/previous/read/
+remember/recall/code/plan/send email/create event/search jobs/find files/search files/recent
+files/careers page): none starts with "run", so this introduces no new ambiguity."""
+
+_WORKFLOW_RUN_PARAMS_SEPARATOR = " with "
+"""An optional, real, small inline-parameter clause -- "run research workflow with
+query=rate limiting" -- mirrors `jarvis workflow run --param name=value`'s own real shape,
+just spoken/typed inline rather than as a repeated CLI flag."""
+
+_WORKFLOW_ALIASES: dict[str, WorkflowId] = {
+    "job search": JOB_SEARCH_ASSISTANT_WORKFLOW_ID,
+    "job search assistant": JOB_SEARCH_ASSISTANT_WORKFLOW_ID,
+    str(JOB_SEARCH_ASSISTANT_WORKFLOW_ID): JOB_SEARCH_ASSISTANT_WORKFLOW_ID,
+    "research": RESEARCH_WORKFLOW_ID,
+    str(RESEARCH_WORKFLOW_ID): RESEARCH_WORKFLOW_ID,
+    "coding": CODING_ASSISTANT_WORKFLOW_ID,
+    "code": CODING_ASSISTANT_WORKFLOW_ID,
+    "coding assistant": CODING_ASSISTANT_WORKFLOW_ID,
+    str(CODING_ASSISTANT_WORKFLOW_ID): CODING_ASSISTANT_WORKFLOW_ID,
+}
+"""A small, fixed, exact-match alias table (WP-192) -- deliberately not "any typed text becomes
+a workflow id": only these real, hand-named aliases (plus each workflow's own real, literal id)
+ever resolve, closing rule 15 ("no arbitrary workflow names converted into execution") by
+construction, not by convention. Extending coverage for a future fourth workflow is purely
+additive, one more real entry, matching every other alias/label table in this module."""
+
+
+def _parse_inline_workflow_params(text: str) -> dict[str, str]:
+    """Parse a real, small "name=value[, name=value]*" clause into a plain `dict[str, str]`.
+
+    Raises:
+        ValueError: If any comma-separated entry has no `=` separator,
+            or an empty name -- caught by this module's own caller,
+            converted into a real, terminal `UnrecognizedIntent`, never
+            a raw traceback.
+    """
+    params: dict[str, str] = {}
+    for pair in text.split(","):
+        name, separator, value = pair.strip().partition("=")
+        if not separator or not name:
+            msg = f"{pair!r} is not in 'name=value' form."
+            raise ValueError(msg)
+        params[name.strip()] = value.strip()
+    return params
+
+
+def _resolve_workflow_command(
+    text: str,
+) -> tuple[WorkflowId, dict[str, str]] | UnrecognizedIntent | None:
+    """Typed-router-only grammar for "run <workflow> workflow [with name=value, ...]" (WP-192).
+
+    Returns `None` if `text` does not match the full "run ... workflow"
+    shape at all -- the caller should try `resolve_intent()` next, and
+    ultimately fall back to Stage B reasoning if nothing else matches
+    either (a bare "run the tests" has nothing to do with a workflow
+    and must not be swallowed here). Returns `UnrecognizedIntent`
+    (never `None`) once the "run ... workflow" shape itself *did*
+    match but the named workflow is not one of `_WORKFLOW_ALIASES`' own
+    real entries, is not (any longer) genuinely registered, or the
+    trailing "with ..." clause is malformed -- deliberately terminal,
+    mirroring `_resolve_task_command`/`_resolve_communications_command`'s
+    own identical reasoning: once this shape is recognized, Stage A
+    already has a more precise, honest answer than a reasoning call
+    would.
+
+    **Deliberately NOT added to `kernel.intent.resolve_intent()`**, the
+    shared grammar voice also calls -- the "no voice work" hard
+    boundary this work package operates under is reason enough on its
+    own, mirroring `_resolve_task_command`'s own identical reasoning.
+    Confined entirely to `kernel.router` (never imported by
+    `kernel.voice_loop`), this function cannot affect voice in any way.
+    """
+    lowered = text.lower()
+    if not lowered.startswith(_WORKFLOW_RUN_PREFIX):
+        return None
+    rest = text[len(_WORKFLOW_RUN_PREFIX) :]
+    lowered_rest = rest.lower()
+    # " workflow" need not be the very last word -- an optional "with name=value, ..."
+    # clause (WP-192) follows it, so this looks for " workflow" as a real, internal
+    # boundary within `rest`, not merely a suffix of the whole text (a real bug caught
+    # empirically, not assumed, while first smoke-testing this function: a naive
+    # `endswith(" workflow")` check silently failed to match any "... with ..." input
+    # at all, since the text no longer ends with "workflow" once params are appended).
+    workflow_index = lowered_rest.find(_WORKFLOW_RUN_SUFFIX)
+    if workflow_index == -1:
+        return None
+
+    alias_part = rest[:workflow_index].strip()
+    after_workflow = rest[workflow_index + len(_WORKFLOW_RUN_SUFFIX) :].strip()
+    params: dict[str, str] = {}
+    if after_workflow:
+        if not after_workflow.lower().startswith(_WORKFLOW_RUN_PARAMS_SEPARATOR.strip() + " "):
+            return UnrecognizedIntent()
+        params_text = after_workflow[len(_WORKFLOW_RUN_PARAMS_SEPARATOR.strip()) :].strip()
+        try:
+            params = _parse_inline_workflow_params(params_text)
+        except ValueError:
+            return UnrecognizedIntent()
+
+    alias_lowered = alias_part.lower()
+    for filler in ("the ", "a "):
+        if alias_lowered.startswith(filler):
+            alias_part = alias_part[len(filler) :].strip()
+            alias_lowered = alias_part.lower()
+            break
+
+    workflow_id = _WORKFLOW_ALIASES.get(alias_lowered)
+    if workflow_id is None or workflow_id not in build_default_workflow_registry():
+        return UnrecognizedIntent()
+    return workflow_id, params
+
+
 _TASK_STATUS_COMMAND = "task status"
 """Mirrors `resolve_intent()`'s own "read <path>" shape exactly -- everything after this fixed
 prefix, verbatim, is the real task id."""
@@ -573,6 +694,36 @@ def _route_deterministically(  # noqa: PLR0911 -- one return per real, distinct 
                 detail=(
                     "Recognized this as an email/calendar command, but could not determine "
                     "the rest (e.g. a missing message id, or an unsupported date phrase)."
+                ),
+            ),
+            False,
+        )
+
+    workflow_resolved = _resolve_workflow_command(normalized)
+    if isinstance(workflow_resolved, tuple):
+        workflow_id, workflow_parameters = workflow_resolved
+        return (
+            RouteResult(
+                kind=RouteKind.WORKFLOW_RUN,
+                original_input=text,
+                confidence=_DETERMINISTIC_ROUTE_CONFIDENCE,
+                source="deterministic",
+                workflow_id=str(workflow_id),
+                workflow_parameters=workflow_parameters,
+            ),
+            False,
+        )
+    if isinstance(workflow_resolved, UnrecognizedIntent):
+        return (
+            RouteResult(
+                kind=RouteKind.UNKNOWN,
+                original_input=text,
+                confidence=0.0,
+                source="deterministic",
+                detail=(
+                    "Recognized this as a 'run <workflow> workflow' command, but the named "
+                    "workflow is not registered (see 'jarvis workflow list'), or the "
+                    "trailing 'with name=value' clause was malformed."
                 ),
             ),
             False,

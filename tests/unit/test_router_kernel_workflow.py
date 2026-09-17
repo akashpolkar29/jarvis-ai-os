@@ -1,14 +1,17 @@
-"""WP-191 (M10): proof that RouteKind.WORKFLOW_RUN safely reaches authorize_and_run_workflow.
+"""WP-191/192 (M10): RouteKind.WORKFLOW_RUN safely reaches authorize_and_run_workflow.
 
-No real user-facing grammar produces a `WORKFLOW_RUN` route yet at
-this point in the queue (Stage A's own deterministic grammar lands in
-WP-192, Stage B's reasoning fallback in WP-193) -- these tests prove
-the downstream wiring itself is sound first, by monkeypatching
+The first two tests below (WP-191) monkeypatch
 `jarvis.kernel.router._route_deterministically` to hand back an
-already-constructed `WORKFLOW_RUN` route, then calling the real,
-unmodified `authorize_and_route`. This is deliberately the same
-"prove the plumbing, then make it reachable" sequencing
-`test_workflows_kernel.py` already used for the workflow layer itself.
+already-constructed `WORKFLOW_RUN` route -- at WP-191's own point in
+the queue, no real grammar could produce one yet, so this proved the
+downstream dispatch wiring was sound in isolation first ("prove the
+plumbing, then make it reachable", the same sequencing
+`test_workflows_kernel.py` already used for the workflow layer
+itself). WP-192 then built the real Stage-A grammar
+(`tests/unit/test_router_deterministic_workflow.py` covers that
+grammar itself in isolation) -- the final test in this file exercises
+the whole thing with real, typed text and no monkeypatched routing at
+all, proving the two halves genuinely compose.
 """
 
 from __future__ import annotations
@@ -86,3 +89,34 @@ async def test_granted_outer_gate_runs_the_real_research_workflow_through_author
         "browser.open_page"
     )
     assert outcome.task_id is None
+
+
+async def test_real_typed_text_reaches_the_real_workflow_with_no_routing_mocked(
+    tmp_path: Path,
+) -> None:
+    """WP-192: "jarvis do "run research workflow with ..."" works end to end, genuinely."""
+    with (
+        mock.patch("jarvis.kernel.capability_dispatch.authorize_and_recall") as fake_recall,
+        mock.patch("jarvis.kernel.capability_dispatch.authorize_and_search_content") as fake_search,
+    ):
+        fake_recall.return_value = mock.Mock(decision=mock.Mock(granted=True))
+        fake_search.return_value = mock.Mock(decision=mock.Mock(granted=True))
+
+        outcome = await authorize_and_route(
+            "run research workflow with query=rate limiting,url=https://example.com",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "chain.json",
+        )
+
+    assert outcome.route.kind == RouteKind.WORKFLOW_RUN
+    assert outcome.route.source == "deterministic"
+    fake_recall.assert_called_once()
+    fake_search.assert_called_once()
+    assert outcome.decision is not None
+    assert outcome.decision.granted is True
+    assert isinstance(outcome.execution_result, WorkflowRunOutcome)
+    assert outcome.execution_result.composed.halted_step is not None
+    assert outcome.execution_result.composed.halted_step.capability_id == CapabilityId(
+        "browser.open_page"
+    )
