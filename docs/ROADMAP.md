@@ -692,3 +692,89 @@ it.
   authorization-semantics change. Not tagged — `v0.10.0` remains the
   correct next sequential slot (WP-167's own assessment, still true),
   tagging remains the user's own decision.
+- **WP-181 through WP-190, the M9 practical-workflow queue**: moves
+  JARVIS from "knows what capabilities/skills exist" to "can safely
+  compose existing skills into useful multi-step workflows" — never a
+  second planner, never a second execution engine, never a capability
+  bypass. WP-181 (reconnaissance) confirmed, by reading the real
+  planner/executor/router/task/event code directly rather than
+  assuming, that no existing abstraction already covers "a named,
+  ordered composition of existing capability invocations," and that
+  `application/planning/executor.py`'s own real `Tier.ALLOW`-only
+  execution ceiling (narrower than ADR-0062's stated `Tier.CONFIRM`
+  ceiling) would have to bound any workflow layer's own auto-execution
+  the identical way. WP-182 added the smallest real domain model
+  (`domain/workflow.py`: `WorkflowId`/`WorkflowStep`/
+  `WorkflowDescriptor`, mirroring `domain/skill.py` exactly) and
+  WP-183 its registry (`domain/workflow_registry.py`, mirroring
+  `domain/skill_registry.py` exactly, including reusing the real
+  `CapabilityRegistry` to validate every step names something that
+  genuinely exists). WP-184 is the real, load-bearing design decision:
+  `application/workflow/composer.py::compose_workflow` turns a
+  workflow's fixed steps into a real `PlanStep` sequence -- a
+  deterministic, hand-authored alternative to `generate_plan`'s own
+  reasoning-generated one, feeding into the exact same, unmodified
+  `execute_plan`. A step that is unregistered, has no wired
+  plan-step executor, or requires above `Tier.ALLOW` halts the whole
+  remaining sequence (never silently skipped, never auto-executed);
+  `kernel/workflows.py::authorize_and_run_workflow` reuses
+  `planning.run_plan`'s own outer gate completely unmodified -- no new
+  `CapabilityId`, since running a workflow is the same real action a
+  reasoning-generated plan already performs, under a fixed template
+  instead of a reasoning call. WP-185/186/187 are the three real,
+  concrete workflows: Job Search Assistant (`memory.retrieve` then
+  `job_search.open_results`, which halts -- never reads/scrapes
+  listing content, never applies automatically, ADR-0058 untouched),
+  Research (`memory.retrieve`+`fs.search_content` then
+  `browser.open_page`, which halts), and Coding Assistant
+  (`git.status`+`fs.find`+`fs.search_content` then `coding.run_task`,
+  which halts -- `terminal.run` never touched). Each names real,
+  honest capability gaps rather than working around them unsafely
+  (no capability collects/normalizes/de-duplicates job-search results,
+  since every `job_search.*` capability is mechanically forbidden from
+  reading page content at all; no capability builds a bare web-search
+  query, item 71's already-documented gap; task creation cannot be a
+  workflow step since it is built on the dynamic-effect `memory.write`,
+  never statically registered). WP-188 closed the one real cross-workflow
+  asymmetry (Coding Assistant gained its own `memory.retrieve` context
+  step) and documented, rather than rebuilt, why "no secret leakage"/
+  "minimal relevant memory" were already satisfied by reuse --
+  `adapters/memory.py::SqliteMemoryAdapter.retrieve()`'s own real,
+  unconditional `exclude_secret_records()` call sits below every
+  composition function, so a workflow step cannot bypass it any more
+  than a direct CLI call already cannot. WP-189 added real
+  observability (five new events -- `WorkflowRunDenied`/
+  `WorkflowStarted`/`WorkflowStepCompleted`/`WorkflowHalted`/
+  `WorkflowCompleted` -- on the same `EventBus` WP-111 already built,
+  deliberately no `WorkflowStepDenied`/`WorkflowFailed` since a denied
+  runnable step is structurally unreachable, not merely unobserved)
+  and real CLI commands (`jarvis workflow list`/`show`, mirroring
+  `skills list`/`show` exactly -- not a capability, no audit record;
+  `jarvis workflow run <id> [--param name=value]...`, a real, audited
+  invocation reusing the existing `plan_step_records` print field
+  verbatim). WP-190 (this entry) reviewed the whole queue directly
+  against its own hard rules: `domain/capability.py`/
+  `kernel/capabilities.py` confirmed untouched (zero new
+  `CapabilityId`/`Effect`/`Tier` anywhere in this queue); `kernel.router`
+  confirmed untouched -- a real, explicit scope boundary, not an
+  oversight: workflows are reachable only via `jarvis workflow run`
+  today, not yet via `jarvis do`/`jarvis ui`/voice (see
+  `docs/OPEN_DECISIONS.md` item 73); `kernel.tasks`/`kernel.planning`/
+  `application/planning/*` confirmed byte-for-byte unmodified; every
+  new capability-touching code path live-smoke-tested end to end
+  (`jarvis workflow list/show/run`, both a denied and a granted+halted
+  real run). All gates green throughout -- domain/policy/reasoning
+  100% coverage maintained; the full suite grew from 1911 passing
+  tests at the start of this queue to 1987 by the end, zero
+  regressions. 3 workflows now registered. No ADR was needed anywhere
+  in this queue -- no new `CapabilityId`/`Effect`/`Tier`, no
+  authorization-semantics change, matching WP-171-180's own identical
+  precedent. Not tagged -- `v0.10.0` remains the correct next
+  sequential slot, tagging remains the user's own decision. Branches
+  were created and squash-merged locally per work package (`git push`
+  succeeded against `origin/main` throughout, but `gh`/GitHub-PR
+  tooling was not authenticated in this session, so each merge used a
+  local `git merge --squash` rather than an actual GitHub pull
+  request -- a real, reported process deviation from this project's
+  own stated "branch then squash-merge" convention's usual PR-mediated
+  form, not a change to its outcome).

@@ -2035,6 +2035,35 @@ matching every skill built so far) whenever a real work package asks
 for it -- listed here only so a future pass doesn't have to
 re-discover that this gap is intentional, not overlooked.
 
+## 73. Workflows not yet reachable via the router/UI/voice -- deliberately deferred (WP-181-190)
+
+**Not undecided, just not yet built -- noted for completeness,
+mirroring item 72's own shape exactly.** The real M9 workflow layer
+(`jarvis workflow list`/`show`/`run`) is reachable only from the CLI
+today. `kernel.router.authorize_and_route` was deliberately left
+completely untouched by the whole WP-181-190 queue (rule 11, "no
+second router" -- extending it was in scope only to *route into* the
+existing mechanism, not to duplicate it, and no work package in this
+queue actually asked for that wiring). Concretely, this means: `jarvis
+do "run the research workflow"` does not resolve to anything today
+(falls through to the reasoning fallback, which has no way to name a
+workflow id at all, since `kernel.router`'s own prompt-context
+(WP-175) only ever describes skills/capabilities, never workflows);
+`jarvis ui` cannot trigger a workflow run from the browser; and no
+voice grammar exists for any workflow, the identical, already-
+established reason `communications.send_email`/`create_calendar_event`
+still have none (`kernel/intent.py`'s own pure, clockless, port-free
+design has no way to express a workflow's own parameter-collection
+needs safely). Extending coverage is real, separate future work --
+likely a new `RouteKind` (e.g. `WORKFLOW_RUN`) in
+`application/routing/router.py`, requiring its own structural-safety
+proof (mirroring `RouteKind.COMPLEX_GOAL`'s own "creates, never runs"
+property) before `authorize_and_route` could safely dispatch to
+`authorize_and_run_workflow` -- not attempted here, since inventing
+that proof was outside this queue's own five named phases. Listed
+here only so a future pass doesn't have to re-discover that this gap
+is intentional, not overlooked.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,
