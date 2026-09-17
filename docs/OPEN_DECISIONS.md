@@ -2134,6 +2134,35 @@ unit test in isolation. No new status, no new `CapabilityId`/`Effect`/
 `Tier`, no new scheduler. See `kernel/tasks.py`'s own WP-203 module
 docstring section for the full account.
 
+## 76. Workflow composition safety (recursion/cycles/depth) -- investigated, already structurally safe (WP-204)
+
+**Resolved 2026-09-17, no code restriction needed.** Reviewed for
+recursive workflows, cycles, excessive depth, unbounded composition,
+and invalid references, per this work package's own instruction to
+prefer disallowing recursion "unless there is a demonstrated need" and
+to not over-engineer. Two real, structural properties, checked
+directly rather than assumed, already make recursive/cyclic workflow
+composition impossible: (1) `kernel.capability_dispatch.PLAN_STEP_EXECUTORS`
+has no entry capable of invoking `authorize_and_run_workflow`,
+`authorize_and_create_task`, or `authorize_and_run_task`, so no
+workflow step can ever start a second workflow run, directly or via
+WP-203's own new workflow-backed task; (2) `WorkflowStep`/
+`WorkflowDescriptor` have no field referencing a `WorkflowId` other
+than the descriptor's own identity, so the registry data model itself
+cannot represent a cycle. Both properties are proven mechanically, not
+just asserted, by `tests/meta/test_workflow_composition_no_recursion.py`
+(an AST-based import scan mirroring `test_workflows_no_job_search_or_submission_execution.py`'s
+own precedent, plus a real dataclass-fields introspection, each with
+its own self-test proving the predicate fires on a deliberate
+violation). The one real, genuinely new safety addition this
+investigation motivated: `authorize_and_create_task`'s own
+`workflow_id` is now validated against the real, live registry before
+anything is written, catching an invalid reference at creation time
+rather than deferring it to a later `authorize_and_run_task`/worker
+call. No recursion guard, depth limit, or cycle-detection code was
+added -- none is reachable to guard against. See `kernel/tasks.py`'s
+own WP-204 module docstring section for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

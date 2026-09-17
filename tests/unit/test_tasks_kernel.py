@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest import mock
 
+import pytest
+
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanningError, PlanStep
 from jarvis.application.workflow.composer import ComposedWorkflow
@@ -25,6 +27,7 @@ from jarvis.domain.capability import (
     Effect,
     Tier,
 )
+from jarvis.domain.errors import WorkflowNotRegistered
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.policy import Decision, DecisionReason
@@ -53,8 +56,6 @@ from jarvis.kernel.tasks import (
 from jarvis.kernel.workflows import WorkflowRunOutcome
 
 if TYPE_CHECKING:
-    import pytest
-
     from jarvis.domain.evidence import Attempt
     from jarvis.kernel.tasks import (
         TaskCancelOutcome,
@@ -2106,27 +2107,66 @@ def test_create_task_with_no_workflow_id_stores_none_for_both_new_fields(tmp_pat
     assert data["workflow_parameters"] is None
 
 
+def test_create_task_with_an_unregistered_workflow_id_raises_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """WP-204: an invalid workflow reference fails fast at creation, not later at run time."""
+    with pytest.raises(WorkflowNotRegistered):
+        authorize_and_create_task(
+            "run a workflow that does not exist",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+            workflow_id="does_not_exist",
+        )
+
+    list_outcome = authorize_and_list_tasks(
+        physical_confirmation_available=False,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+    assert list_outcome.records == ()
+
+
+def test_create_task_with_an_empty_workflow_id_raises_value_error_before_any_write(
+    tmp_path: Path,
+) -> None:
+    """WP-204: a malformed WorkflowId token fails fast too, mirroring authorize_and_schedule_task's
+    own identical convention for a malformed scheduled_at."""
+    with pytest.raises(ValueError, match="WorkflowId"):
+        authorize_and_create_task(
+            "run a workflow with a malformed id",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=_SequentialIdPort(),
+            workflow_id="",
+        )
+
+
 async def test_run_task_with_workflow_id_runs_the_workflow_never_the_reasoning_planner(
     tmp_path: Path,
 ) -> None:
     """WP-203: a workflow-backed task dispatches to authorize_and_run_workflow, not run_plan."""
     id_port = _SequentialIdPort()
     (tmp_path / "notes.txt").write_text("hello")
-    create_outcome = authorize_and_create_task(
-        "read a known local note",
-        physical_confirmation_available=True,
-        remote_confirmation_available=False,
-        chain_path=tmp_path / "audit_chain.json",
-        database_path=tmp_path / "memory.sqlite3",
-        embedding_port=_FakeEmbeddingPort(),
-        clock=_FakeClock(),
-        id_port=id_port,
-        workflow_id="read_notes",
-        workflow_parameters={"path": str(tmp_path / "notes.txt")},
-    )
-    assert create_outcome.task_id is not None
 
     with (
+        mock.patch(
+            "jarvis.kernel.tasks.build_default_workflow_registry",
+            return_value=_read_notes_workflow_registry(),
+        ),
         mock.patch(
             "jarvis.kernel.workflows.build_default_workflow_registry",
             return_value=_read_notes_workflow_registry(),
@@ -2134,6 +2174,20 @@ async def test_run_task_with_workflow_id_runs_the_workflow_never_the_reasoning_p
         mock.patch("jarvis.kernel.capability_dispatch.authorize_and_read_file") as fake_read,
         mock.patch("jarvis.kernel.tasks.authorize_and_run_plan") as fake_plan,
     ):
+        create_outcome = authorize_and_create_task(
+            "read a known local note",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=id_port,
+            workflow_id="read_notes",
+            workflow_parameters={"path": str(tmp_path / "notes.txt")},
+        )
+        assert create_outcome.task_id is not None
+
         fake_read.return_value = mock.Mock(decision=mock.Mock(granted=True))
         run_outcome = await authorize_and_run_task(
             create_outcome.task_id,
@@ -2167,23 +2221,30 @@ async def test_run_task_with_a_halting_workflow_completes_with_a_real_halt_reaso
 ) -> None:
     """A workflow halting on a manual-only step is ADR-0062's own safe stop, not a task failure."""
     id_port = _SequentialIdPort()
-    create_outcome = authorize_and_create_task(
-        "open job search results",
-        physical_confirmation_available=True,
-        remote_confirmation_available=False,
-        chain_path=tmp_path / "audit_chain.json",
-        database_path=tmp_path / "memory.sqlite3",
-        embedding_port=_FakeEmbeddingPort(),
-        clock=_FakeClock(),
-        id_port=id_port,
-        workflow_id="open_results",
-    )
-    assert create_outcome.task_id is not None
 
-    with mock.patch(
-        "jarvis.kernel.workflows.build_default_workflow_registry",
-        return_value=_halting_workflow_registry(),
+    with (
+        mock.patch(
+            "jarvis.kernel.tasks.build_default_workflow_registry",
+            return_value=_halting_workflow_registry(),
+        ),
+        mock.patch(
+            "jarvis.kernel.workflows.build_default_workflow_registry",
+            return_value=_halting_workflow_registry(),
+        ),
     ):
+        create_outcome = authorize_and_create_task(
+            "open job search results",
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=id_port,
+            workflow_id="open_results",
+        )
+        assert create_outcome.task_id is not None
+
         run_outcome = await authorize_and_run_task(
             create_outcome.task_id,
             "open job search results",

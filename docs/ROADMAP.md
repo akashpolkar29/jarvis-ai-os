@@ -911,3 +911,31 @@ it.
   new `CapabilityId`/`Effect`/`Tier`, no new scheduler, no ADR. All
   gates green; the full suite grew to 2074 passing tests, zero
   regressions. `docs/OPEN_DECISIONS.md` item 75 added, RESOLVED/BUILT.
+- **WP-204, workflow composition safety**: reviewed for recursive
+  workflows, cycles, excessive depth, unbounded composition, and
+  invalid references, per this work package's own instruction to
+  prefer disallowing recursion "unless there is a demonstrated need"
+  and to not over-engineer. Investigated, not assumed, and found
+  already structurally safe: `kernel.capability_dispatch.PLAN_STEP_EXECUTORS`
+  has no entry capable of invoking `authorize_and_run_workflow`/
+  `authorize_and_create_task`/`authorize_and_run_task`, so no workflow
+  step can ever start a second workflow run; `WorkflowStep`/
+  `WorkflowDescriptor` have no field referencing a `WorkflowId` other
+  than the descriptor's own identity, so the registry data model
+  itself cannot represent a cycle. Both properties proven mechanically
+  by a new meta-test, `tests/meta/test_workflow_composition_no_recursion.py`
+  (import-scan plus dataclass-fields introspection, each with its own
+  self-test proving the predicate fires on a deliberate violation).
+  The one real, genuinely new safety addition: `authorize_and_create_task`'s
+  own `workflow_id` is now validated against the real, live registry
+  before anything is written (mirroring `authorize_and_schedule_task`'s
+  own identical fail-fast convention for a malformed `scheduled_at`),
+  catching an invalid reference at creation time rather than deferring
+  it to a later run/worker call -- two new tests prove both the
+  unregistered-id and the malformed-id cases raise before any write.
+  No recursion guard, depth limit, or cycle-detection code was added
+  -- none is reachable to guard against, and adding one would have
+  been exactly the over-engineering this work package warned against.
+  No new status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. All
+  gates green; the full suite grew to 2084 passing tests, zero
+  regressions. `docs/OPEN_DECISIONS.md` item 76 added, RESOLVED/BUILT.

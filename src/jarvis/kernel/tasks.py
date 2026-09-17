@@ -360,6 +360,37 @@ real, worker-level integration test (not a unit test in isolation) that
 exercises the true ``create -> schedule -> worker`` sequence end to
 end; fixed by preserving both fields the same way ``attempts``/
 ``created_at`` already are.
+
+**WP-204: workflow composition safety, investigated and proven, not
+newly restricted.** Reviewed for recursive workflows, cycles,
+excessive depth, unbounded composition, and invalid references, per
+that work package's own instruction to prefer disallowing recursion
+"unless there is a demonstrated need" and to not over-engineer. Two
+real, structural properties, checked directly rather than assumed,
+already make recursive/cyclic workflow composition impossible: (1)
+``kernel.capability_dispatch.PLAN_STEP_EXECUTORS`` -- the one real
+dispatch table a workflow step's own execution ever reaches -- has no
+entry capable of invoking ``authorize_and_run_workflow``,
+``authorize_and_create_task``, or ``authorize_and_run_task``, so no
+workflow step can ever start a second workflow run, directly or via
+this module's own new workflow-backed task; (2)
+:class:`~jarvis.domain.workflow.WorkflowStep`/
+:class:`~jarvis.domain.workflow.WorkflowDescriptor` have no field
+referencing a :class:`~jarvis.domain.workflow.WorkflowId` other than
+the descriptor's own identity -- there is no "sub-workflow" field for
+a step to name another workflow with, so the registry itself cannot
+represent a cycle. Both properties are proven mechanically, not just
+asserted, by ``tests/meta/test_workflow_composition_no_recursion.py``.
+The one real, genuinely new safety addition this investigation did
+motivate: ``authorize_and_create_task``'s own new ``workflow_id`` is
+now validated against the real, live registry *before* anything is
+written (mirroring ``authorize_and_schedule_task``'s own identical
+fail-fast convention for a malformed ``scheduled_at``) -- an invalid
+reference is caught at creation time, not deferred to a later,
+separate ``authorize_and_run_task``/worker call. No recursion guard,
+depth limit, or cycle-detection code was added -- none is reachable to
+guard against, and adding one would be exactly the over-engineering
+this work package's own instruction warned against.
 """
 
 from __future__ import annotations
@@ -376,7 +407,7 @@ from jarvis.kernel.memory import authorize_and_compare_and_update as _authorize_
 from jarvis.kernel.memory import authorize_and_get, authorize_and_recall, authorize_and_remember
 from jarvis.kernel.memory import authorize_and_update as _authorize_and_update_memory
 from jarvis.kernel.planning import authorize_and_run_plan
-from jarvis.kernel.workflows import authorize_and_run_workflow
+from jarvis.kernel.workflows import authorize_and_run_workflow, build_default_workflow_registry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -795,9 +826,26 @@ def authorize_and_create_task(  # noqa: PLR0913 -- one per composition-function 
     every pre-WP-203 task byte-for-byte. ``workflow_parameters`` is
     ignored if ``workflow_id`` is ``None``.
 
+    **WP-204**: a real ``workflow_id`` is validated against the real,
+    live registry *before* anything is written -- mirroring
+    ``authorize_and_schedule_task``'s own identical "raise before any
+    real lookup or write is attempted" fail-fast convention for a
+    malformed ``scheduled_at``. An invalid reference is caught here,
+    at creation time, rather than deferred to a later, separate
+    ``authorize_and_run_task``/worker call.
+
+    Raises:
+        ValueError: If ``workflow_id`` is not a valid
+            :class:`~jarvis.domain.workflow.WorkflowId` token (empty or
+            containing whitespace).
+        jarvis.domain.errors.WorkflowNotRegistered: If ``workflow_id``
+            names no real, registered workflow.
+
     Returns:
         A ``TaskCreateOutcome`` -- see its own docstring.
     """
+    if workflow_id is not None:
+        build_default_workflow_registry().get(WorkflowId(workflow_id))
     decision, task_id = write_task_record(
         goal,
         "created",
