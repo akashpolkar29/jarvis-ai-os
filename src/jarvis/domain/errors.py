@@ -109,3 +109,27 @@ class SkillReferencesUnknownCapability(JarvisError):  # noqa: N818 -- reads as a
     capability registry requires one to already be built (see that
     function's own docstring).
     """
+
+
+class WorkflowAlreadyRegistered(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when a workflow id is registered a second time.
+
+    Mirrors :class:`SkillAlreadyRegistered` exactly, for the same
+    reason: registration is reject-on-collision, never overwrite.
+    """
+
+
+class WorkflowNotRegistered(JarvisError):  # noqa: N818 -- reads as a fact, not an "-Error"
+    """Raised when looking up a workflow id that was never registered.
+
+    Mirrors :class:`SkillNotRegistered` exactly.
+    """
+
+
+class WorkflowReferencesUnknownCapability(JarvisError):  # noqa: N818 -- reads as a fact
+    """Raised when a registered workflow step names a capability id that isn't real.
+
+    Mirrors :class:`SkillReferencesUnknownCapability` exactly -- raised
+    by :func:`~jarvis.domain.workflow_registry.validate_workflow_registry`,
+    not at workflow-registration time itself.
+    """
