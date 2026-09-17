@@ -162,6 +162,26 @@ lookup, status check, and staleness check internally. The frontend
 surfaces a real "Recover" button only once `pollTaskStatus` observes a
 task genuinely reported `stale: true` -- never speculatively, and
 never for a task that is merely old but still genuinely progressing.
+
+**WP-196 (M10): real workflow discovery + execution in the UI.**
+`GET /api/workflows` is a real, read-only listing of every built-in
+workflow (`kernel.workflows.build_default_workflow_registry()`),
+mirroring `jarvis workflow list`/`show`'s own real design choice
+exactly -- not a capability, no `Decision`, no audit record. Execution
+adds nothing new: `POST /api/command` already reaches
+`RouteKind.WORKFLOW_RUN` through the same, unmodified
+`authorize_and_route` (WP-191/192/193) every other route already uses;
+this work package only makes the resulting `WorkflowRunOutcome`
+render as real, readable step/halt text
+(`_summarize_workflow_run_outcome`) instead of falling through to a
+raw `repr()` of the whole nested dataclass -- the identical, real bug
+WP-195 already found and fixed in `jarvis do`, closed here for `jarvis
+ui` the same way, with the same wording. The frontend's own
+"Workflows" button fetches the list and offers each one a "Use"
+button that only ever pre-fills the real text input (`"run <id>
+workflow "`) -- the user still reviews and sends it through the exact
+same, existing chat flow (`POST /api/command`). No second execution
+path: this server still never authorizes or runs anything itself.
 """
 
 from __future__ import annotations
@@ -182,6 +202,7 @@ from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
+from jarvis.kernel.capabilities import build_default_registry
 from jarvis.kernel.capability_dispatch import (
     CalendarListStepResult,
     EmailListStepResult,
@@ -207,6 +228,7 @@ from jarvis.kernel.tasks import (
     authorize_and_retry_task,
     authorize_and_run_task,
 )
+from jarvis.kernel.workflows import WorkflowRunOutcome, build_default_workflow_registry
 from jarvis.ports.email import EmailConnectionError, EmailMessageNotFoundError
 from jarvis.ports.git import GitCommandFailedError
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
@@ -250,6 +272,11 @@ unmodified -- the exact same function `jarvis task recover` already calls."""
 _MAX_REQUEST_BODY_BYTES = 8192
 """A defensive cap on POST /api/command's own body size -- one short, typed request,
 never a large upload; rejects anything absurd before it is even parsed."""
+
+_WORKFLOWS_PATH = "/api/workflows"
+"""GET <this> -- real, built-in workflow discovery (WP-196). Mirrors `jarvis workflow
+list/show`'s own real, deliberate design choice exactly: not a capability, no `Effect`,
+no audit record -- pure, static, already-in-source-tree metadata."""
 
 _RESULT_TEXT_TRUNCATE_CHARS = 4000
 """Caps how much of a real file's own content -- fs.read_file's real result -- is
@@ -564,6 +591,30 @@ def _summarize_wp133_task_execution_result(result: object) -> str | None:
     return None
 
 
+def _summarize_workflow_run_outcome(result: WorkflowRunOutcome) -> str:
+    """Render a real `WorkflowRunOutcome` (M9/M10) as chat text.
+
+    Deliberately mirrors `cli/main.py::_print_outcome`'s own
+    `plan_step_records`/`workflow_halted_capability_id` wording
+    verbatim (WP-195's own real fix for the identical gap in `jarvis
+    do`) -- `jarvis ui`/`jarvis do`/`jarvis workflow run` all render an
+    equivalent workflow run identically, one real format, not three.
+    """
+    lines = [
+        f"step: {record.step.capability_id} {'GRANTED' if record.decision.granted else 'DENIED'}"
+        for record in (result.execution.step_records if result.execution is not None else ())
+    ]
+    if result.composed.halted_step is not None:
+        lines.append(
+            f"halted: {result.composed.halted_step.capability_id} requires "
+            "manual/interactive invocation -- never auto-executed."
+        )
+    # Structurally unreachable for a real outcome (WorkflowDescriptor.steps is always
+    # non-empty, so the first step is always either runnable or the halt point), but a
+    # real, honest fallback rather than an empty message if that invariant ever breaks.
+    return "\n".join(lines) if lines else f"Ran the {result.workflow.id} workflow."
+
+
 def _summarize_execution_result(capability_id: str, result: object) -> str:
     """Render a real, wired execution result as chat text.
 
@@ -668,6 +719,17 @@ def build_response_payload(outcome: RouteOutcome) -> dict[str, object]:
         payload["task_status"] = "created"
         return payload
 
+    if isinstance(outcome.execution_result, WorkflowRunOutcome):
+        # WP-196: a real WORKFLOW_RUN route (WP-191/192/193) has no real
+        # `capability_id` of its own (`route.capability_id` is always `None` for
+        # this kind -- see `RouteResult`'s own docstring), so it cannot go through
+        # `_summarize_execution_result`'s own capability_id-keyed dispatch;
+        # rendered directly instead, the same real step/halt wording `jarvis
+        # do`/`jarvis workflow run` already use (WP-195).
+        payload["type"] = "response"
+        payload["message"] = _summarize_workflow_run_outcome(outcome.execution_result)
+        return payload
+
     payload["type"] = "response"
     capability_id_text = route.capability_id.value if route.capability_id is not None else "?"
     payload["message"] = _summarize_execution_result(capability_id_text, outcome.execution_result)
@@ -703,7 +765,40 @@ class _JarvisUiRequestHandler(BaseHTTPRequestHandler):
             task_id = self.path[len(_TASK_STATUS_PATH_PREFIX) :]
             self._handle_get_task_status(task_id)
             return
+        if self.path == _WORKFLOWS_PATH:
+            self._handle_get_workflows()
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"type": "error", "message": "Not found."})
+
+    def _handle_get_workflows(self) -> None:
+        """Handle `GET /api/workflows` -- real, built-in workflow discovery (WP-196).
+
+        Not a capability: reads `kernel.workflows.build_default_workflow_registry()`
+        directly, exactly like `jarvis workflow list`/`show` -- no `Effect`, no
+        `Decision`, no audit record. Returns every real workflow's own
+        id/name/description/parameters and, for real workflow detail (mirroring
+        `jarvis workflow show`), each step's own capability id/description/tier.
+        """
+        capabilities = build_default_registry()
+        workflows = build_default_workflow_registry(capabilities)
+        payload = [
+            {
+                "id": str(workflow.id),
+                "name": workflow.name,
+                "description": workflow.description,
+                "parameters": list(workflow.parameters),
+                "steps": [
+                    {
+                        "capability_id": str(step.capability_id),
+                        "description": step.description,
+                        "tier": capabilities.get(step.capability_id).required_tier.name,
+                    }
+                    for step in workflow.steps
+                ],
+            }
+            for workflow in sorted(workflows, key=lambda descriptor: descriptor.id.value)
+        ]
+        self._send_json(HTTPStatus.OK, {"workflows": payload})
 
     def _handle_get_task_status(self, task_id: str) -> None:
         """Handle `GET /api/tasks/<task_id>` -- a real, authoritative task-store read.

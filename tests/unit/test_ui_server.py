@@ -25,11 +25,14 @@ from unittest import mock
 
 import pytest
 
-from jarvis.application.planning.planner import PlanningError
+from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
+from jarvis.application.planning.planner import PlanningError, PlanStep
 from jarvis.application.routing.router import RouteKind, RouteResult
+from jarvis.application.workflow.composer import ComposedWorkflow
 from jarvis.cli.ui_server import (
     UiServerConfig,
     _summarize_execution_result,
+    _summarize_workflow_run_outcome,
     build_response_payload,
     create_server,
     run_ui_server,
@@ -48,6 +51,7 @@ from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
+from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.kernel.capability_dispatch import (
     CalendarListStepResult,
     EmailListStepResult,
@@ -74,6 +78,7 @@ from jarvis.kernel.tasks import (
     authorize_and_create_task,
     update_task_status,
 )
+from jarvis.kernel.workflows import WorkflowRunOutcome
 from jarvis.ports.memory_write import MemoryRecordNotFoundError
 
 if TYPE_CHECKING:
@@ -312,6 +317,24 @@ def test_get_root_serves_the_real_static_page(running_server: tuple[str, JarvisU
     assert resp.headers["Content-Type"] == "text/html; charset=utf-8"
     body = resp.read().decode("utf-8")
     assert "JARVIS" in body
+
+
+def test_get_workflows_lists_the_real_built_in_workflows(
+    running_server: tuple[str, JarvisUiServer],
+) -> None:
+    """WP-196: GET /api/workflows is a real, unmocked read over the built-in workflow registry."""
+    base_url, _server = running_server
+
+    resp = urllib.request.urlopen(f"{base_url}/api/workflows", timeout=5)
+    data = json.loads(resp.read().decode("utf-8"))
+
+    assert resp.status == HTTPStatus.OK
+    workflow_ids = {workflow["id"] for workflow in data["workflows"]}
+    assert workflow_ids == {"job_search_assistant", "research", "coding_assistant"}
+    research = next(w for w in data["workflows"] if w["id"] == "research")
+    assert "query" in research["parameters"]
+    assert any(step["capability_id"] == "memory.retrieve" for step in research["steps"])
+    assert any(step["tier"] == "CONFIRM" for step in research["steps"])
 
 
 def test_get_unknown_path_returns_404(running_server: tuple[str, JarvisUiServer]) -> None:
@@ -1275,6 +1298,90 @@ def test_build_response_payload_for_a_granted_task_creation() -> None:
     assert payload["task_id"] == "mem:123"
     assert payload["task_status"] == "created"
     assert "find good internships" in str(payload["message"])
+
+
+def _workflow_run_outcome(*, halted: bool) -> WorkflowRunOutcome:
+    """Build a real, small WorkflowRunOutcome -- one granted step, optionally a halt."""
+    step = WorkflowStep(
+        capability_id=CapabilityId("memory.retrieve"), arguments={}, description="Recall."
+    )
+    halted_step = WorkflowStep(
+        capability_id=CapabilityId("browser.open_page"), arguments={}, description="Halts."
+    )
+    steps = (step, halted_step) if halted else (step,)
+    workflow = WorkflowDescriptor(
+        id=WorkflowId("research"), name="Research", description="Test double.", steps=steps
+    )
+    plan_step = PlanStep(CapabilityId("memory.retrieve"), {})
+    record = PlanStepRecord(
+        step=plan_step, decision=_make_decision(granted=True, tier=Tier.ALLOW), result=None
+    )
+    composed = ComposedWorkflow(
+        runnable_steps=(plan_step,),
+        halted_step=halted_step if halted else None,
+        remaining_steps=(),
+    )
+    execution = PlanExecutionResult(step_records=(record,), aborted=False)
+    return WorkflowRunOutcome(workflow=workflow, composed=composed, execution=execution)
+
+
+def test_summarize_workflow_run_outcome_renders_granted_steps_and_a_halt() -> None:
+    message = _summarize_workflow_run_outcome(_workflow_run_outcome(halted=True))
+
+    assert "step: memory.retrieve GRANTED" in message
+    assert "halted: browser.open_page requires manual/interactive invocation" in message
+
+
+def test_summarize_workflow_run_outcome_with_no_halt_has_no_halted_line() -> None:
+    message = _summarize_workflow_run_outcome(_workflow_run_outcome(halted=False))
+
+    assert "step: memory.retrieve GRANTED" in message
+    assert "halted:" not in message
+
+
+def test_build_response_payload_for_a_granted_workflow_run() -> None:
+    """WP-196: a granted WORKFLOW_RUN route renders the real step/halt summary, not a raw repr."""
+    route = RouteResult(
+        kind=RouteKind.WORKFLOW_RUN,
+        original_input="run research workflow",
+        confidence=1.0,
+        source="deterministic",
+        workflow_id="research",
+        workflow_parameters={},
+    )
+    outcome = RouteOutcome(
+        route=route,
+        decision=_make_decision(granted=True),
+        execution_result=_workflow_run_outcome(halted=True),
+        task_id=None,
+    )
+
+    payload = build_response_payload(outcome)
+
+    assert payload["type"] == "response"
+    message = str(payload["message"])
+    assert "step: memory.retrieve GRANTED" in message
+    assert "halted: browser.open_page" in message
+    assert "WorkflowRunOutcome(" not in message
+
+
+def test_build_response_payload_for_a_denied_workflow_run() -> None:
+    route = RouteResult(
+        kind=RouteKind.WORKFLOW_RUN,
+        original_input="run research workflow",
+        confidence=1.0,
+        source="deterministic",
+        workflow_id="research",
+        workflow_parameters={},
+    )
+    outcome = RouteOutcome(
+        route=route, decision=_make_decision(granted=False), execution_result=None, task_id=None
+    )
+
+    payload = build_response_payload(outcome)
+
+    assert payload["type"] == "denied"
+    assert payload["granted"] is False
 
 
 def test_build_response_payload_task_status_is_none_for_non_task_routes() -> None:

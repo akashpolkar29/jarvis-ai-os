@@ -159,10 +159,24 @@
     color: var(--error-text);
     border-color: var(--error-text);
   }
+  #workflows-button {
+    float: right;
+    font-size: 12px;
+    padding: 4px 10px;
+    font-weight: 400;
+    letter-spacing: normal;
+  }
+  .use-workflow-button {
+    display: inline-block;
+    margin-top: 6px;
+    margin-right: 6px;
+    font-size: 12px;
+    padding: 4px 10px;
+  }
 </style>
 </head>
 <body>
-<header>JARVIS</header>
+<header>JARVIS <button id="workflows-button" type="button">Workflows</button></header>
 <div id="conversation"></div>
 <div id="input-row">
   <input id="text-input" type="text" placeholder="Type a request..." autocomplete="off" />
@@ -486,6 +500,62 @@
       event.preventDefault();
       send();
     }
+  });
+
+  // GET /api/workflows (WP-196) -- real, built-in workflow discovery, mirroring
+  // `jarvis workflow list`/`show` exactly (not a capability, no Decision, no audit
+  // record). Rendered as one real assistant-style message reusing addMessage(),
+  // never a separate execution UI: each workflow's own "Use" button only ever
+  // pre-fills the real text input with "run <id> workflow " -- the user still
+  // reviews/completes it and presses the real, existing Send button, so every
+  // actual execution still goes through the exact same POST /api/command ->
+  // authorize_and_route path any other typed request already uses. No second
+  // execution path from the UI.
+  var workflowsButton = document.getElementById("workflows-button");
+
+  function renderWorkflowList(workflows) {
+    if (!workflows.length) {
+      addMessage("jarvis", "Workflows", "No workflows are registered.", null);
+      return;
+    }
+    var el = addMessage("jarvis", "Workflows", "", null);
+    workflows.forEach(function (workflow) {
+      var line = document.createElement("div");
+      var params = workflow.parameters.length ? " [parameters: " + workflow.parameters.join(", ") + "]" : "";
+      line.textContent = workflow.id + ": " + workflow.name + " -- " + workflow.description + params;
+      el.appendChild(line);
+      var useButton = document.createElement("button");
+      useButton.type = "button";
+      useButton.className = "use-workflow-button";
+      useButton.textContent = "Use";
+      useButton.addEventListener("click", function () {
+        textInput.value = "run " + workflow.id + " workflow ";
+        textInput.focus();
+      });
+      el.appendChild(useButton);
+    });
+  }
+
+  workflowsButton.addEventListener("click", function () {
+    workflowsButton.disabled = true;
+    fetch("/api/workflows")
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        workflowsButton.disabled = false;
+        if (!result.ok || !result.data || !Array.isArray(result.data.workflows)) {
+          addMessage("error", null, "Could not load the list of workflows.", null);
+          return;
+        }
+        renderWorkflowList(result.data.workflows);
+      })
+      .catch(function () {
+        workflowsButton.disabled = false;
+        addMessage("error", null, "Could not reach the JARVIS backend to list workflows.", null);
+      });
   });
 
   addMessage("jarvis", null, "JARVIS UI foundation. Type a request below.", null);
