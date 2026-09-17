@@ -32,9 +32,34 @@ full halting design.
 :func:`build_default_workflow_registry` mirrors
 :func:`~jarvis.kernel.skills.build_default_skill_registry` exactly:
 one function registering every real, built-in workflow JARVIS
-currently knows about. Starts empty at WP-184 -- concrete workflows
-(Job Search Assistant, Research, Coding Assistant) are added by
-WP-185/186/187, each its own, separate work package.
+currently knows about.
+
+**WP-185, Job Search Assistant -- the first real, built-in
+workflow**: two real steps -- ``memory.retrieve`` (understand the
+user's own stored profile/search-criteria context, ``Tier.ALLOW``,
+runs automatically) then ``job_search.open_results`` (search
+LinkedIn/Indeed via the user's own, real, ordinary browser,
+``Tier.CONFIRM`` -- halts, exactly as every CONFIRM+ step must,
+per ``application/workflow/composer.py``'s own halting design).
+**Real, deliberately undocumented-as-steps capability gaps, named
+here rather than worked around unsafely** (mirrors
+``docs/OPEN_DECISIONS.md`` item 71's own already-documented finding):
+no capability exists anywhere in this codebase to collect, normalize,
+or de-duplicate job-search results, or to present them structurally --
+every ``job_search.*`` capability is mechanically forbidden from
+reading page content at all
+(``tests/meta/test_job_search_no_content_reading.py``), by design, so
+there is genuinely nothing safe to wire here; a human reads and picks
+from the real browser window ``job_search.open_results`` opens.
+Likewise, "create a task for later follow-up" is not a workflow step
+here: task creation (``kernel.tasks.authorize_and_create_task``) is
+built on ``memory.write``, a dynamic-effect capability deliberately
+never statically registered (ADR-0049) -- it cannot be named by a
+``WorkflowStep.capability_id`` at all, since
+``validate_workflow_registry`` requires every step to name a real,
+statically-registered capability. A caller wanting that follow-up
+creates it separately, e.g. via ``jarvis task create``, after this
+workflow halts.
 """
 
 from __future__ import annotations
@@ -49,9 +74,17 @@ from jarvis.application.planning.executor import execute_plan
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.application.workflow.composer import compose_workflow
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.domain.workflow_registry import WorkflowRegistry, validate_workflow_registry
-from jarvis.kernel.capabilities import PLANNING_RUN_PLAN_CAPABILITY_ID, build_default_registry
+from jarvis.kernel.capabilities import (
+    JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+    MEMORY_RETRIEVE_CAPABILITY_ID,
+    PLANNING_RUN_PLAN_CAPABILITY_ID,
+    build_default_registry,
+)
 from jarvis.kernel.capability_dispatch import PLAN_STEP_EXECUTORS
+
+JOB_SEARCH_ASSISTANT_WORKFLOW_ID = WorkflowId("job_search_assistant")
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -61,7 +94,6 @@ if TYPE_CHECKING:
     from jarvis.application.workflow.composer import ComposedWorkflow
     from jarvis.domain.policy import Decision
     from jarvis.domain.registry import CapabilityRegistry
-    from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId
 
 
 def build_default_workflow_registry(
@@ -82,6 +114,43 @@ def build_default_workflow_registry(
         capability.
     """
     registry = WorkflowRegistry()
+
+    registry.register(
+        WorkflowDescriptor(
+            id=JOB_SEARCH_ASSISTANT_WORKFLOW_ID,
+            name="Job Search Assistant",
+            description=(
+                "Recall the user's own stored job-search profile/criteria, then open a "
+                "real, assisted-browsing search on a permitted job site -- never reads or "
+                "scrapes listing content, never applies automatically (ADR-0058)."
+            ),
+            steps=(
+                WorkflowStep(
+                    capability_id=MEMORY_RETRIEVE_CAPABILITY_ID,
+                    arguments={"query": "${profile_query}", "limit": 5},
+                    description=(
+                        "Recall the user's own stored job-search profile/preferences/context."
+                    ),
+                ),
+                WorkflowStep(
+                    capability_id=JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
+                    arguments={
+                        "site": "${site}",
+                        "keywords": "${keywords}",
+                        "location": "${location}",
+                    },
+                    description=(
+                        "Open a real search-results page on the requested site for the "
+                        "user to search and read themselves -- Tier.CONFIRM, halts here; "
+                        "this workflow never reads listing content, per "
+                        "tests/meta/test_job_search_no_content_reading.py."
+                    ),
+                ),
+            ),
+            parameters=("profile_query", "site", "keywords", "location"),
+            metadata={"source": "wp185-job-search-assistant"},
+        )
+    )
 
     real_capabilities = capabilities if capabilities is not None else build_default_registry()
     validate_workflow_registry(registry, real_capabilities)
