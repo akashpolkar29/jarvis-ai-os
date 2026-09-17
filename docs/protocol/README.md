@@ -27,6 +27,26 @@ choice `doctor` makes (see `docs/architecture/jarvis-doctor.md`).
 
 ## Subcommands
 
+**Updated 2026-09-17 (WP-181-190, the M9 practical-workflow queue) —
+three new real subcommands, `workflow list`/`show`/`run`
+(`jarvis.kernel.workflows`), bringing this table to 83 real subcommand
+rows. `list`/`show` mirror `skills list`/`show` exactly — not a
+capability, no `--chain-path`/confirmation flags, pure, static,
+already-in-source-tree metadata. `run <workflow_id> [--param
+name=value]...` is a real, audited invocation of
+`authorize_and_run_workflow` — no new `CapabilityId`: it reuses
+`planning.run_plan`'s own outer gate completely unmodified, since
+running a workflow (a fixed, hand-authored step sequence) is the same
+real action a reasoning-generated plan already performs. Every
+`Tier.ALLOW` step runs automatically through the exact, unmodified
+`execute_plan`; a step requiring above `Tier.ALLOW` halts the whole
+remaining sequence there, reported as `halted: <capability_id>
+requires manual/interactive invocation`, never auto-executed. Three
+real, built-in workflows ship: `job_search_assistant`, `research`,
+`coding_assistant`. See `docs/OPEN_DECISIONS.md` item 73 for the one
+real, deliberate scope boundary this queue left open — workflows are
+reachable only from this CLI today, not yet via `do`/`ui`/voice.
+
 **Updated 2026-09-12 (WP-159, release-readiness audit) — five real,
 already-shipped `task` subcommands (`cancel`/`retry`/`schedule`/
 `recover`/`worker`, from WP-117/121/122/126/120) were missing from
