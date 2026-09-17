@@ -266,7 +266,11 @@ from jarvis.kernel.tasks import (
 )
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.kernel.worker import run_pending_tasks_once
-from jarvis.kernel.workflows import authorize_and_run_workflow, build_default_workflow_registry
+from jarvis.kernel.workflows import (
+    WorkflowRunOutcome,
+    authorize_and_run_workflow,
+    build_default_workflow_registry,
+)
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -2628,6 +2632,15 @@ def _run_do_subcommand(args: argparse.Namespace) -> _CommandOutcome:
     or a real, recognized capability with no wired executor) -- see
     `_CommandOutcome.decision`'s own widened type and `main()`'s own
     handling of that case.
+
+    **WP-195**: a `RouteKind.WORKFLOW_RUN` route's own real
+    `WorkflowRunOutcome` is unpacked into the exact same
+    `plan_step_records`/`workflow_halted_capability_id` fields
+    `workflow run` itself already populates -- reusing that one, real
+    print path (`_print_outcome`) rather than falling through to the
+    generic `route_execution_result` catch-all, which would otherwise
+    print an unreadable, full `repr()` of a large nested dataclass (a
+    real bug caught live, not assumed, before this fix).
     """
     route_outcome = asyncio.run(
         authorize_and_route(
@@ -2637,6 +2650,26 @@ def _run_do_subcommand(args: argparse.Namespace) -> _CommandOutcome:
             chain_path=args.chain_path,
         )
     )
+    if isinstance(route_outcome.execution_result, WorkflowRunOutcome):
+        workflow_outcome = route_outcome.execution_result
+        halted_capability_id = (
+            str(workflow_outcome.composed.halted_step.capability_id)
+            if workflow_outcome.composed.halted_step is not None
+            else None
+        )
+        step_records = (
+            workflow_outcome.execution.step_records
+            if workflow_outcome.execution is not None
+            else None
+        )
+        return _CommandOutcome(
+            route_outcome.decision,
+            "do",
+            route_result=route_outcome.route,
+            plan_step_records=step_records,
+            workflow_halted_capability_id=halted_capability_id,
+            route_task_id=route_outcome.task_id,
+        )
     return _CommandOutcome(
         route_outcome.decision,
         "do",

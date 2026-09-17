@@ -4602,6 +4602,131 @@ def test_do_subcommand_prints_a_complex_goal_routes_task_id(
     assert captured.out.count("task_id:") == 1
 
 
+def test_do_subcommand_prints_a_workflow_run_route_using_the_same_step_halt_printer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP-195: `do "run <workflow> workflow"` reuses `workflow run`'s own real step/halt printer.
+
+    Proves the two commands share one authoritative print path, not
+    two separate implementations -- before this fix, `do` printed an
+    unreadable, full `repr()` of the whole `WorkflowRunOutcome`
+    dataclass instead (a real bug caught live, not assumed).
+    """
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        route = RouteResult(
+            kind=RouteKind.WORKFLOW_RUN,
+            original_input="run research workflow with query=x",
+            confidence=1.0,
+            source="deterministic",
+            workflow_id="research",
+            workflow_parameters={"query": "x"},
+        )
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        step_decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        step = WorkflowStep(
+            capability_id=CapabilityId("memory.retrieve"),
+            arguments={"query": "x"},
+            description="Recall context.",
+        )
+        halted = WorkflowStep(
+            capability_id=CapabilityId("browser.open_page"),
+            arguments={},
+            description="Halts here.",
+        )
+        plan_step = PlanStep(CapabilityId("memory.retrieve"), {"query": "x"})
+        record = PlanStepRecord(step=plan_step, decision=step_decision, result=None)
+        workflow = WorkflowDescriptor(
+            id=WorkflowId("research"),
+            name="Research",
+            description="Test double.",
+            steps=(step, halted),
+        )
+        composed = ComposedWorkflow(
+            runnable_steps=(plan_step,), halted_step=halted, remaining_steps=()
+        )
+        execution = PlanExecutionResult(step_records=(record,), aborted=False)
+        outcome = WorkflowRunOutcome(workflow=workflow, composed=composed, execution=execution)
+        return RouteOutcome(route=route, decision=decision, execution_result=outcome, task_id=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(
+        [
+            "do",
+            "run research workflow with query=x",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "do: GRANTED" in captured.out
+    assert "route: workflow_run" in captured.out
+    assert "step: memory.retrieve GRANTED" in captured.out
+    assert "halted: browser.open_page requires manual/interactive invocation" in captured.out
+    assert "WorkflowRunOutcome(" not in captured.out
+    assert "result:" not in captured.out
+
+
+def test_do_subcommand_denied_workflow_run_prints_no_step_lines(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A denied workflow_run route via `do` prints no step/halt lines -- nothing was composed."""
+
+    async def fake_authorize_and_route(  # noqa: PLR0913 -- mirrors the real signature
+        text: str,  # noqa: ARG001
+        provider: object | None = None,  # noqa: ARG001
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        database_path: Path | None = None,  # noqa: ARG001
+        embedding_port: object | None = None,  # noqa: ARG001
+        clock: object | None = None,  # noqa: ARG001
+        id_port: object | None = None,  # noqa: ARG001
+    ) -> RouteOutcome:
+        route = RouteResult(
+            kind=RouteKind.WORKFLOW_RUN,
+            original_input="run research workflow",
+            confidence=1.0,
+            source="deterministic",
+            workflow_id="research",
+            workflow_parameters={},
+        )
+        decision = _make_decision(granted=False, capability_id="planning.run_plan")
+        return RouteOutcome(route=route, decision=decision, execution_result=None, task_id=None)
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"], "authorize_and_route", fake_authorize_and_route
+    )
+
+    exit_code = main(
+        ["do", "run research workflow", "--chain-path", str(tmp_path / "audit_chain.json")]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "do: DENIED" in captured.out
+    assert "step:" not in captured.out
+    assert "halted:" not in captured.out
+
+
 def test_do_subcommand_requires_text() -> None:
     with pytest.raises(SystemExit):
         main(["do"])
