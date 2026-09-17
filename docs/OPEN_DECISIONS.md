@@ -2035,7 +2035,20 @@ matching every skill built so far) whenever a real work package asks
 for it -- listed here only so a future pass doesn't have to
 re-discover that this gap is intentional, not overlooked.
 
-## 73. Workflows not yet reachable via the router/UI/voice -- deliberately deferred (WP-181-190)
+## 73. ~~Workflows not yet reachable via the router/UI/voice~~ -- RESOLVED/BUILT (WP-191-196)
+
+**Resolved.** `RouteKind.WORKFLOW_RUN` (WP-191) plus real Stage-A
+grammar (WP-192, `"run <workflow> workflow"`), Stage-B reasoning
+discovery (WP-193), a unified CLI print path (WP-195), and real UI
+discovery/execution (WP-196, `GET /api/workflows` + the existing chat
+flow) together close this gap completely: `jarvis do`, `jarvis ui`,
+and `jarvis workflow run` all now reach the exact same, unmodified
+`authorize_and_run_workflow`. Voice grammar remains the one real,
+deliberately out-of-scope exception -- this queue's own hard rule 14
+("no voice/wake-word work") means that part of this item is not
+resolved, and is not claimed to be.
+
+**Original text, preserved as the real historical record:**
 
 **Not undecided, just not yet built -- noted for completeness,
 mirroring item 72's own shape exactly.** The real M9 workflow layer
@@ -2063,6 +2076,37 @@ property) before `authorize_and_route` could safely dispatch to
 that proof was outside this queue's own five named phases. Listed
 here only so a future pass doesn't have to re-discover that this gap
 is intentional, not overlooked.
+
+## 74. fs.search_content's matched lines carry no Provenance -- real, pre-existing gap (found via WP-198)
+
+**Undecided -- a real, cross-cutting finding, not fixed here.** While
+hardening the Research workflow (WP-198, M10), a real inconsistency
+was found by direct code inspection, not assumed:
+`ContentSearchOutcome.matches` (`kernel/files.py`) is typed
+`tuple[tuple[Path, int, str], ...]` -- the matched line text is a
+bare, untagged `str`, carrying no `Tainted`/`Provenance` wrapper at
+all. This is inconsistent with `fs.read_file`'s own file content,
+which is wrapped `Provenance.external(source=str(resolved_path), ...)`
+specifically so downstream reasoning callers know this content did
+not originate from the user directly. Confirmed via `git log` to
+predate the entire M9/M10 workflow layer (`fs.search_content` shipped
+at WP-94, well before WP-182) -- this is not a deficiency the
+workflow layer introduces or could fix on its own; the Research
+workflow (and any other caller, including the CLI/`jarvis do`) simply
+surfaces whatever `fs.search_content` already returns, unmodified.
+**Real, practical consequence, stated plainly**: a caller (e.g. a
+future reasoning step synthesizing over Research's own gathered
+content) that trusts `fs.search_content`'s matched text as if it were
+`fs.read_file`'s own correctly-tagged, `Trust.UNTRUSTED_EXTERNAL`-
+equivalent content would be wrong to do so today -- there is no
+provenance signal on this path to catch that mistake automatically.
+Fixing it would mean changing `kernel/files.py`'s own real,
+already-shipped `ContentSearchOutcome` return shape (and everything
+that already consumes it: the CLI's own printer, `jarvis ui`'s own
+summarizer, existing tests) -- a genuinely separate, larger work
+package, not attempted here. See
+`tests/unit/test_workflows_research_hardening.py`'s own module
+docstring for the same finding, stated at the point it was discovered.
 
 ## Maintaining this index
 
