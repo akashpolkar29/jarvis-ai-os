@@ -939,3 +939,41 @@ it.
   No new status, no new `CapabilityId`/`Effect`/`Tier`, no ADR. All
   gates green; the full suite grew to 2084 passing tests, zero
   regressions. `docs/OPEN_DECISIONS.md` item 76 added, RESOLVED/BUILT.
+- **WP-205, M10 completion review + M11 scoping, the final work
+  package of the M10 queue**: a real, read-only architecture review
+  (`docs/architecture/wp205-m10-completion-review-and-m11-scoping.md`)
+  across router/skills/workflows/planner/tasks/memory/EventBus/audit/
+  authorization/CLI/UI. Confirmed directly, across the whole queue at
+  once rather than per-work-package: a protected-file diff
+  (`planning.py`/`executor.py`/`planner.py`/`job_application.py`/
+  `job_assistance.py`/`job_search.py`/`capability.py`/`capabilities.py`/
+  `dispatcher.py`/`ladder.py`/`synthetic_input.py`/`desktop.py`) from
+  before WP-191 to `HEAD` is empty -- ADR-0062 and ADR-0058 were never
+  touched anywhere in M10, and zero new `CapabilityId`/`Effect`/`Tier`
+  were added across all fourteen work packages. 45 capabilities, 8
+  skills, 3 workflows, 79 CLI parser sites, 121 real commits since
+  `v0.9.0`. **M11 recommendation, grounded in real inspection of
+  `docs/OPEN_DECISIONS.md`, not the prompt's own suggested list**: a
+  generic, non-job-specific web-search capability, closing item 71
+  (found during WP-178) -- `browser.open_page` needs an already-known
+  literal URL, and `job_search.*`'s own search-URL builders are
+  structurally forbidden from reading content, so a research request
+  naming a source by name rather than URL has no way to discover that
+  URL today, a real, immediately-felt limitation of the Research
+  skill/workflow this session's own M9/M10 queues already shipped.
+  Gmail/Calendar (already built, M6a), job-search aggregation
+  (forbidden by ADR-0058/the content-reading ban), and notifications/
+  document workflows (no real, diagnosed gap behind either) were all
+  considered and set aside for concrete, stated reasons rather than
+  picked from the list. **Not implemented** -- this would touch
+  `browser.*`/egress, which needs a new ADR first per this project's
+  own established review pattern; surfaced for the user's own review,
+  not built unilaterally, per this work package's own explicit "do not
+  blindly implement" instruction. The retention-policy question
+  (items 52/62) and the `fs.search_content` provenance gap (item 74)
+  were both named as real but lower-priority, the former a pure policy
+  question needing the user's own answer, the latter a smaller,
+  internal-consistency fix. No code changed in this work package. Not
+  tagged -- `v0.10.0` remains the correct next sequential slot,
+  tagging remains the user's own decision. **This concludes the M10
+  queue (WP-191 through WP-205).**
