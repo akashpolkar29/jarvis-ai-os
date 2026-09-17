@@ -96,22 +96,26 @@ class RoutingError(Exception):
     JSON, a response that isn't a single JSON object, an unrecognized
     `kind`, a `DETERMINISTIC_COMMAND` naming a capability id that is
     not a string or not actually registered, non-object `arguments`,
-    or a `COMPLEX_GOAL` with an empty/missing `goal`. A malformed
-    fallback response is never silently coerced into a guess -- see
-    this module's own docstring.
+    a `COMPLEX_GOAL` with an empty/missing `goal`, or a `WORKFLOW_RUN`
+    naming a workflow id that is not a string, not actually
+    registered, or whose `parameters` is not a JSON object of string
+    to string. A malformed fallback response is never silently coerced
+    into a guess -- see this module's own docstring.
     """
 
 
 class RouteKind(Enum):
     """What kind of request a route describes.
 
-    Deliberately three, not the prompt's own suggested four --
-    `HELP` was considered and rejected: no real help/documentation
-    system exists anywhere in this codebase for a `HELP` route to
-    hand off to, and inventing one is explicitly out of WP-104's own
-    scope (section 17). Adding an unused route kind now would be
-    exactly the "don't blindly copy" mistake WP-104's own prompt warns
-    against.
+    Four, as of WP-191 (M10) -- `HELP` was considered and rejected back
+    at WP-104: no real help/documentation system exists anywhere in
+    this codebase for a `HELP` route to hand off to, and inventing one
+    was explicitly out of that work package's own scope. `WORKFLOW_RUN`
+    is different: it names a real, already-built, already-authorized
+    mechanism (`kernel.workflows.authorize_and_run_workflow`, M9) this
+    router previously had no way to reach at all -- not speculative
+    scope growth, closing a real, already-identified gap
+    (`docs/OPEN_DECISIONS.md` item 73).
     """
 
     DETERMINISTIC_COMMAND = "deterministic_command"
@@ -119,6 +123,19 @@ class RouteKind(Enum):
 
     COMPLEX_GOAL = "complex_goal"
     """A real, natural-language goal needing task/planner handling, not one capability call."""
+
+    WORKFLOW_RUN = "workflow_run"
+    """A specific, already-registered workflow (M9) was identified to run, by id.
+
+    Deliberately its own `RouteKind`, not shoehorned into
+    `DETERMINISTIC_COMMAND`'s own `capability_id` field: a workflow id
+    (`jarvis.domain.workflow.WorkflowId`) is not a `CapabilityId`, and
+    validating it means checking a real `WorkflowRegistry`, not the
+    real `CapabilityRegistry` `DETERMINISTIC_COMMAND` already checks
+    against -- reusing the same field for two different validation
+    rules would be a real, silent correctness hazard, not a
+    simplification.
+    """
 
     UNKNOWN = "unknown"
     """Neither stage could confidently determine what was being asked."""
@@ -156,6 +173,20 @@ class RouteResult:
             otherwise.
         goal: The real, natural-language goal text, if
             `kind == COMPLEX_GOAL`. `None` otherwise.
+        workflow_id: The real, already-registered workflow id
+            (verbatim, not yet wrapped `WorkflowId` -- this module may
+            not import `jarvis.domain.workflow`'s own type without
+            creating a needless cross-module coupling for a single
+            `str` field), if `kind == WORKFLOW_RUN`. `None` otherwise.
+            Guaranteed, by the time a `RouteResult` exists, to have
+            already been checked against a real `WorkflowRegistry` --
+            see `_parse_route`'s own `is_valid_workflow` parameter.
+        workflow_parameters: That workflow's own real
+            `"${name}"`-placeholder values, a plain `dict[str, str]`
+            (matching `authorize_and_run_workflow`'s own `parameters`
+            shape exactly), if `kind == WORKFLOW_RUN`. `None` otherwise
+            -- an empty dict is a real, valid "no parameters supplied"
+            answer, kept distinct from "not a workflow route at all".
         detail: A real, human-readable explanation, set whenever
             `kind == UNKNOWN` (why neither stage could resolve this,
             e.g. an ambiguous job-search site clause) -- see
@@ -170,6 +201,8 @@ class RouteResult:
     capability_id: CapabilityId | None = None
     arguments: Tainted[Mapping[str, object]] | None = None
     goal: str | None = None
+    workflow_id: str | None = None
+    workflow_parameters: Mapping[str, str] | None = None
     detail: str | None = None
 
 
@@ -283,9 +316,24 @@ def _build_routing_prompt(text: str, relevant_skills: tuple[SkillDescriptor, ...
 
 
 def _parse_route(
-    raw: object, original_input: str, is_registered: Callable[[CapabilityId], bool]
+    raw: object,
+    original_input: str,
+    is_registered: Callable[[CapabilityId], bool],
+    is_valid_workflow: Callable[[str], bool],
 ) -> RouteResult:
     """Parse and validate one raw, JSON-decoded routing response into a real `RouteResult`.
+
+    Args:
+        raw: The raw, `json.loads`-decoded provider response.
+        original_input: The real, original typed text this route is for.
+        is_registered: As `generate_route`'s own parameter.
+        is_valid_workflow: Checks whether a workflow id names a real,
+            registered workflow (real callers pass a live
+            `WorkflowRegistry`'s own `__contains__`, wrapped to accept
+            a plain `str`). A `WORKFLOW_RUN` response naming an
+            unregistered workflow id is a real routing failure, never
+            silently dropped or coerced -- the exact same discipline
+            `is_registered` already applies to `DETERMINISTIC_COMMAND`.
 
     Raises:
         RoutingError: If `raw` fails any real, structural check -- see
@@ -337,6 +385,29 @@ def _parse_route(
             goal=raw_goal.strip(),
         )
 
+    if kind == RouteKind.WORKFLOW_RUN:
+        raw_workflow_id = raw.get("workflow_id")
+        raw_parameters = raw.get("parameters", {})
+        if not isinstance(raw_workflow_id, str) or not raw_workflow_id:
+            msg = f"'workflow_id' must be a non-empty string for 'workflow_run', got {raw_workflow_id!r}."  # noqa: E501
+            raise RoutingError(msg)
+        if not isinstance(raw_parameters, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in raw_parameters.items()
+        ):
+            msg = f"'parameters' must be a JSON object of string to string, got {raw_parameters!r}."
+            raise RoutingError(msg)
+        if not is_valid_workflow(raw_workflow_id):
+            msg = f"Provider named workflow {raw_workflow_id!r}, which is not registered."
+            raise RoutingError(msg)
+        return RouteResult(
+            kind=kind,
+            original_input=original_input,
+            confidence=_REASONING_ROUTE_CONFIDENCE,
+            source="reasoning",
+            workflow_id=raw_workflow_id,
+            workflow_parameters=raw_parameters,
+        )
+
     return RouteResult(
         kind=RouteKind.UNKNOWN,
         original_input=original_input,
@@ -351,6 +422,7 @@ async def generate_route(
     provider: ReasoningPort,
     is_registered: Callable[[CapabilityId], bool],
     skills: Iterable[SkillDescriptor] = (),
+    is_valid_workflow: Callable[[str], bool] = lambda _: False,
 ) -> RouteResult:
     """Ask `provider` to propose a route for `text`, then validate it structurally.
 
@@ -376,6 +448,14 @@ async def generate_route(
             WP-175) gets the exact same prompt as before. Never
             widens what can be authorized: `is_registered` still runs
             unconditionally on the real, returned `capability_id`.
+        is_valid_workflow: Checks whether a workflow id names a real,
+            registered workflow (WP-191/193). Defaults to a predicate
+            that rejects everything -- a caller that never supplies
+            this (every caller before WP-193's own prompt extension)
+            can never produce a `WORKFLOW_RUN` route at all, since
+            `_parse_route` would raise `RoutingError` on any attempt,
+            converted to `UNKNOWN` by `jarvis.kernel.router` exactly
+            like any other malformed fallback response.
 
     Returns:
         A real, structurally-valid `RouteResult` with `source="reasoning"`.
@@ -395,4 +475,4 @@ async def generate_route(
         msg = f"Provider's response is not valid JSON: {exc}"
         raise RoutingError(msg) from exc
 
-    return _parse_route(raw_route, text.value, is_registered)
+    return _parse_route(raw_route, text.value, is_registered, is_valid_workflow)

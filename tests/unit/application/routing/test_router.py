@@ -202,6 +202,108 @@ async def test_generate_route_rejects_empty_goal_for_complex_goal() -> None:
         await generate_route(text, provider, _always_registered)
 
 
+async def test_generate_route_returns_a_workflow_run_route() -> None:
+    """A well-formed workflow_run response, naming a valid workflow, becomes a real RouteResult."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": "research",
+            "parameters": {"query": "rate limiting"},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("research rate limiting for me", Provenance.user())
+
+    route = await generate_route(
+        text, provider, _always_registered, is_valid_workflow=lambda _: True
+    )
+
+    assert route.kind == RouteKind.WORKFLOW_RUN
+    assert route.workflow_id == "research"
+    assert route.workflow_parameters == {"query": "rate limiting"}
+    assert route.capability_id is None
+    assert route.goal is None
+
+
+async def test_generate_route_rejects_an_unregistered_workflow_id() -> None:
+    """A model naming a real-shaped but unregistered workflow id is rejected, never trusted."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": "not_a_real_workflow",
+            "parameters": {},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("run something", Provenance.user())
+
+    with pytest.raises(RoutingError):
+        await generate_route(text, provider, _always_registered, is_valid_workflow=lambda _: False)
+
+
+async def test_generate_route_workflow_run_defaults_to_rejecting_every_workflow() -> None:
+    """A caller that never supplies is_valid_workflow can never produce a WORKFLOW_RUN route."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": "research",
+            "parameters": {},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("run research workflow", Provenance.user())
+
+    with pytest.raises(RoutingError):
+        await generate_route(text, provider, _always_registered)
+
+
+async def test_generate_route_rejects_non_string_workflow_id() -> None:
+    """A non-string workflow_id fails validation before is_valid_workflow is even called."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": 123,
+            "parameters": {},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("goal", Provenance.user())
+
+    with pytest.raises(RoutingError):
+        await generate_route(text, provider, _always_registered, is_valid_workflow=lambda _: True)
+
+
+async def test_generate_route_rejects_non_string_valued_workflow_parameters() -> None:
+    """workflow_run's own 'parameters' must be a flat string-to-string object, never nested."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": "research",
+            "parameters": {"query": 123},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("goal", Provenance.user())
+
+    with pytest.raises(RoutingError):
+        await generate_route(text, provider, _always_registered, is_valid_workflow=lambda _: True)
+
+
 async def test_generate_route_confidence_is_never_taken_from_the_model() -> None:
     """Even if the model's own JSON smuggles a 'confidence' key, it is never read or trusted."""
     response = json.dumps(

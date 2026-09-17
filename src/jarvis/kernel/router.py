@@ -97,6 +97,16 @@ was supplied. This router itself never runs a task (see above), so no
 real `TaskStatusChanged` event can ever originate from this function
 today -- only `kernel.tasks.authorize_and_run_task` (a separate,
 explicit call, e.g. `jarvis task run`) can produce one.
+
+**WP-191 (M10) closes `docs/OPEN_DECISIONS.md` item 73**: a fourth
+real outcome, `RouteKind.WORKFLOW_RUN`, reuses
+`kernel.workflows.authorize_and_run_workflow` (M9) completely
+unmodified -- the exact same function `jarvis workflow run` already
+calls, its own outer gate (`planning.run_plan`, reused unmodified) and
+every real, runnable step's own separate authorization untouched.
+Still never a second execution path: this router still only ever
+calls an already-existing, already-audited composition function, the
+same structural property every other branch above already has.
 """
 
 from __future__ import annotations
@@ -112,6 +122,7 @@ from jarvis.application.routing.router import RouteKind, RouteResult, RoutingErr
 from jarvis.domain.capability import CapabilityId
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.transcript import Transcript
+from jarvis.domain.workflow import WorkflowId
 from jarvis.kernel.capabilities import (
     CALENDAR_LIST_EVENTS_CAPABILITY_ID,
     EMAIL_LIST_MESSAGES_CAPABILITY_ID,
@@ -144,6 +155,7 @@ from jarvis.kernel.tasks import (
     authorize_and_list_tasks,
     filter_scheduled_tasks,
 )
+from jarvis.kernel.workflows import authorize_and_run_workflow
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -875,6 +887,31 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
             decision=create_outcome.decision,
             execution_result=None,
             task_id=create_outcome.task_id,
+        )
+
+    if route.kind == RouteKind.WORKFLOW_RUN and route.workflow_id is not None:
+        # WP-191 (M10): reuses kernel.workflows.authorize_and_run_workflow (M9)
+        # completely unmodified -- the exact same function `jarvis workflow run`
+        # already calls. Never a second execution path: this router still never
+        # authorizes or executes anything itself, it only ever calls an already-
+        # existing, already-audited composition function, exactly like every
+        # other branch above. `route.workflow_id` is guaranteed real and
+        # registered by the time a WORKFLOW_RUN route exists (Stage A only ever
+        # produces one for an already-checked, real workflow id; Stage B's own
+        # `_parse_route` already validated it against a live WorkflowRegistry via
+        # `is_valid_workflow` before this route was ever constructed) -- so no
+        # redundant re-validation happens here, mirroring
+        # `application/planning/executor.py`'s own identical "structurally should
+        # not happen, not re-derived here" reasoning.
+        decision, workflow_outcome = authorize_and_run_workflow(
+            WorkflowId(route.workflow_id),
+            route.workflow_parameters or {},
+            physical_confirmation_available=physical_confirmation_available,
+            remote_confirmation_available=remote_confirmation_available,
+            chain_path=chain_path,
+        )
+        return RouteOutcome(
+            route=route, decision=decision, execution_result=workflow_outcome, task_id=None
         )
 
     return RouteOutcome(route=route, decision=None, execution_result=None, task_id=None)
