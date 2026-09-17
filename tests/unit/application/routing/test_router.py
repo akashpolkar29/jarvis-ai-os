@@ -12,12 +12,14 @@ from jarvis.application.routing.router import (
     RoutingError,
     _build_routing_prompt,
     _select_relevant_skills,
+    _select_relevant_workflows,
     generate_route,
 )
 from jarvis.domain.capability import CapabilityId
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.skill import SkillDescriptor, SkillId
+from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 
 if TYPE_CHECKING:
     from jarvis.domain.evidence import Attempt
@@ -54,6 +56,22 @@ def _skill(
         domain=domain,
         capability_ids=(CapabilityId("fs.read_file"),),
         tags=tags,
+    )
+
+
+def _workflow(
+    workflow_id: str, *, name: str = "Test Workflow", parameters: tuple[str, ...] = ()
+) -> WorkflowDescriptor:
+    return WorkflowDescriptor(
+        id=WorkflowId(workflow_id),
+        name=name,
+        description=f"A test workflow for {workflow_id}.",
+        steps=(
+            WorkflowStep(
+                capability_id=CapabilityId("fs.read_file"), arguments={}, description="A step."
+            ),
+        ),
+        parameters=parameters,
     )
 
 
@@ -455,3 +473,99 @@ async def test_generate_route_still_rejects_unregistered_capability_with_skill_c
 
     with pytest.raises(RoutingError):
         await generate_route(text, provider, _never_registered, (filesystem_skill,))
+
+
+def test_select_relevant_workflows_matches_on_id_substring() -> None:
+    """A workflow whose id appears in the request text is selected."""
+    research = _workflow("research")
+    coding = _workflow("coding_assistant")
+
+    matches = _select_relevant_workflows("please research this for me", (research, coding))
+
+    assert matches == (research,)
+
+
+def test_select_relevant_workflows_matches_on_name_substring() -> None:
+    """A workflow whose name appears in the request text is selected, even if id doesn't match."""
+    coding = _workflow("coding_assistant", name="Coding Assistant")
+
+    matches = _select_relevant_workflows("run the coding assistant on this repo", (coding,))
+
+    assert matches == (coding,)
+
+
+def test_select_relevant_workflows_returns_empty_when_nothing_matches() -> None:
+    research = _workflow("research")
+
+    matches = _select_relevant_workflows("play the next song", (research,))
+
+    assert matches == ()
+
+
+def test_select_relevant_workflows_is_deterministic_regardless_of_input_order() -> None:
+    alpha = _workflow("alpha_workflow", name="Alpha")
+    beta = _workflow("beta_workflow", name="Beta")
+
+    forward = _select_relevant_workflows("alpha_workflow beta_workflow", (alpha, beta))
+    backward = _select_relevant_workflows("alpha_workflow beta_workflow", (beta, alpha))
+
+    assert forward == backward == (alpha, beta)
+
+
+def test_select_relevant_workflows_respects_the_limit() -> None:
+    expected_match_count = 3
+    workflows = tuple(_workflow(f"wf_{i}", name=f"Workflow {i}") for i in range(10))
+    text = " ".join(w.id.value for w in workflows)
+
+    matches = _select_relevant_workflows(text, workflows, limit=expected_match_count)
+
+    assert len(matches) == expected_match_count
+
+
+def test_build_routing_prompt_with_workflows_includes_compact_context_only() -> None:
+    """Relevant workflows add a compact block naming id/name/description/parameters only."""
+    research = _workflow("research", parameters=("query", "url"))
+
+    prompt = _build_routing_prompt("research something", (), (research,))
+
+    assert "research" in prompt
+    assert "query" in prompt
+    assert "Potentially relevant" in prompt
+    assert "workflow" in prompt.lower()
+
+
+def test_build_routing_prompt_without_workflows_matches_the_original_prompt_shape() -> None:
+    """No workflows supplied -> no workflow-context section at all."""
+    prompt = _build_routing_prompt("read my file")
+
+    assert "already-registered workflows" not in prompt
+
+
+async def test_generate_route_with_a_matching_workflow_includes_it_in_the_real_prompt() -> None:
+    """WP-193: generate_route really does build and send compact workflow context."""
+    response = json.dumps(
+        {
+            "kind": "workflow_run",
+            "capability_id": None,
+            "arguments": {},
+            "goal": None,
+            "workflow_id": "research",
+            "parameters": {"query": "rate limiting"},
+        }
+    )
+    provider = _FakeReasoningProvider(response)
+    text = Tainted("research rate limiting for me", Provenance.user())
+    research = _workflow("research", parameters=("query", "url"))
+
+    route = await generate_route(
+        text,
+        provider,
+        _always_registered,
+        (),
+        (research,),
+        is_valid_workflow=lambda workflow_id: workflow_id == "research",
+    )
+
+    assert "research" in provider.received_prompts[0]
+    assert route.kind == RouteKind.WORKFLOW_RUN
+    assert route.workflow_id == "research"

@@ -107,6 +107,22 @@ every real, runnable step's own separate authorization untouched.
 Still never a second execution path: this router still only ever
 calls an already-existing, already-audited composition function, the
 same structural property every other branch above already has.
+
+**WP-192 (M10)** added the real, typed Stage-A grammar that actually
+produces a `WORKFLOW_RUN` route (`_resolve_workflow_command`, "run
+<workflow> workflow [with name=value, ...]"). **WP-193 (M10)** then
+gave Stage B the same real discoverability WP-175 already gave it for
+skills: `build_default_workflow_registry(registry)`'s own output is
+passed straight through to `generate_route`, deterministically
+filtered down to a small, relevant subset before it ever reaches a
+prompt. Purely advisory, structurally, not just by convention: a
+`WORKFLOW_RUN` route the reasoning fallback proposes is only ever
+constructed by `application/routing/router.py::_parse_route` after
+`is_valid_workflow` -- here, a real closure checking a live
+`WorkflowRegistry`, catching a malformed id's own `ValueError` rather
+than letting it escape -- confirms the named workflow genuinely
+exists; the model can never invent one and have it survive validation,
+exactly like `is_registered` already guarantees for capability ids.
 """
 
 from __future__ import annotations
@@ -862,12 +878,26 @@ async def authorize_and_route(  # noqa: PLR0911, PLR0913 -- one return per real,
             )
         real_provider = provider or LocalReasoningAdapter()
         skills = build_default_skill_registry(registry)
+        workflows = build_default_workflow_registry(registry)
+
+        def _is_valid_workflow(value: str) -> bool:
+            # Guards against a malformed (e.g. whitespace-containing) workflow_id
+            # string -- `WorkflowId.__post_init__` raises `ValueError` for one, which
+            # must not escape here as an uncaught exception; a malformed id is simply
+            # not valid, exactly like any other unregistered one.
+            try:
+                return WorkflowId(value) in workflows
+            except ValueError:
+                return False
+
         try:
             route = await generate_route(
                 Tainted(text, Provenance.user()),
                 real_provider,
                 lambda capability_id: capability_id in registry,
                 skills,
+                workflows,
+                _is_valid_workflow,
             )
         except RoutingError as exc:
             _logger.debug("router: reasoning fallback failed, reporting UNKNOWN: %s", exc)

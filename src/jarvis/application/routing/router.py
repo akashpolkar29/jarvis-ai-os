@@ -86,6 +86,7 @@ if TYPE_CHECKING:
 
     from jarvis.domain.evidence import Attempt
     from jarvis.domain.skill import SkillDescriptor
+    from jarvis.domain.workflow import WorkflowDescriptor
     from jarvis.ports.reasoning import ReasoningPort
 
 
@@ -212,20 +213,26 @@ Never model-supplied -- see module docstring."""
 
 _ROUTING_PROMPT_TEMPLATE = """You are routing a typed request, not executing it. Decide what
 kind of request this is and respond with ONLY a single JSON object, no other text.
-{skill_context_section}
+{skill_context_section}{workflow_context_section}
 The object must have exactly these keys:
-"kind": one of "deterministic_command", "complex_goal", or "unknown".
+"kind": one of "deterministic_command", "complex_goal", "workflow_run", or "unknown".
 "capability_id": a string naming one already-registered capability id (e.g. "fs.read_file"),
     required only when kind is "deterministic_command", otherwise null.
 "arguments": a JSON object of that capability's own arguments, required only when kind is
     "deterministic_command", otherwise an empty object.
 "goal": a plain-text restatement of the user's real goal, required only when kind is
     "complex_goal", otherwise null.
+"workflow_id": a string naming one already-registered workflow id (e.g. "research"), required
+    only when kind is "workflow_run", otherwise null.
+"parameters": a JSON object of string to string -- that workflow's own real parameter values,
+    required only when kind is "workflow_run", otherwise an empty object.
 
 Use "deterministic_command" only when you are confident the request maps to one specific,
-already-existing capability. Use "complex_goal" for a real, multi-step objective that needs
-planning. Use "unknown" whenever you are not genuinely confident -- never guess a dangerous or
-irreversible action.
+already-existing capability. Use "workflow_run" only when you are confident the request maps to
+one specific, already-registered multi-step workflow named below -- never invent a workflow id
+that was not listed. Use "complex_goal" for a real, multi-step objective that needs planning and
+does not match any listed workflow. Use "unknown" whenever you are not genuinely confident --
+never guess a dangerous or irreversible action.
 
 Request: {text}
 """
@@ -234,6 +241,11 @@ _MAX_SKILL_CONTEXT_ENTRIES = 5
 """A small, fixed cap on how many skills' metadata ever enter one prompt -- keeps the added
 context genuinely compact rather than growing unbounded as more built-in skills are registered
 over time (WP-175's own explicit "compact context" requirement)."""
+
+_MAX_WORKFLOW_CONTEXT_ENTRIES = 5
+"""As `_MAX_SKILL_CONTEXT_ENTRIES`, for workflows (WP-193) -- kept as a separate constant
+rather than reusing the skill one, since the two lists are filtered/capped independently and a
+future change to one's own cap should not silently change the other's."""
 
 
 def _select_relevant_skills(
@@ -275,6 +287,39 @@ def _select_relevant_skills(
     return tuple(matches)
 
 
+def _select_relevant_workflows(
+    text: str,
+    workflows: Iterable[WorkflowDescriptor],
+    *,
+    limit: int = _MAX_WORKFLOW_CONTEXT_ENTRIES,
+) -> tuple[WorkflowDescriptor, ...]:
+    """Deterministically narrow `workflows` down to a small, text-relevant subset.
+
+    Mirrors :func:`_select_relevant_skills` exactly -- a plain,
+    case-insensitive substring match against each workflow's own id
+    and name (workflows have no `domain`/`tags` fields to match
+    against, unlike `SkillDescriptor`), sorted by workflow id first so
+    the result never depends on `workflows`' own iteration order
+    (`WorkflowRegistry.__iter__`'s own contract explicitly leaves that
+    unspecified, exactly like `SkillRegistry`'s).
+
+    Returns:
+        At most `limit` matching workflows, in sorted-by-id order.
+        Empty if nothing matched -- callers must treat that as "no
+        context to add," never as a reason to fall back to the full
+        workflow list.
+    """
+    lowered_text = text.lower()
+    matches: list[WorkflowDescriptor] = []
+    for workflow in sorted(workflows, key=lambda descriptor: descriptor.id.value):
+        keywords = (workflow.id.value, workflow.name)
+        if any(keyword.lower() in lowered_text for keyword in keywords):
+            matches.append(workflow)
+            if len(matches) >= limit:
+                break
+    return tuple(matches)
+
+
 def _format_skill_context(skills: tuple[SkillDescriptor, ...]) -> str:
     """Format `skills` into a compact, prompt-ready block.
 
@@ -293,7 +338,31 @@ def _format_skill_context(skills: tuple[SkillDescriptor, ...]) -> str:
     return "\n".join(lines)
 
 
-def _build_routing_prompt(text: str, relevant_skills: tuple[SkillDescriptor, ...] = ()) -> str:
+def _format_workflow_context(workflows: tuple[WorkflowDescriptor, ...]) -> str:
+    """Format `workflows` into a compact, prompt-ready block.
+
+    Mirrors `_format_skill_context` exactly -- includes only
+    `id`/`name`/`description`/`parameters`, the real, minimal set a
+    model needs to both select the right workflow id and know which
+    `parameters` keys to supply, never each step's own full detail
+    (`WorkflowDescriptor.steps`), which would defeat the point of
+    keeping this compact.
+    """
+    lines = []
+    for workflow in workflows:
+        parameter_list = ", ".join(workflow.parameters)
+        lines.append(
+            f"- {workflow.id}: {workflow.name} -- {workflow.description} "
+            f"[parameters: {parameter_list}]"
+        )
+    return "\n".join(lines)
+
+
+def _build_routing_prompt(
+    text: str,
+    relevant_skills: tuple[SkillDescriptor, ...] = (),
+    relevant_workflows: tuple[WorkflowDescriptor, ...] = (),
+) -> str:
     """Build the real, routing-specific prompt text sent to a `ReasoningPort` provider.
 
     Args:
@@ -304,6 +373,10 @@ def _build_routing_prompt(text: str, relevant_skills: tuple[SkillDescriptor, ...
             shape is unchanged from before WP-175 when no skills are
             supplied, matching every existing caller/test that never
             passes this argument.
+        relevant_workflows: An already-filtered (see
+            :func:`_select_relevant_workflows`), compact set of
+            workflows to offer as context (WP-193). Empty by default,
+            for the identical reason.
     """
     skill_context_section = ""
     if relevant_skills:
@@ -312,7 +385,19 @@ def _build_routing_prompt(text: str, relevant_skills: tuple[SkillDescriptor, ...
             "(you are not limited to only these, but any capability_id you name must be "
             "real and already registered):\n" + _format_skill_context(relevant_skills) + "\n"
         )
-    return _ROUTING_PROMPT_TEMPLATE.format(text=text, skill_context_section=skill_context_section)
+    workflow_context_section = ""
+    if relevant_workflows:
+        workflow_context_section = (
+            "\nPotentially relevant, already-registered workflows for this request (only "
+            "these are real -- never name a workflow_id that is not listed here):\n"
+            + _format_workflow_context(relevant_workflows)
+            + "\n"
+        )
+    return _ROUTING_PROMPT_TEMPLATE.format(
+        text=text,
+        skill_context_section=skill_context_section,
+        workflow_context_section=workflow_context_section,
+    )
 
 
 def _parse_route(
@@ -417,11 +502,12 @@ def _parse_route(
     )
 
 
-async def generate_route(
+async def generate_route(  # noqa: PLR0913, PLR0917 -- one per real, distinct pass-through argument
     text: Tainted[str],
     provider: ReasoningPort,
     is_registered: Callable[[CapabilityId], bool],
     skills: Iterable[SkillDescriptor] = (),
+    workflows: Iterable[WorkflowDescriptor] = (),
     is_valid_workflow: Callable[[str], bool] = lambda _: False,
 ) -> RouteResult:
     """Ask `provider` to propose a route for `text`, then validate it structurally.
@@ -448,6 +534,11 @@ async def generate_route(
             WP-175) gets the exact same prompt as before. Never
             widens what can be authorized: `is_registered` still runs
             unconditionally on the real, returned `capability_id`.
+        workflows: Candidate workflows (WP-193) to deterministically
+            filter down to a compact, relevant subset and offer the
+            provider as context -- purely advisory, mirroring `skills`
+            exactly. Empty by default, so a caller that never supplies
+            this gets the exact same prompt as before WP-193.
         is_valid_workflow: Checks whether a workflow id names a real,
             registered workflow (WP-191/193). Defaults to a predicate
             that rejects everything -- a caller that never supplies
@@ -465,7 +556,8 @@ async def generate_route(
             fails any of `_parse_route`'s own real, structural checks.
     """
     relevant_skills = _select_relevant_skills(text.value, skills)
-    prompt = _build_routing_prompt(text.value, relevant_skills)
+    relevant_workflows = _select_relevant_workflows(text.value, workflows)
+    prompt = _build_routing_prompt(text.value, relevant_skills, relevant_workflows)
     prior_attempts: tuple[Attempt, ...] = ()
     candidate = (await provider.generate(prompt, prior_attempts)).value
 
