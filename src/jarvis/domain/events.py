@@ -1,5 +1,16 @@
 """A real, minimal, in-process task-lifecycle event model + EventBus (WP-111).
 
+**WP-189 extends this same module, the same `EventBus`, with a real
+workflow-lifecycle vocabulary** (:class:`WorkflowRunDenied`/
+:class:`WorkflowStarted`/:class:`WorkflowStepCompleted`/
+:class:`WorkflowHalted`/:class:`WorkflowCompleted`) rather than a
+second event bus or a separate workflow history store --
+`kernel.workflows.authorize_and_run_workflow` gained the identical
+optional `clock`/`id_port`/`event_bus` parameter shape
+`kernel.tasks`'s own composition functions already established, for
+the identical reason: every existing caller that never passes one
+behaves byte-for-byte as before.
+
 **Where this lives, and why**: the event dataclasses below
 (:class:`TaskCreated`/:class:`TaskStatusChanged`) are pure, frozen,
 stdlib-only data -- the identical shape this project's own
@@ -169,8 +180,121 @@ class TaskStatusChanged:
 
 
 TaskEvent = TaskCreated | TaskStatusChanged
-"""Every real event this module currently defines -- see module docstring for why
+"""Every real task-lifecycle event this module currently defines -- see module docstring for why
 exactly these two, and no more, are real today."""
+
+
+@dataclass(frozen=True)
+class WorkflowRunDenied:
+    """A real workflow's own outer gate (``planning.run_plan``, reused unmodified) was denied.
+
+    A real authorization interruption at the very first boundary --
+    the workflow was never even composed, let alone any step
+    attempted.
+
+    Attributes:
+        event_id: As `TaskCreated.event_id`.
+        workflow_id: The real, stable id of the workflow that was
+            requested (`jarvis.domain.workflow.WorkflowId`, stringified
+            -- `domain/events.py` may not import `domain/workflow.py`'s
+            own type for this, since neither module may depend on the
+            other; a plain `str` keeps this module dependency-free).
+        timestamp: As `TaskCreated.timestamp`.
+    """
+
+    event_id: str
+    workflow_id: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class WorkflowStarted:
+    """A real workflow's outer gate was granted -- composition and execution are beginning.
+
+    Attributes:
+        event_id: As `TaskCreated.event_id`.
+        workflow_id: As `WorkflowRunDenied.workflow_id`.
+        timestamp: As `TaskCreated.timestamp`.
+    """
+
+    event_id: str
+    workflow_id: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class WorkflowStepCompleted:
+    """One real, runnable step of a workflow actually ran and was granted.
+
+    Published once per real `PlanStepRecord` in a granted workflow
+    run's own `PlanExecutionResult.step_records` -- never fabricated,
+    and never published for a step that was never attempted (see
+    `WorkflowHalted`). A runnable step is always `Tier.ALLOW`
+    (`application/workflow/composer.py`'s own halting design), and
+    `Tier.ALLOW` always grants (`domain/policy.py::evaluate()`) -- so
+    every real `WorkflowStepCompleted` describes a granted step; there
+    is deliberately no `WorkflowStepDenied` counterpart, since a
+    denied *runnable* step is structurally unreachable, not merely
+    rare (see `kernel/workflows.py`'s own module docstring for the
+    full reasoning).
+
+    Attributes:
+        event_id: As `TaskCreated.event_id`.
+        workflow_id: As `WorkflowRunDenied.workflow_id`.
+        capability_id: The real capability id this step invoked,
+            stringified (see `WorkflowRunDenied.workflow_id` for why a
+            plain `str`).
+        timestamp: As `TaskCreated.timestamp`.
+    """
+
+    event_id: str
+    workflow_id: str
+    capability_id: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class WorkflowHalted:
+    """A real workflow reached a step it cannot safely auto-execute -- a real, mid-run interruption.
+
+    Published when a granted workflow run's own `ComposedWorkflow.
+    halted_step` is not `None` -- the step named here (and every step
+    after it) was never attempted; only the steps before it (each its
+    own real `WorkflowStepCompleted`) actually ran.
+
+    Attributes:
+        event_id: As `TaskCreated.event_id`.
+        workflow_id: As `WorkflowRunDenied.workflow_id`.
+        capability_id: The real capability id of the step this
+            workflow halted at, stringified.
+        timestamp: As `TaskCreated.timestamp`.
+    """
+
+    event_id: str
+    workflow_id: str
+    capability_id: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class WorkflowCompleted:
+    """Every step in a granted workflow run's own runnable prefix ran, and nothing halted it.
+
+    Attributes:
+        event_id: As `TaskCreated.event_id`.
+        workflow_id: As `WorkflowRunDenied.workflow_id`.
+        timestamp: As `TaskCreated.timestamp`.
+    """
+
+    event_id: str
+    workflow_id: str
+    timestamp: str
+
+
+WorkflowEvent = (
+    WorkflowRunDenied | WorkflowStarted | WorkflowStepCompleted | WorkflowHalted | WorkflowCompleted
+)
+"""Every real workflow-lifecycle event this module currently defines (WP-189)."""
 
 
 class EventBus:

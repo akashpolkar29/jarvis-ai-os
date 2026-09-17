@@ -144,9 +144,18 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.confirmation import ManualConfirmationAdapter
+from jarvis.adapters.identifier import UuidIdAdapter
 from jarvis.application.planning.executor import execute_plan
 from jarvis.application.policy import AuthorizationOrchestrator
 from jarvis.application.workflow.composer import compose_workflow
+from jarvis.domain.events import (
+    EventBus,
+    WorkflowCompleted,
+    WorkflowHalted,
+    WorkflowRunDenied,
+    WorkflowStarted,
+    WorkflowStepCompleted,
+)
 from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.domain.workflow_registry import WorkflowRegistry, validate_workflow_registry
@@ -175,6 +184,8 @@ if TYPE_CHECKING:
     from jarvis.application.workflow.composer import ComposedWorkflow
     from jarvis.domain.policy import Decision
     from jarvis.domain.registry import CapabilityRegistry
+    from jarvis.ports.clock import ClockPort
+    from jarvis.ports.identifier import IdPort
 
 
 def build_default_workflow_registry(
@@ -345,13 +356,16 @@ class WorkflowRunOutcome:
     execution: PlanExecutionResult | None
 
 
-def authorize_and_run_workflow(
+def authorize_and_run_workflow(  # noqa: PLR0913 -- one per real, distinct pass-through argument
     workflow_id: WorkflowId,
     parameters: Mapping[str, str] | None = None,
     *,
     physical_confirmation_available: bool,
     remote_confirmation_available: bool,
     chain_path: Path,
+    clock: ClockPort | None = None,
+    id_port: IdPort | None = None,
+    event_bus: EventBus | None = None,
 ) -> tuple[Decision, WorkflowRunOutcome | None]:
     """Authorize running ``workflow_id`` at all, then compose and execute it only if granted.
 
@@ -368,6 +382,16 @@ def authorize_and_run_workflow(
             decision this call makes (the outer gate, and every real
             runnable step's own authorization) lands in this same,
             single, tamper-evident file.
+        clock: Supplies every real event's own ``timestamp``. Defaults
+            to a real ``SystemClockAdapter()``.
+        id_port: Supplies every real event's own ``event_id``.
+            Defaults to a real ``UuidIdAdapter()``.
+        event_bus: A real, shared ``EventBus`` every real workflow-
+            lifecycle event (WP-189) is published to. Defaults to a
+            fresh, empty ``EventBus()`` per call, matching
+            ``kernel.tasks``'s own identical, established default --
+            no real subscriber exists to notice unless a caller
+            supplies its own, shared instance.
 
     Returns:
         ``(decision, outcome)`` -- ``decision`` is the outer gate's own
@@ -396,12 +420,16 @@ def authorize_and_run_workflow(
     storage = JsonFileAuditStorageAdapter(chain_path)
     chain = storage.load()
 
+    resolved_clock = clock or SystemClockAdapter()
+    resolved_id_port = id_port or UuidIdAdapter()
+    resolved_bus = event_bus or EventBus()
+
     confirmation = ManualConfirmationAdapter(
         physical_confirmation_available=physical_confirmation_available,
         remote_confirmation_available=remote_confirmation_available,
     )
     orchestrator = AuthorizationOrchestrator(
-        chain, registry, confirmation=confirmation, clock=SystemClockAdapter()
+        chain, registry, confirmation=confirmation, clock=resolved_clock
     )
 
     real_parameters: Mapping[str, str] = parameters or {}
@@ -420,17 +448,64 @@ def authorize_and_run_workflow(
     # comment at the identical point in its own flow).
     storage.save(chain)
 
-    outcome: WorkflowRunOutcome | None = None
-    if decision.granted:
-        composed = compose_workflow(workflow, real_parameters, orchestrator, PLAN_STEP_EXECUTORS)
-        execution = execute_plan(
-            composed.runnable_steps,
-            orchestrator,
-            PLAN_STEP_EXECUTORS,
-            physical_confirmation_available=physical_confirmation_available,
-            remote_confirmation_available=remote_confirmation_available,
-            chain_path=chain_path,
+    if not decision.granted:
+        resolved_bus.publish(
+            WorkflowRunDenied(
+                event_id=resolved_id_port.new_id(),
+                workflow_id=str(workflow_id),
+                timestamp=resolved_clock.now().isoformat(),
+            )
         )
-        outcome = WorkflowRunOutcome(workflow=workflow, composed=composed, execution=execution)
+        return decision, None
+
+    resolved_bus.publish(
+        WorkflowStarted(
+            event_id=resolved_id_port.new_id(),
+            workflow_id=str(workflow_id),
+            timestamp=resolved_clock.now().isoformat(),
+        )
+    )
+    composed = compose_workflow(workflow, real_parameters, orchestrator, PLAN_STEP_EXECUTORS)
+    execution = execute_plan(
+        composed.runnable_steps,
+        orchestrator,
+        PLAN_STEP_EXECUTORS,
+        physical_confirmation_available=physical_confirmation_available,
+        remote_confirmation_available=remote_confirmation_available,
+        chain_path=chain_path,
+    )
+    # One real WorkflowStepCompleted per real, granted step record --
+    # never a WorkflowStepDenied counterpart: every runnable step is
+    # Tier.ALLOW by compose_workflow's own construction, and
+    # Tier.ALLOW always grants (domain/policy.py::evaluate()), so a
+    # denied runnable step is structurally unreachable, not merely
+    # unobserved here.
+    for record in execution.step_records:
+        resolved_bus.publish(
+            WorkflowStepCompleted(
+                event_id=resolved_id_port.new_id(),
+                workflow_id=str(workflow_id),
+                capability_id=str(record.step.capability_id),
+                timestamp=resolved_clock.now().isoformat(),
+            )
+        )
+    if composed.halted_step is not None:
+        resolved_bus.publish(
+            WorkflowHalted(
+                event_id=resolved_id_port.new_id(),
+                workflow_id=str(workflow_id),
+                capability_id=str(composed.halted_step.capability_id),
+                timestamp=resolved_clock.now().isoformat(),
+            )
+        )
+    else:
+        resolved_bus.publish(
+            WorkflowCompleted(
+                event_id=resolved_id_port.new_id(),
+                workflow_id=str(workflow_id),
+                timestamp=resolved_clock.now().isoformat(),
+            )
+        )
+    outcome = WorkflowRunOutcome(workflow=workflow, composed=composed, execution=execution)
 
     return decision, outcome

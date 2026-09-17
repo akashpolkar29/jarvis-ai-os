@@ -174,10 +174,12 @@ from jarvis.application.coding.loop import DEFAULT_MAX_CLIMBS
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind, RouteResult
+from jarvis.application.workflow.composer import WorkflowCompositionError
 from jarvis.cli.ui_server import UiServerConfig, create_server, run_ui_server
 from jarvis.domain.browser import PageHandle
-from jarvis.domain.errors import JarvisError, SkillNotRegistered
+from jarvis.domain.errors import JarvisError, SkillNotRegistered, WorkflowNotRegistered
 from jarvis.domain.skill import SkillId
+from jarvis.domain.workflow import WorkflowId
 from jarvis.kernel.audit import authorize_and_view_audit_history
 from jarvis.kernel.browser import (
     UnsupportedUrlSchemeError,
@@ -264,6 +266,7 @@ from jarvis.kernel.tasks import (
 )
 from jarvis.kernel.voice_loop import run_voice_loop
 from jarvis.kernel.worker import run_pending_tasks_once
+from jarvis.kernel.workflows import authorize_and_run_workflow, build_default_workflow_registry
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -914,6 +917,56 @@ def _add_skills_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     show_parser.add_argument("skill_id", help="The skill id to show (see 'jarvis skills list').")
 
 
+def _add_workflow_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `workflow list`/`show`/`run` -- WP-189's real workflow discovery + execution commands.
+
+    `list`/`show` mirror `skills list`/`show` exactly: not a
+    capability, pure, static, already-in-source-tree metadata
+    (`kernel.workflows.build_default_workflow_registry`), no
+    `--chain-path`/confirmation flags. `run` is different -- it is a
+    real, audited invocation of `authorize_and_run_workflow`, so it
+    takes `_add_common_flags` like `plan run`/`task run`. Repeatable
+    `--param name=value` (mirrors `--attendee`'s own established
+    repeatable-flag shape) supplies this workflow's own `"${name}"`
+    placeholders -- parsed into a plain `dict[str, str]` by
+    `_run_workflow_run_subcommand`, never evaluated or interpreted
+    further.
+    """
+    workflow_parser = subparsers.add_parser(
+        "workflow", help="Discover and run real, built-in multi-step workflows (WP-182-189)."
+    )
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
+
+    workflow_subparsers.add_parser(
+        "list", help="List every registered workflow's id and short description."
+    )
+
+    show_parser = workflow_subparsers.add_parser(
+        "show", help="Show one workflow's full detail: its ordered steps and their capabilities."
+    )
+    show_parser.add_argument(
+        "workflow_id", help="The workflow id to show (see 'jarvis workflow list')."
+    )
+
+    run_parser = workflow_subparsers.add_parser(
+        "run",
+        help=(
+            "Run a real, built-in workflow. Every Tier.ALLOW step runs automatically; a "
+            "step requiring above Tier.ALLOW halts the workflow there, never auto-executed."
+        ),
+    )
+    run_parser.add_argument("workflow_id", help="The workflow id to run (see 'workflow list').")
+    run_parser.add_argument(
+        "--param",
+        action="append",
+        default=[],
+        dest="params",
+        metavar="NAME=VALUE",
+        help='A real value for one of this workflow\'s own "${name}" placeholders. Repeatable.',
+    )
+    _add_common_flags(run_parser)
+
+
 def _add_do_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add `do` -- WP-104's one, canonical typed freeform command router entry point.
 
@@ -1344,6 +1397,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 -- one add_pars
     _add_prepare_application_parsers(subparsers)
     _add_job_application_parsers(subparsers)
     _add_skills_parsers(subparsers)
+    _add_workflow_parsers(subparsers)
 
     subparsers.add_parser(
         "doctor",
@@ -1656,6 +1710,111 @@ def _run_skills(args: argparse.Namespace) -> int:
     if args.skills_command == "list":
         return _run_skills_list()
     return _run_skills_show(args.skill_id)
+
+
+def _run_workflow_list() -> int:
+    """List every registered workflow's id and short description. Always returns 0.
+
+    Mirrors `_run_skills_list`'s own real, deliberate design choice:
+    `workflow list`/`show` are not capabilities -- pure, static,
+    already-in-source-tree metadata, no `Effect`, no audit record.
+    """
+    workflows = build_default_workflow_registry()
+    print("jarvis workflow -- real, built-in multi-step workflows\n")
+    for workflow in sorted(workflows, key=lambda descriptor: descriptor.id.value):
+        print(f"{workflow.id}: {workflow.name} -- {workflow.description}")
+    print(
+        "\nRun 'jarvis workflow show <workflow_id>' for that workflow's ordered steps, "
+        "or 'jarvis workflow run <workflow_id> [--param name=value]...' to run one."
+    )
+    return 0
+
+
+def _run_workflow_show(workflow_id_value: str) -> int:
+    """Show one workflow's full detail: its ordered steps, each one's real capability + tier.
+
+    Returns:
+        0 if ``workflow_id_value`` names a real, registered workflow; 1
+        if it does not (an invalid token or an unregistered id are
+        reported identically -- neither names anything real to show).
+    """
+    capabilities = build_default_registry()
+    workflows = build_default_workflow_registry(capabilities)
+    try:
+        workflow = workflows.get(WorkflowId(workflow_id_value))
+    except (ValueError, WorkflowNotRegistered):
+        print(
+            f"No workflow named {workflow_id_value!r}. Run 'jarvis workflow list' to see "
+            "what exists."
+        )
+        return 1
+
+    print(f"{workflow.name} ({workflow.id})\n")
+    print(workflow.description)
+    if workflow.parameters:
+        print(f"\nParameters: {', '.join(workflow.parameters)}")
+    print("\nSteps:")
+    for index, step in enumerate(workflow.steps, start=1):
+        descriptor = capabilities.get(step.capability_id)
+        tier_name = descriptor.required_tier.name
+        print(f"  {index}. {step.capability_id} [{tier_name}]: {step.description}")
+    return 0
+
+
+def _run_workflow_discovery(args: argparse.Namespace) -> int:
+    """Dispatch `workflow list`/`show` -- pure, read-only discovery over static metadata."""
+    if args.workflow_command == "list":
+        return _run_workflow_list()
+    return _run_workflow_show(args.workflow_id)
+
+
+def _parse_workflow_params(raw_params: list[str]) -> dict[str, str]:
+    """Parse repeatable ``--param NAME=VALUE`` flags into a plain ``dict[str, str]``.
+
+    Raises:
+        ValueError: If any entry has no ``=`` separator -- caught by
+            `main()`'s own existing broad except tuple, exactly like
+            every other malformed-argument case in this module.
+    """
+    params: dict[str, str] = {}
+    for raw in raw_params:
+        name, separator, value = raw.partition("=")
+        if not separator:
+            msg = f"--param {raw!r} is not in NAME=VALUE form."
+            raise ValueError(msg)
+        params[name] = value
+    return params
+
+
+def _run_workflow_run_subcommand(
+    args: argparse.Namespace,
+) -> tuple[Decision, tuple[PlanStepRecord, ...] | None, str | None]:
+    """Dispatch `workflow run`, returning (decision, plan_step_records, halted_capability_id).
+
+    Reuses `plan_step_records` -- the exact field `plan run` already
+    populates and `_print_outcome` already prints step-by-step -- for
+    this workflow run's own real, granted step records; no new print
+    field was needed for the steps that ran. `halted_capability_id` is
+    the one real, new piece of information a workflow run can produce
+    that a plan run cannot: the step (if any) this workflow could not
+    safely auto-execute past.
+    """
+    decision, outcome = authorize_and_run_workflow(
+        WorkflowId(args.workflow_id),
+        _parse_workflow_params(args.params),
+        physical_confirmation_available=args.physical_confirmation_available,
+        remote_confirmation_available=args.remote_confirmation_available,
+        chain_path=args.chain_path,
+    )
+    if outcome is None:
+        return decision, None, None
+    halted_capability_id = (
+        str(outcome.composed.halted_step.capability_id)
+        if outcome.composed.halted_step is not None
+        else None
+    )
+    step_records = outcome.execution.step_records if outcome.execution is not None else None
+    return decision, step_records, halted_capability_id
 
 
 def _print_worker_pass(pass_outcome: WorkerPassOutcome, *, not_due_count: int = 0) -> None:
@@ -2894,6 +3053,7 @@ class _CommandOutcome:
     route_result: RouteResult | None = None
     route_execution_result: object | None = None
     route_task_id: str | None = None
+    workflow_halted_capability_id: str | None = None
 
 
 def _run_basic_subcommand(
@@ -2973,6 +3133,14 @@ def _dispatch_command(  # noqa: PLR0911, PLR0912 -- one return/branch per subcom
         decision, plan_step_records = _run_planning_subcommand(args)
         return _CommandOutcome(
             decision, f"plan {args.plan_command}", plan_step_records=plan_step_records
+        )
+    if args.command == "workflow":
+        decision, plan_step_records, halted_capability_id = _run_workflow_run_subcommand(args)
+        return _CommandOutcome(
+            decision,
+            "workflow run",
+            plan_step_records=plan_step_records,
+            workflow_halted_capability_id=halted_capability_id,
         )
     if args.command == "project":
         return _run_project_subcommand(args)
@@ -3361,6 +3529,11 @@ def _print_outcome(  # noqa: PLR0912, PLR0915 -- one branch per optional payload
         for step_record in outcome.plan_step_records:
             step_status = "GRANTED" if step_record.decision.granted else "DENIED"
             print(f"step: {step_record.step.capability_id.value} {step_status}")
+    if outcome.workflow_halted_capability_id is not None:
+        print(
+            f"halted: {outcome.workflow_halted_capability_id} requires manual/interactive "
+            "invocation -- never auto-executed."
+        )
     if outcome.email_summaries is not None:
         # WP-164: a granted, zero-message result previously printed nothing at all here --
         # the same gap WP-144/WP-163 already fixed for memory retrieve/fs find/search-content/
@@ -3420,6 +3593,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one earl
         return _run_doctor()
     if args.command == "skills":
         return _run_skills(args)
+    if args.command == "workflow" and args.workflow_command in ("list", "show"):
+        return _run_workflow_discovery(args)
     if args.command == "ui":
         return _run_ui(args)
     if args.command == "task" and args.task_command == "worker":
@@ -3449,6 +3624,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 -- one earl
         GitCommandFailedError,
         PlanningError,
         PlanValidationError,
+        WorkflowCompositionError,
         ApplicationFolderAlreadyExistsError,
         ApplicationFolderOutsideBaseDirectoryError,
         OSError,

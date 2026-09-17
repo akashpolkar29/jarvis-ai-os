@@ -47,6 +47,7 @@ from jarvis.application.coding.loop import CodingLoopOutcome, CodingLoopResult
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanStep
 from jarvis.application.routing.router import RouteKind, RouteResult
+from jarvis.application.workflow.composer import ComposedWorkflow
 from jarvis.cli.main import (
     _check_binary,
     _check_memory_database_accessible,
@@ -67,6 +68,7 @@ from jarvis.domain.file_system import DirEntry
 from jarvis.domain.memory import MemoryRecord
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Classification, Provenance, Tainted
+from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.kernel.communications import CalendarEventCreateOutcome
 from jarvis.kernel.desktop import ChatApp, DockerListContainersOutcome, GitStatusOutcome
 from jarvis.kernel.files import (
@@ -99,6 +101,7 @@ from jarvis.kernel.tasks import (
     TaskScheduleOutcome,
 )
 from jarvis.kernel.worker import WorkerPassOutcome, WorkerTaskOutcome
+from jarvis.kernel.workflows import WorkflowRunOutcome
 from jarvis.ports.brave import BrowserLaunchFailedError
 from jarvis.ports.desktop_window import WindowActionFailedError, WindowNotFoundError
 from jarvis.ports.docker import DockerCommandFailedError
@@ -7321,6 +7324,201 @@ def test_do_subcommand_help_points_at_skills_list_for_broader_discovery(
 
     assert "jarvis skills list" in captured.out
     assert "jarvis skills show <skill_id>" in captured.out
+
+
+def test_workflow_list_subcommand_always_returns_zero_and_lists_every_built_in_workflow(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WP-189: 'workflow list' is a real, unmocked read over the built-in workflow registry."""
+    exit_code = main(["workflow", "list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    for workflow_id in ("job_search_assistant", "research", "coding_assistant"):
+        assert workflow_id in captured.out
+
+
+def test_workflow_list_subcommand_does_not_accept_chain_path_or_confirmation_flags() -> None:
+    """Real, structural proof: 'workflow list' is not a capability -- shares none of the common flags."""  # noqa: E501
+    with pytest.raises(SystemExit):
+        main(["workflow", "list", "--chain-path", "/tmp/audit_chain.json"])
+
+
+def test_workflow_list_subcommand_never_creates_an_audit_chain_file(tmp_path: Path) -> None:
+    """A real, empirical proof 'workflow list' never touches the audit chain -- no file appears."""
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        main(["workflow", "list"])
+        assert not (tmp_path / "audit_chain.json").exists()
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_workflow_show_subcommand_prints_ordered_steps_and_required_tier(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """'workflow show job_search_assistant' names its real, ordered steps and each one's Tier."""
+    exit_code = main(["workflow", "show", "job_search_assistant"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "memory.retrieve" in captured.out
+    assert "ALLOW" in captured.out
+    assert "job_search.open_results" in captured.out
+    assert "CONFIRM" in captured.out
+
+
+def test_workflow_show_subcommand_reports_an_unknown_workflow_id_without_crashing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unregistered workflow id is a clean, reported failure, never a raw traceback."""
+    exit_code = main(["workflow", "show", "not-a-real-workflow"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "No workflow named" in captured.out
+
+
+def test_workflow_show_subcommand_reports_an_invalid_workflow_id_without_crashing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed (whitespace-containing) workflow id is reported cleanly, not a raw ValueError."""
+    exit_code = main(["workflow", "show", "not a valid id"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "No workflow named" in captured.out
+
+
+def test_workflow_subcommand_requires_a_sub_subcommand() -> None:
+    """'jarvis workflow' alone (no list/show/run) is rejected by argparse, not silently a no-op."""
+    with pytest.raises(SystemExit):
+        main(["workflow"])
+
+
+def test_workflow_show_subcommand_requires_workflow_id_argument() -> None:
+    with pytest.raises(SystemExit):
+        main(["workflow", "show"])
+
+
+def test_workflow_run_subcommand_executes_and_reports_each_step_plus_a_halt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A granted workflow run reports the outer decision, one line per step, and a halt line."""
+    received: dict[str, object] = {}
+
+    def fake_authorize_and_run_workflow(
+        workflow_id: WorkflowId,
+        parameters: dict[str, str] | None = None,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+    ) -> tuple[Decision, WorkflowRunOutcome]:
+        received["workflow_id"] = workflow_id
+        received["parameters"] = parameters
+        decision = _make_decision(granted=True, capability_id="planning.run_plan")
+        step_decision = _make_decision(granted=True, capability_id="memory.retrieve")
+        step = WorkflowStep(
+            capability_id=CapabilityId("memory.retrieve"),
+            arguments={"query": "x"},
+            description="Recall context.",
+        )
+        halted = WorkflowStep(
+            capability_id=CapabilityId("job_search.open_results"),
+            arguments={},
+            description="Halts here.",
+        )
+        plan_step = PlanStep(CapabilityId("memory.retrieve"), {"query": "x"})
+        record = PlanStepRecord(step=plan_step, decision=step_decision, result=None)
+        workflow = WorkflowDescriptor(
+            id=WorkflowId("job_search_assistant"),
+            name="Job Search Assistant",
+            description="Test double.",
+            steps=(step, halted),
+        )
+        composed = ComposedWorkflow(
+            runnable_steps=(plan_step,), halted_step=halted, remaining_steps=()
+        )
+        execution = PlanExecutionResult(step_records=(record,), aborted=False)
+        outcome = WorkflowRunOutcome(workflow=workflow, composed=composed, execution=execution)
+        return decision, outcome
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_run_workflow",
+        fake_authorize_and_run_workflow,
+    )
+
+    exit_code = main(
+        [
+            "workflow",
+            "run",
+            "job_search_assistant",
+            "--param",
+            "profile_query=x",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert received["workflow_id"] == WorkflowId("job_search_assistant")
+    assert received["parameters"] == {"profile_query": "x"}
+    assert exit_code == 0
+    assert "workflow run: GRANTED" in captured.out
+    assert "step: memory.retrieve GRANTED" in captured.out
+    assert "halted: job_search.open_results requires manual/interactive invocation" in captured.out
+
+
+def test_workflow_run_subcommand_denied_attempts_no_composition(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A denied outer gate (no confirmation) never even calls the real kernel function's own composer."""  # noqa: E501
+    exit_code = main(
+        [
+            "workflow",
+            "run",
+            "job_search_assistant",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "workflow run: DENIED" in captured.out
+    assert "step:" not in captured.out
+    assert "halted:" not in captured.out
+
+
+def test_workflow_run_subcommand_reports_a_malformed_param_without_crashing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A --param with no '=' is a clean, reported ValueError, never a raw traceback."""
+    exit_code = main(
+        [
+            "workflow",
+            "run",
+            "job_search_assistant",
+            "--param",
+            "not-key-value",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Error:" in captured.err
+
+
+def test_workflow_run_subcommand_requires_workflow_id_argument() -> None:
+    with pytest.raises(SystemExit):
+        main(["workflow", "run"])
 
 
 def test_check_binary_reports_missing_for_a_real_nonexistent_binary() -> None:
