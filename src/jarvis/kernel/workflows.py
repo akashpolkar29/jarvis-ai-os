@@ -60,6 +60,33 @@ never statically registered (ADR-0049) -- it cannot be named by a
 statically-registered capability. A caller wanting that follow-up
 creates it separately, e.g. via ``jarvis task create``, after this
 workflow halts.
+
+**WP-186, Research -- a real, cross-cutting second workflow**: three
+real steps -- ``memory.retrieve`` and ``fs.search_content`` (both
+``Tier.ALLOW``, run automatically, sharing one ``${query}``
+parameter -- recall prior research/context, then search local notes
+for the same query) then ``browser.open_page`` (``Tier.CONFIRM`` --
+halts; opens an already-known URL, never a bare search query, matching
+``kernel/skills.py``'s own Research skill instructions verbatim: "an
+already-known local path... or an already-known URL"). **A real,
+structural limitation, named here rather than hidden**: a
+``WorkflowStep``'s own arguments (WP-182) are resolved only from the
+caller-supplied ``parameters`` mapping, never from an earlier step's
+own real result -- there is no data-flow mechanism between steps in
+this v1 workflow layer (mirrors ``application/planning/executor.py``'s
+own per-step, independently-authorized model, which has the identical
+property for a reasoning-generated plan). Concretely: this workflow
+cannot itself decide *which* local file ``fs.read_file`` should read
+next based on what ``fs.search_content`` just found -- a caller reads
+``outcome.execution``'s own real step results and issues any
+necessary follow-up call itself. "Synthesis" (reasoning over gathered
+content) is deliberately not a step either, for the same reason
+WP-185 excludes task creation: ``planning.run_plan`` is this
+workflow's own outer gate capability id, and is itself ``Tier.CONFIRM``
+-- naming it as an inner step would both halt immediately and be a
+confusing, self-referential nesting; a caller runs
+``jarvis task create``/``coding.run_task`` separately once it has real
+findings to reason over.
 """
 
 from __future__ import annotations
@@ -77,14 +104,17 @@ from jarvis.domain.provenance import Provenance, Tainted
 from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.domain.workflow_registry import WorkflowRegistry, validate_workflow_registry
 from jarvis.kernel.capabilities import (
+    BROWSER_OPEN_PAGE_CAPABILITY_ID,
     JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PLANNING_RUN_PLAN_CAPABILITY_ID,
+    SEARCH_CONTENT_CAPABILITY_ID,
     build_default_registry,
 )
 from jarvis.kernel.capability_dispatch import PLAN_STEP_EXECUTORS
 
 JOB_SEARCH_ASSISTANT_WORKFLOW_ID = WorkflowId("job_search_assistant")
+RESEARCH_WORKFLOW_ID = WorkflowId("research")
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -149,6 +179,43 @@ def build_default_workflow_registry(
             ),
             parameters=("profile_query", "site", "keywords", "location"),
             metadata={"source": "wp185-job-search-assistant"},
+        )
+    )
+
+    registry.register(
+        WorkflowDescriptor(
+            id=RESEARCH_WORKFLOW_ID,
+            name="Research",
+            description=(
+                "Recall prior research/context and search local notes for a query, then "
+                "open an already-known source URL -- never a second reasoning engine; "
+                "synthesis over what this workflow gathers is a real, separate follow-up "
+                "call the caller makes itself."
+            ),
+            steps=(
+                WorkflowStep(
+                    capability_id=MEMORY_RETRIEVE_CAPABILITY_ID,
+                    arguments={"query": "${query}", "limit": 5},
+                    description="Recall prior research/context relevant to the query.",
+                ),
+                WorkflowStep(
+                    capability_id=SEARCH_CONTENT_CAPABILITY_ID,
+                    arguments={"query": "${query}"},
+                    description="Search local notes/files for content matching the query.",
+                ),
+                WorkflowStep(
+                    capability_id=BROWSER_OPEN_PAGE_CAPABILITY_ID,
+                    arguments={"url": "${url}"},
+                    description=(
+                        "Open an already-known source URL -- Tier.CONFIRM, halts here; "
+                        "this workflow builds no search query of its own, matching "
+                        "docs/OPEN_DECISIONS.md item 71's own documented gap (no generic "
+                        "web-search capability exists)."
+                    ),
+                ),
+            ),
+            parameters=("query", "url"),
+            metadata={"source": "wp186-research"},
         )
     )
 
