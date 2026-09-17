@@ -184,6 +184,54 @@ def test_real_server_finds_recent_files_via_the_real_router(
     assert "a.txt" in str(data["message"])
 
 
+def test_real_server_reports_a_real_workflow_composition_error_precisely_not_generically(
+    tmp_path: Path,
+) -> None:
+    """WP-202: a real WorkflowCompositionError (e.g. a typo'd --param key) is reported precisely.
+
+    Real, empirically-confirmed regression: before this fix,
+    `WorkflowCompositionError` was not in `_HANDLED_ROUTING_ERRORS` at
+    all, so `POST /api/command` still failed safely (the existing
+    `except Exception` backstop caught it, no crash, no leaked
+    traceback) but with a needlessly generic 500 message instead of
+    this real exception's own specific, actionable text -- confirmed
+    live against a real running server before writing this test.
+
+    Constructs its own server (rather than the shared `running_server`
+    fixture) since this needs a real, granted outer gate
+    (`physical_confirmation_available=True`) to reach
+    `compose_workflow`/`validate_workflow_parameters` at all -- the
+    shared fixture's own default is `False`, matching
+    `test_real_server_executes_list_emails_with_a_configured_email_port`'s
+    own identical reasoning for building its own server.
+    """
+    config = UiServerConfig(
+        chain_path=tmp_path / "audit_chain.json",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        database_path=tmp_path / "memory.sqlite3",
+    )
+    server = create_server(0, config)
+    port = server.server_address[1]
+    thread = threading.Thread(target=run_ui_server, args=(server,), daemon=True)
+    thread.start()
+    try:
+        status, data = _post(
+            f"http://127.0.0.1:{port}",
+            json.dumps(
+                {"text": "run research workflow with quary=rate limiting,url=https://example.com"}
+            ).encode(),
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert data["type"] == "error"
+    assert "quary" in str(data["message"])
+    assert "not declare" in str(data["message"])
+
+
 def test_real_server_reports_task_status_via_the_real_router(
     running_server: tuple[str, JarvisUiServer], tmp_path: Path
 ) -> None:

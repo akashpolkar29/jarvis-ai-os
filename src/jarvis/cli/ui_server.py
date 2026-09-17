@@ -200,6 +200,7 @@ from jarvis.adapters.calendar import CalendarEventCreationError
 from jarvis.application.planning.executor import PlanValidationError
 from jarvis.application.planning.planner import PlanningError
 from jarvis.application.routing.router import RouteKind
+from jarvis.application.workflow.composer import WorkflowCompositionError
 from jarvis.domain.errors import JarvisError
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.kernel.capabilities import build_default_registry
@@ -302,6 +303,18 @@ without saying so" convention (see fs.search_content's own capped flag)."""
 # them today (a real, pre-existing gap, not this work package's own scope to fix); this
 # module's own final `except Exception` backstop still reports a clean 500 for either,
 # never a leaked traceback.
+#
+# WP-202 (M10): `WorkflowCompositionError` added -- a real, empirically-confirmed gap
+# found while verifying workflow failure observability, not assumed. `authorize_and_route`
+# gained a real, new way to raise (via its own `RouteKind.WORKFLOW_RUN` branch,
+# `authorize_and_run_workflow` -> `compose_workflow` -> `validate_workflow_parameters`,
+# e.g. a typo'd `--param` key) when WP-191 wired it in, but this tuple was never updated
+# alongside it -- confirmed live, before fixing, that the omission was already safe (no
+# crash, no leaked traceback, the existing `except Exception` backstop already caught it)
+# but produced a real, needlessly generic "An unexpected internal error occurred." instead
+# of `WorkflowCompositionError`'s own real, specific, actionable message (e.g. exactly
+# which parameter key was unrecognized) -- the same real message `jarvis do`/`jarvis
+# workflow run` already surface via `cli/main.py`'s own, already-complete except tuple.
 _HANDLED_ROUTING_ERRORS = (
     JarvisError,
     PathOutsideAllowedScopeError,
@@ -312,6 +325,7 @@ _HANDLED_ROUTING_ERRORS = (
     EmailConnectionError,
     EmailMessageNotFoundError,
     CalendarEventCreationError,
+    WorkflowCompositionError,
     OSError,
     UnicodeDecodeError,
     KeyError,

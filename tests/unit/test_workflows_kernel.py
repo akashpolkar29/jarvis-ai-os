@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from jarvis.adapters.audit_storage import JsonFileAuditStorageAdapter
+from jarvis.application.workflow.composer import WorkflowCompositionError
 from jarvis.domain.capability import CapabilityId
 from jarvis.domain.errors import WorkflowNotRegistered
 from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
@@ -169,3 +170,34 @@ def test_every_granted_decision_is_durably_appended_to_the_audit_chain(
     expected_record_count = 2  # outer gate + the one real fs.read_file step
     assert len(chain) == expected_record_count
     assert chain.verify().valid is True
+
+
+def test_the_outer_decision_stays_durable_even_when_composition_later_raises(
+    tmp_path: Path,
+) -> None:
+    """WP-202: failure is durable -- a granted outer gate is saved before compose_workflow runs.
+
+    A real `WorkflowCompositionError` (an unrecognized parameter key,
+    WP-194) raised *after* the outer gate was granted must not lose or
+    silently roll back that already-real, already-granted decision --
+    proven directly by reading the real, on-disk chain after the
+    exception propagates.
+    """
+    chain_path = tmp_path / "chain.json"
+
+    with (
+        _patched(_read_notes_registry()),
+        pytest.raises(WorkflowCompositionError),
+    ):
+        authorize_and_run_workflow(
+            _READ_NOTES_WORKFLOW_ID,
+            {"not_a_real_parameter": "x"},
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=chain_path,
+        )
+
+    chain = JsonFileAuditStorageAdapter(chain_path).load()
+    assert len(chain) == 1  # the outer gate's own real decision, durably saved
+    assert chain.verify().valid is True
+    assert chain[0].decision.granted is True
