@@ -846,3 +846,68 @@ it.
   item 74 added, real and undecided. No ADR was needed anywhere in
   this queue. Not tagged -- `v0.10.0` remains the correct next
   sequential slot, tagging remains the user's own decision.
+- **WP-201, the canonical end-to-end workflow smoke suite**:
+  `tests/unit/test_workflows_canonical_scenarios.py`, three compact,
+  fully-mocked-external-edge scenarios -- one per real, built-in
+  workflow -- each driving the true, full chain from a typed/natural-
+  language request through `kernel.router.authorize_and_route` to a
+  real, structured `WorkflowRunOutcome`. Deliberately varies which
+  router stage each scenario exercises (Research via Stage B's
+  reasoning fallback, Coding and Job Search via Stage A's deterministic
+  grammar) so the file's own three tests together cover both real
+  routing paths reaching the identical downstream execution, not one
+  path repeated three times. This becomes the canonical workflow-
+  routing regression suite going forward.
+- **WP-202, workflow failure + task semantics**: investigated first,
+  not assumed -- workflows are not Tasks (no `task_id`, no persisted
+  status), so retry/cancellation/recovery/scheduling/process-safe
+  claiming are all correctly unaffected by the whole M10 queue, and
+  "no ambiguous task state" is structurally not applicable for the
+  same reason; the audit chain's own scope (authorization decisions,
+  not general application errors) means a composition-time exception
+  correctly has no audit record of its own. One real, empirically-
+  confirmed gap found and fixed: `jarvis ui`'s own `_HANDLED_ROUTING_ERRORS`
+  tuple never gained `WorkflowCompositionError` when WP-191 introduced
+  it -- a real composition error (e.g. a typo'd `--param` key) was
+  already caught safely by the existing `except Exception` backstop
+  (no crash, no leaked traceback) but returned a needlessly generic
+  500 instead of the real, specific, actionable message `jarvis do`/
+  `jarvis workflow run` already surface. Verified live against a real
+  running server before and after the fix. A new kernel-level test
+  proves durability directly: the outer gate's own granted decision is
+  saved to the audit chain before `compose_workflow` is ever called,
+  so a composition-time failure never loses or rolls back an already-
+  real authorization decision.
+- **WP-203, workflow + existing scheduler**: investigated first --
+  `authorize_and_run_task` always called `planning.run_plan`
+  unconditionally, so nothing let a scheduled task (or
+  `kernel.worker`) run a real, built-in workflow. Closed by giving
+  `authorize_and_create_task` optional `workflow_id`/
+  `workflow_parameters`, stored on the task record alongside `goal`;
+  `authorize_and_run_task` now checks the record's own stored
+  `workflow_id` and, if set, calls the existing, unmodified
+  `authorize_and_run_workflow` instead of `authorize_and_run_plan` --
+  `derive_workflow_result_status` (the workflow analogue of
+  `derive_result_status`) reports a workflow halting on a step above
+  `Tier.ALLOW` as `"completed"` with the halt named in `reason`, never
+  as a failure, matching ADR-0062's own designed, safe stopping point.
+  **Architecture, exactly as required**: `kernel.worker.run_pending_tasks_once`
+  needed zero code changes -- "scheduled task -> existing worker ->
+  workflow -> existing authorization/execution" was already the real
+  architecture the moment the task record itself could name a
+  workflow. A second, real, pre-existing bug was found and fixed while
+  proving this end to end, not a test-fixture issue:
+  `authorize_and_schedule_task` rebuilt its own record field by field
+  rather than spreading the existing value (unlike
+  `update_task_status`/`authorize_and_cancel_task`/
+  `authorize_and_recover_task`, which all already preserve every field
+  they do not themselves change) and silently dropped `workflow_id`/
+  `workflow_parameters` on every real `task schedule` call -- caught
+  by a real worker-level integration test exercising the true
+  `create -> schedule -> worker` sequence end to end. `jarvis task
+  create` gained optional `--workflow-id`/`--workflow-param` flags,
+  and `task status`/`task list` now print a workflow-backed task's own
+  `workflow_id`/`workflow_parameters` when present. No new status, no
+  new `CapabilityId`/`Effect`/`Tier`, no new scheduler, no ADR. All
+  gates green; the full suite grew to 2074 passing tests, zero
+  regressions. `docs/OPEN_DECISIONS.md` item 75 added, RESOLVED/BUILT.

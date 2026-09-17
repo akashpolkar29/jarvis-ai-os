@@ -756,7 +756,27 @@ def _add_task_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     create_parser = task_subparsers.add_parser(
         "create", help="Create a new real task, status 'created'. Does not run any plan."
     )
-    create_parser.add_argument("goal", help="The real, natural-language task goal.")
+    create_parser.add_argument("goal", help="The real, natural-language task goal/label.")
+    create_parser.add_argument(
+        "--workflow-id",
+        dest="workflow_id",
+        default=None,
+        help=(
+            "Run this already-registered workflow ('jarvis workflow list') instead "
+            "of treating goal as a reasoning-driven plan. Optional."
+        ),
+    )
+    create_parser.add_argument(
+        "--workflow-param",
+        action="append",
+        default=[],
+        dest="workflow_params",
+        metavar="NAME=VALUE",
+        help=(
+            'A real value for one of the named workflow\'s own "${name}" placeholders '
+            "(mirrors 'workflow run --param'). Repeatable. Ignored without --workflow-id."
+        ),
+    )
     _add_common_flags(create_parser)
 
     run_parser = task_subparsers.add_parser(
@@ -2492,11 +2512,16 @@ def _run_task_subcommand(  # noqa: PLR0911 -- one return per task subcommand
     catches ``ValueError`` for every other subcommand.
     """
     if args.task_command == "create":
+        workflow_id = getattr(args, "workflow_id", None)
         create_outcome = authorize_and_create_task(
             args.goal,
             physical_confirmation_available=args.physical_confirmation_available,
             remote_confirmation_available=args.remote_confirmation_available,
             chain_path=args.chain_path,
+            workflow_id=workflow_id,
+            workflow_parameters=(
+                _parse_workflow_params(args.workflow_params) if workflow_id is not None else None
+            ),
         )
         return _CommandOutcome(
             create_outcome.decision,
@@ -3303,6 +3328,9 @@ def _print_one_task_record(record: MemoryRecord, *, stale: bool = False, due: bo
     print(f"{record.identifier}: goal={data.get('goal')!r} status={data.get('status')}")
     if data.get("reason") is not None:
         print(f"    reason: {data.get('reason')}")
+    if data.get("workflow_id") is not None:
+        print(f"    workflow_id: {data.get('workflow_id')}")
+        print(f"    workflow_parameters: {data.get('workflow_parameters')}")
     print(f"    created_at: {data.get('created_at')}")
     if data.get("scheduled_at") is not None:
         print(f"    scheduled_at: {data.get('scheduled_at')}")

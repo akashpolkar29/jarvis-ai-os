@@ -2108,6 +2108,32 @@ package, not attempted here. See
 `tests/unit/test_workflows_research_hardening.py`'s own module
 docstring for the same finding, stated at the point it was discovered.
 
+## 75. ~~Workflows unreachable from scheduled/background task execution~~ -- RESOLVED/BUILT (WP-203)
+
+**Resolved 2026-09-17.** `authorize_and_run_task` always called
+`planning.run_plan` unconditionally, so nothing let a scheduled task
+(or `kernel.worker`) run a real, built-in workflow
+(`kernel.workflows`) -- a task's `goal` was always treated as a
+reasoning-driven plan goal, with no way to name a workflow instead.
+Closed by giving `authorize_and_create_task` optional
+`workflow_id`/`workflow_parameters`, stored on the task record
+alongside `goal`; `authorize_and_run_task` now checks the record's own
+stored `workflow_id` and, if set, calls the existing, unmodified
+`authorize_and_run_workflow` instead. `kernel.worker.run_pending_tasks_once`
+needed **zero code changes** -- the architecture "scheduled task ->
+existing worker -> workflow -> existing authorization/execution" was
+already real the moment the task record itself could name a workflow.
+A second, real, pre-existing bug was found and fixed while proving
+this end to end: `authorize_and_schedule_task` rebuilt its own record
+field by field (unlike `update_task_status`/`authorize_and_cancel_task`/
+`authorize_and_recover_task`, which all spread the existing value) and
+silently dropped `workflow_id`/`workflow_parameters` on every real
+`task schedule` call -- caught by a real worker-level integration test
+exercising the true `create -> schedule -> worker` sequence, not a
+unit test in isolation. No new status, no new `CapabilityId`/`Effect`/
+`Tier`, no new scheduler. See `kernel/tasks.py`'s own WP-203 module
+docstring section for the full account.
+
 ## Maintaining this index
 
 Add a new numbered entry here whenever a fresh pass surfaces a real,

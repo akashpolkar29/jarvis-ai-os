@@ -406,3 +406,61 @@ def test_is_due_treats_a_none_scheduled_at_as_due() -> None:
 def test_is_due_treats_a_future_scheduled_at_as_not_due() -> None:
     future = (_NOW + timedelta(hours=1)).isoformat()
     assert is_task_due({"kind": "task", "status": "created", "scheduled_at": future}, _NOW) is False
+
+
+async def test_a_workflow_backed_scheduled_task_runs_through_the_existing_worker_unmodified(
+    tmp_path: Path,
+) -> None:
+    """WP-203: scheduled task -> existing task worker -> workflow -> existing auth/execution.
+
+    Proves the real, end-to-end architecture directly, using the real,
+    already-registered `job_search_assistant` workflow (no mocking of
+    the registry or of `memory.retrieve` -- both run for real, locally,
+    exactly like every other real plan step already does in this test
+    module). `run_pending_tasks_once` itself needed zero code changes
+    for this to work -- it still only calls
+    `authorize_and_list_tasks`/`authorize_and_run_task`; the workflow
+    dispatch happens entirely inside the latter, driven by the task
+    record's own stored `workflow_id`.
+    """
+    create_outcome = authorize_and_create_task(
+        "open job search results nightly",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        workflow_id="job_search_assistant",
+        workflow_parameters={
+            "profile_query": "job search preferences",
+            "site": "linkedin",
+            "keywords": "python",
+            "location": "remote",
+        },
+    )
+    assert create_outcome.task_id is not None
+    authorize_and_schedule_task(
+        create_outcome.task_id,
+        (_NOW - timedelta(hours=1)).isoformat(),
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+    )
+
+    pass_outcome = await _run_pass(tmp_path)
+
+    assert len(pass_outcome.attempted) == 1
+    outcome = pass_outcome.attempted[0]
+    assert outcome.task_id == create_outcome.task_id
+    assert outcome.claimed is True
+    assert outcome.status == "completed"
+    assert outcome.reason is not None
+    assert "job_search.open_results" in outcome.reason
+    assert "never auto-executed" in outcome.reason
+    assert outcome.error is None

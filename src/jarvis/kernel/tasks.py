@@ -321,6 +321,45 @@ flags passed to the *later*, separate worker-triggered
 ``authorize_and_run_task`` call are what gate that run, completely
 independent of whatever flags were used (or not used) at schedule
 time.
+
+**WP-203 (2026-09-17): a task can now run an already-registered
+workflow instead of a reasoning-driven plan** -- closes the real gap
+found by direct investigation: ``authorize_and_run_task`` always
+called ``planning.run_plan`` unconditionally, so nothing let a
+scheduled task (or the worker) run a real, built-in workflow
+(``kernel.workflows``). ``authorize_and_create_task`` gained optional
+``workflow_id``/``workflow_parameters``, stored alongside ``goal`` on
+the task record. ``authorize_and_run_task`` now checks the record's
+own stored ``workflow_id`` and, if set, calls the existing, unmodified
+``authorize_and_run_workflow`` instead of ``authorize_and_run_plan`` --
+``goal`` is still required and still stored, but is never consulted to
+select what runs for a workflow-backed task, only used as a real,
+human-readable label. :func:`derive_workflow_result_status` is the
+workflow analogue of :func:`derive_result_status`: a workflow halting
+on a step above ``Tier.ALLOW`` (ADR-0062's own designed, safe stopping
+point) is reported as ``"completed"`` with the halt named in
+``reason``, never as a failure. **Architecture, exactly as required**:
+``kernel.worker.run_pending_tasks_once`` needed **zero code changes**
+-- it still only calls ``authorize_and_list_tasks``/
+``authorize_and_run_task`` unmodified; the workflow dispatch lives
+entirely inside the latter, so "scheduled task -> existing worker ->
+workflow -> existing authorization/execution" was already the real
+architecture the moment the task record itself could name a workflow.
+No new scheduler, no new status, no new ``CapabilityId``/``Effect``/
+``Tier``. **A real, second bug found and fixed while proving this end
+to end, not merely a test-fixture issue**: ``authorize_and_schedule_task``
+(unlike ``update_task_status``, ``authorize_and_cancel_task``, and
+``authorize_and_recover_task``, all of which already preserve every
+field they do not themselves change) rebuilds its own record field by
+field rather than spreading the existing value -- it silently dropped
+``workflow_id``/``workflow_parameters`` on every real ``task
+schedule`` call, which would have caused a scheduled, workflow-backed
+task to silently fall back to treating its own ``goal`` string as a
+reasoning-driven plan the moment the worker later ran it. Caught by a
+real, worker-level integration test (not a unit test in isolation) that
+exercises the true ``create -> schedule -> worker`` sequence end to
+end; fixed by preserving both fields the same way ``attempts``/
+``created_at`` already are.
 """
 
 from __future__ import annotations
@@ -332,17 +371,21 @@ from typing import TYPE_CHECKING
 from jarvis.adapters.clock import SystemClockAdapter
 from jarvis.adapters.identifier import UuidIdAdapter
 from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
+from jarvis.domain.workflow import WorkflowId
 from jarvis.kernel.memory import authorize_and_compare_and_update as _authorize_and_cas_memory
 from jarvis.kernel.memory import authorize_and_get, authorize_and_recall, authorize_and_remember
 from jarvis.kernel.memory import authorize_and_update as _authorize_and_update_memory
 from jarvis.kernel.planning import authorize_and_run_plan
+from jarvis.kernel.workflows import authorize_and_run_workflow
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from jarvis.application.planning.executor import PlanExecutionResult
     from jarvis.domain.memory import MemoryRecord
     from jarvis.domain.policy import Decision
+    from jarvis.kernel.workflows import WorkflowRunOutcome
     from jarvis.ports.clock import ClockPort
     from jarvis.ports.embedding import EmbeddingPort
     from jarvis.ports.identifier import IdPort
@@ -405,6 +448,34 @@ def derive_result_status(result: PlanExecutionResult) -> tuple[str, str | None]:
     return "failed", reason
 
 
+def derive_workflow_result_status(outcome: WorkflowRunOutcome) -> tuple[str, str | None]:
+    """Derive (status, reason) from a granted, run workflow's own real result. WP-203.
+
+    A pure function, mirroring :func:`derive_result_status`'s own
+    shape exactly, but for a genuinely different real semantic:
+    ``compose_workflow``'s ``halted_step`` (a step above ``Tier.ALLOW``,
+    e.g. a real ``coding.run_task``/``job_search.open_results``) is
+    ADR-0062's own designed, safe stopping point -- never auto-executed
+    -- not a failure. It is reported here exactly as ``jarvis workflow
+    run``/``jarvis do``'s own existing CLI/UI text already treats it: a
+    real, granted, non-error outcome, with the halt itself named in
+    ``reason`` for visibility, not because the task failed. Every
+    runnable step in a workflow's own ``composed.runnable_steps`` is
+    ``Tier.ALLOW`` by ``compose_workflow``'s own construction, and
+    ``Tier.ALLOW`` always grants (``domain/policy.py::evaluate()``), so
+    ``outcome.execution.aborted`` is structurally always ``False`` here
+    -- there is no real "a runnable step was denied" case to report,
+    unlike an ordinary reasoning-generated plan.
+    """
+    if outcome.composed.halted_step is not None:
+        reason = (
+            f"Workflow halted at {outcome.composed.halted_step.capability_id.value!r} -- "
+            "requires manual/interactive invocation, never auto-executed."
+        )
+        return "completed", reason
+    return "completed", None
+
+
 def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-through
     goal: str,
     status: str,
@@ -418,6 +489,8 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
     clock: ClockPort | None,
     id_port: IdPort | None,
     event_bus: EventBus | None = None,
+    workflow_id: str | None = None,
+    workflow_parameters: Mapping[str, str] | None = None,
 ) -> tuple[Decision, str | None]:
     """Write one real, new task record. Reuses authorize_and_remember unmodified.
 
@@ -431,6 +504,19 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
     Publishes a real ``TaskCreated`` to ``event_bus`` -- but only if
     ``authorize_and_remember`` actually granted the write (see module
     docstring: no event for a state change that did not happen).
+
+    **WP-203**: ``workflow_id``/``workflow_parameters``, both optional
+    and additive (``None`` by default, matching every real pre-WP-203
+    task record byte-for-byte). When set, this task's own real
+    execution (:func:`authorize_and_run_task`) runs the named,
+    already-registered workflow via the existing, unmodified
+    ``authorize_and_run_workflow`` instead of ``goal``'s own
+    reasoning-driven ``planning.run_plan`` -- see that function's own
+    WP-203 section for the full account. ``goal`` remains required even
+    for a workflow-backed task: it is never used to select what runs,
+    only as this record's own real, human-readable label (printed by
+    ``task status``/``task list``, matched by ``authorize_and_list_tasks``'s
+    own broad-recall query, exactly like every other task).
 
     Returns:
         ``(decision, identifier)`` -- ``identifier`` is the new
@@ -447,6 +533,8 @@ def write_task_record(  # noqa: PLR0913 -- one per composition-function pass-thr
         "updated_at": now,
         "attempts": [],
         "scheduled_at": None,
+        "workflow_id": workflow_id,
+        "workflow_parameters": dict(workflow_parameters) if workflow_parameters else None,
     }
     write_outcome = authorize_and_remember(
         record,
@@ -506,7 +594,11 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     every status transition unchanged -- running, retrying, or
     cancelling a scheduled task never silently drops its own real
     scheduled time, the exact same reasoning that already protects
-    ``created_at``/``attempts``.
+    ``created_at``/``attempts``. **WP-203**: ``workflow_id``/
+    ``workflow_parameters`` are preserved the identical way -- a
+    workflow-backed task's own real dispatch target survives every
+    transition (created -> running -> completed/failed, retried,
+    recovered) unchanged.
 
     **WP-120: ``atomic``, deliberately opt-in, default ``False``.**
     When ``True``, the write is a real compare-and-swap
@@ -557,6 +649,14 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
     attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
     existing_scheduled_at = existing.get("scheduled_at") if isinstance(existing, dict) else None
     scheduled_at = existing_scheduled_at if isinstance(existing_scheduled_at, str) else None
+    existing_workflow_id = existing.get("workflow_id") if isinstance(existing, dict) else None
+    workflow_id = existing_workflow_id if isinstance(existing_workflow_id, str) else None
+    existing_workflow_parameters = (
+        existing.get("workflow_parameters") if isinstance(existing, dict) else None
+    )
+    workflow_parameters = (
+        existing_workflow_parameters if isinstance(existing_workflow_parameters, dict) else None
+    )
     if previous_status == "running" and status in ("completed", "failed", "cancelled"):
         # WP-121: one real, concluded execution attempt -- appended only when
         # a "running" task reaches a terminal status, never for the
@@ -584,6 +684,8 @@ def update_task_status(  # noqa: PLR0913 -- one per composition-function pass-th
         "updated_at": now,
         "attempts": attempts,
         "scheduled_at": scheduled_at,
+        "workflow_id": workflow_id,
+        "workflow_parameters": workflow_parameters,
     }
     if atomic:
         if existing is None:
@@ -676,12 +778,22 @@ def authorize_and_create_task(  # noqa: PLR0913 -- one per composition-function 
     clock: ClockPort | None = None,
     id_port: IdPort | None = None,
     event_bus: EventBus | None = None,
+    workflow_id: str | None = None,
+    workflow_parameters: Mapping[str, str] | None = None,
 ) -> TaskCreateOutcome:
     """Create a new real task record, status "created". Does not run any plan.
 
     Deliberately separate from :func:`authorize_and_run_task` -- see
     the module docstring for why a later background-execution layer
     needs this split, not today's synchronous CLI.
+
+    ``workflow_id``/``workflow_parameters`` (WP-203), both optional,
+    name an already-registered workflow
+    (``kernel.workflows.build_default_workflow_registry``) this task
+    should run instead of treating ``goal`` as a reasoning-driven
+    ``planning.run_plan`` goal -- ``None`` (the default) reproduces
+    every pre-WP-203 task byte-for-byte. ``workflow_parameters`` is
+    ignored if ``workflow_id`` is ``None``.
 
     Returns:
         A ``TaskCreateOutcome`` -- see its own docstring.
@@ -698,6 +810,8 @@ def authorize_and_create_task(  # noqa: PLR0913 -- one per composition-function 
         clock=clock,
         id_port=id_port,
         event_bus=event_bus,
+        workflow_id=workflow_id,
+        workflow_parameters=workflow_parameters,
     )
     return TaskCreateOutcome(decision=decision, task_id=task_id)
 
@@ -746,7 +860,7 @@ class TaskRunOutcome:
     claimed: bool = True
 
 
-async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-function pass-through
+async def authorize_and_run_task(  # noqa: PLR0912, PLR0913 -- WP-203 workflow-vs-plan branching
     task_id: str,
     goal: str,
     provider: ReasoningPort | None = None,
@@ -823,6 +937,8 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         clock=clock,
         id_port=id_port,
     )
+    workflow_id_value: str | None = None
+    workflow_parameters_value: Mapping[str, str] | None = None
     if get_outcome.record is not None:
         existing_data = get_outcome.record.value.value
         current_status = existing_data.get("status") if isinstance(existing_data, dict) else None
@@ -837,6 +953,19 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
                 reason="Task was cancelled; run refuses to resume a cancelled task.",
                 claimed=False,
             )
+        # WP-203: a real, stored workflow_id means this task runs the named
+        # workflow (authorize_and_run_workflow) instead of treating `goal`
+        # as a reasoning-driven planning.run_plan goal -- see this module's
+        # own WP-203 docstring section.
+        if isinstance(existing_data, dict):
+            raw_workflow_id = existing_data.get("workflow_id")
+            if isinstance(raw_workflow_id, str):
+                workflow_id_value = raw_workflow_id
+                raw_workflow_parameters = existing_data.get("workflow_parameters")
+                if isinstance(raw_workflow_parameters, dict):
+                    workflow_parameters_value = {
+                        str(key): str(value) for key, value in raw_workflow_parameters.items()
+                    }
 
     reason: str | None = None
     running_decision, claimed = update_task_status(
@@ -884,14 +1013,28 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
             claimed=False,
         )
 
+    workflow_outcome: WorkflowRunOutcome | None = None
     try:
-        plan_decision, result = await authorize_and_run_plan(
-            goal,
-            provider,
-            physical_confirmation_available=physical_confirmation_available,
-            remote_confirmation_available=remote_confirmation_available,
-            chain_path=chain_path,
-        )
+        if workflow_id_value is not None:
+            plan_decision, workflow_outcome = authorize_and_run_workflow(
+                WorkflowId(workflow_id_value),
+                workflow_parameters_value,
+                physical_confirmation_available=physical_confirmation_available,
+                remote_confirmation_available=remote_confirmation_available,
+                chain_path=chain_path,
+                clock=clock,
+                id_port=id_port,
+                event_bus=event_bus,
+            )
+            result = None
+        else:
+            plan_decision, result = await authorize_and_run_plan(
+                goal,
+                provider,
+                physical_confirmation_available=physical_confirmation_available,
+                remote_confirmation_available=remote_confirmation_available,
+                chain_path=chain_path,
+            )
     except Exception as exc:
         # WP-113: deliberately broad, not narrowed to (PlanningError,
         # PlanValidationError) -- execute_plan's own per-step loop calls
@@ -920,7 +1063,10 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         )
         raise
 
-    if not plan_decision.granted or result is None:
+    outcome_present = (
+        workflow_outcome is not None if workflow_id_value is not None else result is not None
+    )
+    if not plan_decision.granted or not outcome_present:
         # A real, defensive branch, not currently reachable by any real
         # caller: the "running" transition just above and this call both
         # wrap their own content as Tainted(..., Provenance.user()) with
@@ -931,7 +1077,10 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         # the same "don't ignore a real field" reasoning project.py's own
         # derive_result_status docstring already gives for its own
         # aborted=True branch.
-        reason = f"planning.run_plan denied (reasons={plan_decision.reasons!r})."
+        what = (
+            "authorize_and_run_workflow" if workflow_id_value is not None else "planning.run_plan"
+        )
+        reason = f"{what} denied (reasons={plan_decision.reasons!r})."
         update_task_status(
             task_id,
             goal,
@@ -948,7 +1097,12 @@ async def authorize_and_run_task(  # noqa: PLR0913 -- one per composition-functi
         )
         return TaskRunOutcome(decision=plan_decision, status="failed", reason=reason)
 
-    status, reason = derive_result_status(result)
+    if workflow_id_value is not None:
+        assert workflow_outcome is not None  # noqa: S101 -- outcome_present already proved this
+        status, reason = derive_workflow_result_status(workflow_outcome)
+    else:
+        assert result is not None  # noqa: S101 -- outcome_present already proved this
+        status, reason = derive_result_status(result)
     update_task_status(
         task_id,
         goal,
@@ -1863,6 +2017,14 @@ def authorize_and_schedule_task(  # noqa: PLR0913 -- one per composition-functio
     reason = data.get("reason") if isinstance(data, dict) else None
     created_at = data.get("created_at") if isinstance(data, dict) else None
     attempts = data.get("attempts") if isinstance(data, dict) else None
+    existing_workflow_id = data.get("workflow_id") if isinstance(data, dict) else None
+    workflow_id = existing_workflow_id if isinstance(existing_workflow_id, str) else None
+    existing_workflow_parameters = (
+        data.get("workflow_parameters") if isinstance(data, dict) else None
+    )
+    workflow_parameters = (
+        existing_workflow_parameters if isinstance(existing_workflow_parameters, dict) else None
+    )
     if current_status not in _SCHEDULABLE_STATUSES or not isinstance(goal, str):
         return TaskScheduleOutcome(
             decision=get_outcome.decision,
@@ -1879,6 +2041,10 @@ def authorize_and_schedule_task(  # noqa: PLR0913 -- one per composition-functio
         "updated_at": (clock or SystemClockAdapter()).now().isoformat(),
         "attempts": list(attempts) if isinstance(attempts, list) else [],
         "scheduled_at": canonical_scheduled_at,
+        # WP-203: preserved exactly like every other field this function
+        # already carries forward -- see this module's own WP-203 section.
+        "workflow_id": workflow_id,
+        "workflow_parameters": workflow_parameters,
     }
     # WP-127: a real compare-and-swap, not a blind overwrite -- `record` above was
     # built from `data`, read moments earlier. Without this, a worker legitimately

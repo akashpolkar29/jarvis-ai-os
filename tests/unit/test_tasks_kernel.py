@@ -13,9 +13,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest import mock
 
 from jarvis.application.planning.executor import PlanExecutionResult, PlanStepRecord
 from jarvis.application.planning.planner import PlanningError, PlanStep
+from jarvis.application.workflow.composer import ComposedWorkflow
 from jarvis.domain.capability import (
     CapabilityDescriptor,
     CapabilityId,
@@ -27,6 +29,8 @@ from jarvis.domain.events import EventBus, TaskCreated, TaskStatusChanged
 from jarvis.domain.evidence import Candidate
 from jarvis.domain.policy import Decision, DecisionReason
 from jarvis.domain.provenance import Provenance, Tainted
+from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
+from jarvis.domain.workflow_registry import WorkflowRegistry
 from jarvis.kernel.files import PathOutsideAllowedScopeError
 from jarvis.kernel.memory import authorize_and_remember
 from jarvis.kernel.tasks import (
@@ -42,9 +46,11 @@ from jarvis.kernel.tasks import (
     authorize_and_run_task,
     authorize_and_schedule_task,
     derive_result_status,
+    derive_workflow_result_status,
     filter_scheduled_tasks,
     update_task_status,
 )
+from jarvis.kernel.workflows import WorkflowRunOutcome
 
 if TYPE_CHECKING:
     import pytest
@@ -265,6 +271,8 @@ def test_create_writes_a_real_task_with_status_created(tmp_path: Path) -> None:
         "updated_at": _NOW.isoformat(),
         "attempts": [],
         "scheduled_at": None,
+        "workflow_id": None,
+        "workflow_parameters": None,
     }
 
 
@@ -2017,3 +2025,240 @@ def test_filter_scheduled_tasks_narrows_stale_and_due_ids_too(tmp_path: Path) ->
 
     assert filtered.due_task_ids == {scheduled.task_id}
     assert filtered.stale_task_ids == frozenset()
+
+
+# --- WP-203: workflow-backed tasks -------------------------------------------------
+
+
+def _read_notes_workflow_registry() -> WorkflowRegistry:
+    registry = WorkflowRegistry()
+    registry.register(
+        WorkflowDescriptor(
+            id=WorkflowId("read_notes"),
+            name="Read Notes",
+            description="Read a known local file.",
+            steps=(
+                WorkflowStep(
+                    capability_id=CapabilityId("fs.read_file"),
+                    arguments={"path": "${path}"},
+                    description="Read the file at the given path.",
+                ),
+            ),
+            parameters=("path",),
+        )
+    )
+    return registry
+
+
+def _halting_workflow_registry() -> WorkflowRegistry:
+    registry = WorkflowRegistry()
+    registry.register(
+        WorkflowDescriptor(
+            id=WorkflowId("open_results"),
+            name="Open Results",
+            description="Open a real search-results page -- requires manual confirmation.",
+            steps=(
+                WorkflowStep(
+                    capability_id=CapabilityId("job_search.open_results"),
+                    arguments={},
+                    description="Open a real job-search results page in the user's browser.",
+                ),
+            ),
+        )
+    )
+    return registry
+
+
+def test_create_task_with_workflow_id_stores_it_alongside_the_goal_label(tmp_path: Path) -> None:
+    outcome = authorize_and_create_task(
+        "run research nightly",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        workflow_id="research",
+        workflow_parameters={"query": "x", "url": "https://example.com"},
+    )
+    assert outcome.decision.granted is True
+    assert outcome.task_id is not None
+
+    get_outcome = _get(tmp_path, outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["goal"] == "run research nightly"
+    assert data["workflow_id"] == "research"
+    assert data["workflow_parameters"] == {"query": "x", "url": "https://example.com"}
+
+
+def test_create_task_with_no_workflow_id_stores_none_for_both_new_fields(tmp_path: Path) -> None:
+    outcome = _create(tmp_path, "an ordinary reasoning-driven goal")
+    assert outcome.task_id is not None
+
+    get_outcome = _get(tmp_path, outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["workflow_id"] is None
+    assert data["workflow_parameters"] is None
+
+
+async def test_run_task_with_workflow_id_runs_the_workflow_never_the_reasoning_planner(
+    tmp_path: Path,
+) -> None:
+    """WP-203: a workflow-backed task dispatches to authorize_and_run_workflow, not run_plan."""
+    id_port = _SequentialIdPort()
+    (tmp_path / "notes.txt").write_text("hello")
+    create_outcome = authorize_and_create_task(
+        "read a known local note",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+        workflow_id="read_notes",
+        workflow_parameters={"path": str(tmp_path / "notes.txt")},
+    )
+    assert create_outcome.task_id is not None
+
+    with (
+        mock.patch(
+            "jarvis.kernel.workflows.build_default_workflow_registry",
+            return_value=_read_notes_workflow_registry(),
+        ),
+        mock.patch("jarvis.kernel.capability_dispatch.authorize_and_read_file") as fake_read,
+        mock.patch("jarvis.kernel.tasks.authorize_and_run_plan") as fake_plan,
+    ):
+        fake_read.return_value = mock.Mock(decision=mock.Mock(granted=True))
+        run_outcome = await authorize_and_run_task(
+            create_outcome.task_id,
+            "read a known local note",
+            None,
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=id_port,
+        )
+
+    fake_plan.assert_not_called()
+    fake_read.assert_called_once()
+    assert run_outcome.status == "completed"
+    assert run_outcome.reason is None
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "completed"
+    # WP-203: workflow_id survives the "running" -> "completed" transition write.
+    assert data["workflow_id"] == "read_notes"
+
+
+async def test_run_task_with_a_halting_workflow_completes_with_a_real_halt_reason(
+    tmp_path: Path,
+) -> None:
+    """A workflow halting on a manual-only step is ADR-0062's own safe stop, not a task failure."""
+    id_port = _SequentialIdPort()
+    create_outcome = authorize_and_create_task(
+        "open job search results",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=id_port,
+        workflow_id="open_results",
+    )
+    assert create_outcome.task_id is not None
+
+    with mock.patch(
+        "jarvis.kernel.workflows.build_default_workflow_registry",
+        return_value=_halting_workflow_registry(),
+    ):
+        run_outcome = await authorize_and_run_task(
+            create_outcome.task_id,
+            "open job search results",
+            None,
+            physical_confirmation_available=True,
+            remote_confirmation_available=False,
+            chain_path=tmp_path / "audit_chain.json",
+            database_path=tmp_path / "memory.sqlite3",
+            embedding_port=_FakeEmbeddingPort(),
+            clock=_FakeClock(),
+            id_port=id_port,
+        )
+
+    assert run_outcome.status == "completed"
+    assert run_outcome.reason is not None
+    assert "job_search.open_results" in run_outcome.reason
+    assert "never auto-executed" in run_outcome.reason
+
+
+def test_workflow_id_and_parameters_survive_a_status_transition(tmp_path: Path) -> None:
+    """WP-203: workflow_id/workflow_parameters are preserved exactly like scheduled_at."""
+    create_outcome = authorize_and_create_task(
+        "run research nightly",
+        physical_confirmation_available=True,
+        remote_confirmation_available=False,
+        chain_path=tmp_path / "audit_chain.json",
+        database_path=tmp_path / "memory.sqlite3",
+        embedding_port=_FakeEmbeddingPort(),
+        clock=_FakeClock(),
+        id_port=_SequentialIdPort(),
+        workflow_id="research",
+        workflow_parameters={"query": "x"},
+    )
+    assert create_outcome.task_id is not None
+
+    _cancel(tmp_path, create_outcome.task_id)
+
+    get_outcome = _get(tmp_path, create_outcome.task_id)
+    assert get_outcome.record is not None
+    data = get_outcome.record.value.value
+    assert isinstance(data, dict)
+    assert data["status"] == "cancelled"
+    assert data["workflow_id"] == "research"
+    assert data["workflow_parameters"] == {"query": "x"}
+
+
+def test_derive_workflow_result_status_reports_completed_with_no_reason_when_not_halted() -> None:
+    a_step = WorkflowStep(
+        capability_id=CapabilityId("fs.read_file"), arguments={}, description="a step"
+    )
+    outcome = WorkflowRunOutcome(
+        workflow=WorkflowDescriptor(
+            id=WorkflowId("x"), name="X", description="x", steps=(a_step,), parameters=()
+        ),
+        composed=ComposedWorkflow(runnable_steps=(), halted_step=None, remaining_steps=()),
+        execution=PlanExecutionResult(step_records=(), aborted=False),
+    )
+    assert derive_workflow_result_status(outcome) == ("completed", None)
+
+
+def test_derive_workflow_result_status_reports_completed_with_a_halt_reason_when_halted() -> None:
+    halted_step = WorkflowStep(
+        capability_id=CapabilityId("job_search.open_results"),
+        arguments={},
+        description="halts",
+    )
+    outcome = WorkflowRunOutcome(
+        workflow=WorkflowDescriptor(
+            id=WorkflowId("x"), name="X", description="x", steps=(halted_step,), parameters=()
+        ),
+        composed=ComposedWorkflow(runnable_steps=(), halted_step=halted_step, remaining_steps=()),
+        execution=None,
+    )
+    status, reason = derive_workflow_result_status(outcome)
+    assert status == "completed"
+    assert reason is not None
+    assert "job_search.open_results" in reason
+    assert "never auto-executed" in reason

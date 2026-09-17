@@ -2848,12 +2848,14 @@ def test_task_create_subcommand_reports_a_real_task_id(
 ) -> None:
     received: list[str] = []
 
-    def fake_authorize_and_create_task(
+    def fake_authorize_and_create_task(  # noqa: PLR0913 -- WP-203 optional workflow kwargs
         goal: str,
         *,
         physical_confirmation_available: bool,  # noqa: ARG001
         remote_confirmation_available: bool,  # noqa: ARG001
         chain_path: Path,  # noqa: ARG001
+        workflow_id: str | None = None,  # noqa: ARG001
+        workflow_parameters: dict[str, str] | None = None,  # noqa: ARG001
     ) -> TaskCreateOutcome:
         received.append(goal)
         decision = _make_decision(granted=True, capability_id="memory.write")
@@ -2881,6 +2883,98 @@ def test_task_create_subcommand_reports_a_real_task_id(
     assert exit_code == 0
     assert "task create: GRANTED" in captured.out
     assert "task_id: task:1" in captured.out
+
+
+def test_task_create_subcommand_passes_workflow_id_and_parsed_params_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WP-203: `--workflow-id`/`--workflow-param` reach authorize_and_create_task unmodified."""
+    received: list[tuple[str, str | None, dict[str, str] | None]] = []
+
+    def fake_authorize_and_create_task(  # noqa: PLR0913 -- WP-203 optional workflow kwargs
+        goal: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        workflow_id: str | None = None,
+        workflow_parameters: dict[str, str] | None = None,
+    ) -> TaskCreateOutcome:
+        received.append((goal, workflow_id, workflow_parameters))
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return TaskCreateOutcome(decision=decision, task_id="task:1")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_task",
+        fake_authorize_and_create_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "create",
+            "run research nightly",
+            "--workflow-id",
+            "research",
+            "--workflow-param",
+            "query=rate limiting",
+            "--workflow-param",
+            "url=https://example.com",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert received == [
+        (
+            "run research nightly",
+            "research",
+            {"query": "rate limiting", "url": "https://example.com"},
+        )
+    ]
+
+
+def test_task_create_subcommand_without_workflow_id_passes_none_for_both_new_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A --workflow-param with no --workflow-id is ignored -- never fabricates a workflow_id."""
+    received: list[tuple[str, str | None, dict[str, str] | None]] = []
+
+    def fake_authorize_and_create_task(  # noqa: PLR0913 -- WP-203 optional workflow kwargs
+        goal: str,
+        *,
+        physical_confirmation_available: bool,  # noqa: ARG001
+        remote_confirmation_available: bool,  # noqa: ARG001
+        chain_path: Path,  # noqa: ARG001
+        workflow_id: str | None = None,
+        workflow_parameters: dict[str, str] | None = None,
+    ) -> TaskCreateOutcome:
+        received.append((goal, workflow_id, workflow_parameters))
+        decision = _make_decision(granted=True, capability_id="memory.write")
+        return TaskCreateOutcome(decision=decision, task_id="task:1")
+
+    monkeypatch.setattr(
+        sys.modules["jarvis.cli.main"],
+        "authorize_and_create_task",
+        fake_authorize_and_create_task,
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "create",
+            "an ordinary goal",
+            "--physical-confirmation-available",
+            "--chain-path",
+            str(tmp_path / "audit_chain.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert received == [("an ordinary goal", None, None)]
 
 
 def test_task_run_subcommand_reports_status_and_reason(
