@@ -109,6 +109,31 @@ its own. Shares the same real, structural inter-step data-flow gap
 named in the Research workflow's own docstring above -- ``fs.find``'s
 own real matches are not threaded into ``coding.run_task``'s own
 ``task`` argument automatically.
+
+**WP-188, memory-context integration -- no new mechanism, closing one
+real asymmetry**: Job Search Assistant and Research already opened
+with a real ``memory.retrieve`` step; Coding Assistant did not.
+``Coding Assistant`` now opens with one too (``project_context_query``),
+recalling relevant prior project context before inspecting the
+repository. **Every real requirement this closes is already satisfied
+by reuse, not by anything built here**: "explicit context selection"
+and "minimal relevant memory" are the caller-supplied ``query`` plus a
+small, fixed ``limit=5`` on every one of these three steps (never "all
+memory," structurally -- ``RetrievalPort.retrieve()`` has no
+"everything" mode at all); "no secret leakage" is
+``adapters/memory.py::SqliteMemoryAdapter.retrieve()``'s own real,
+already-existing, unconditional
+``application/memory/retrieval_guard.py::exclude_secret_records()``
+call (ADR-0050) -- applied at the storage-adapter layer itself, below
+every composition function, so a workflow's own ``memory.retrieve``
+step cannot bypass it any more than a direct ``jarvis memory retrieve``
+CLI call already cannot; already proven by
+``tests/unit/application/memory/test_retrieval_guard.py`` and
+``tests/property/test_retrieval_guard.py``, not re-proven here. "No
+new memory store" and "no duplicate retrieval system": true by
+construction -- every memory-context step above names the real,
+already-statically-registered ``memory.retrieve`` capability id,
+completely unmodified.
 """
 
 from __future__ import annotations
@@ -256,6 +281,11 @@ def build_default_workflow_registry(
             ),
             steps=(
                 WorkflowStep(
+                    capability_id=MEMORY_RETRIEVE_CAPABILITY_ID,
+                    arguments={"query": "${project_context_query}", "limit": 5},
+                    description="Recall relevant prior project context, if any.",
+                ),
+                WorkflowStep(
                     capability_id=GIT_STATUS_CAPABILITY_ID,
                     arguments={"repo_dir": "${repo_dir}"},
                     description="Inspect the target repository's real, current git status.",
@@ -280,8 +310,14 @@ def build_default_workflow_registry(
                     ),
                 ),
             ),
-            parameters=("repo_dir", "file_pattern", "code_query", "task"),
-            metadata={"source": "wp187-coding-assistant"},
+            parameters=(
+                "project_context_query",
+                "repo_dir",
+                "file_pattern",
+                "code_query",
+                "task",
+            ),
+            metadata={"source": "wp187-coding-assistant", "updated_by": "wp188-memory-context"},
         )
     )
 
