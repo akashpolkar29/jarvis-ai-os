@@ -22,6 +22,7 @@ from .composer import (
     WorkflowCompositionError,
     compose_workflow,
     resolve_step_arguments,
+    validate_workflow_parameters,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "WorkflowCompositionError",
     "compose_workflow",
     "resolve_step_arguments",
+    "validate_workflow_parameters",
 ]

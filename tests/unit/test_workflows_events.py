@@ -47,6 +47,7 @@ def _allow_only_registry() -> WorkflowRegistry:
                     description="Read a known file.",
                 ),
             ),
+            parameters=("path",),
         )
     )
     return registry
@@ -71,6 +72,7 @@ def _halting_registry() -> WorkflowRegistry:
                     description="Requires manual confirmation -- halts here.",
                 ),
             ),
+            parameters=("path",),
         )
     )
     return registry

@@ -13,6 +13,7 @@ from jarvis.application.workflow.composer import (
     WorkflowCompositionError,
     compose_workflow,
     resolve_step_arguments,
+    validate_workflow_parameters,
 )
 from jarvis.domain.audit import AuditChain
 from jarvis.domain.capability import CapabilityDescriptor, CapabilityId, Effect
@@ -63,9 +64,13 @@ def _step(capability_id: CapabilityId, **overrides: object) -> WorkflowStep:
     return WorkflowStep(**defaults)  # type: ignore[arg-type]
 
 
-def _workflow(*steps: WorkflowStep) -> WorkflowDescriptor:
+def _workflow(*steps: WorkflowStep, parameters: tuple[str, ...] = ()) -> WorkflowDescriptor:
     return WorkflowDescriptor(
-        id=WorkflowId("test_workflow"), name="Test", description="A test workflow.", steps=steps
+        id=WorkflowId("test_workflow"),
+        name="Test",
+        description="A test workflow.",
+        steps=steps,
+        parameters=parameters,
     )
 
 
@@ -170,7 +175,9 @@ def test_compose_workflow_reports_every_step_after_the_halt_point_as_remaining()
 
 def test_compose_workflow_resolves_placeholders_in_runnable_steps() -> None:
     """A runnable step's own ${...} placeholders are resolved before becoming a real PlanStep."""
-    workflow = _workflow(_step(ALLOW_CAPABILITY_ID, arguments={"query": "${company}"}))
+    workflow = _workflow(
+        _step(ALLOW_CAPABILITY_ID, arguments={"query": "${company}"}), parameters=("company",)
+    )
     executors = {ALLOW_CAPABILITY_ID: mock.Mock()}
 
     composed = compose_workflow(workflow, {"company": "Acme"}, _orchestrator(), executors)
@@ -185,3 +192,68 @@ def test_compose_workflow_propagates_an_unresolved_placeholder_before_the_halt_p
 
     with pytest.raises(WorkflowCompositionError):
         compose_workflow(workflow, {}, _orchestrator(), executors)
+
+
+def test_validate_workflow_parameters_accepts_declared_keys() -> None:
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company", "role"))
+
+    params = {"company": "Acme", "role": "engineer"}
+    validate_workflow_parameters(workflow, params)  # must not raise
+
+
+def test_validate_workflow_parameters_accepts_a_subset_of_declared_keys() -> None:
+    """Omitting a declared parameter is not itself an error here (see module docstring)."""
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company", "role"))
+
+    validate_workflow_parameters(workflow, {"company": "Acme"})  # must not raise
+
+
+def test_validate_workflow_parameters_accepts_no_parameters_at_all() -> None:
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company",))
+
+    validate_workflow_parameters(workflow, {})  # must not raise
+
+
+def test_validate_workflow_parameters_rejects_an_unrecognized_key() -> None:
+    """A real, empirically-confirmed gap (WP-194): a typo'd key was previously silently accepted."""
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company",))
+
+    with pytest.raises(WorkflowCompositionError, match="cmopany"):
+        validate_workflow_parameters(workflow, {"cmopany": "Acme"})
+
+
+def test_validate_workflow_parameters_reports_every_unrecognized_key_at_once() -> None:
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company",))
+
+    with pytest.raises(WorkflowCompositionError) as exc_info:
+        validate_workflow_parameters(workflow, {"cmopany": "Acme", "rolee": "engineer"})
+    assert "cmopany" in str(exc_info.value)
+    assert "rolee" in str(exc_info.value)
+
+
+def test_compose_workflow_rejects_an_unrecognized_parameter_before_touching_any_step() -> None:
+    """compose_workflow itself calls validate_workflow_parameters first -- proven end to end."""
+    workflow = _workflow(_step(ALLOW_CAPABILITY_ID), parameters=("company",))
+    executor = mock.Mock()
+    executors = {ALLOW_CAPABILITY_ID: executor}
+
+    with pytest.raises(WorkflowCompositionError):
+        compose_workflow(workflow, {"cmopany": "Acme"}, _orchestrator(), executors)
+    executor.assert_not_called()
+
+
+def test_compose_workflow_accepts_a_halted_workflows_unused_declared_parameters_being_omitted() -> (
+    None
+):
+    """A parameter only a halted (never-run) step would need may be omitted without error."""
+    workflow = _workflow(
+        _step(ALLOW_CAPABILITY_ID),
+        _step(CONFIRM_CAPABILITY_ID, arguments={"site": "${site}"}),
+        parameters=("site",),
+    )
+    executors = {ALLOW_CAPABILITY_ID: mock.Mock(), CONFIRM_CAPABILITY_ID: mock.Mock()}
+
+    composed = compose_workflow(workflow, {}, _orchestrator(), executors)
+
+    assert composed.halted_step is not None
+    assert composed.halted_step.capability_id == CONFIRM_CAPABILITY_ID

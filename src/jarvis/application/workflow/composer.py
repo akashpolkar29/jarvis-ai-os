@@ -25,6 +25,27 @@ reported, unexecuted, as ``remaining_steps`` -- mirroring
 ``application/planning/executor.py``'s own ``Tier.ALLOW``-only ceiling
 exactly, and never silently skipping ahead to a later step that might
 depend on the halted one's own effect.
+
+**WP-194, closing one real, empirically-confirmed input-validation
+gap, not assumed**: a caller-supplied parameter key that names none of
+``descriptor.parameters`` was previously silently accepted and simply
+never used -- confirmed live before fixing, not assumed: a typo'd key
+(e.g. ``"siet"`` instead of ``"site"``) for a *halted* workflow's own
+later steps produced no error at all, since
+:func:`resolve_step_arguments` only ever checks a placeholder it
+actually encounters, and a halted step's own placeholders are never
+even reached. :func:`validate_workflow_parameters` closes this by
+checking every *supplied* key against the workflow's own declared
+``parameters`` up front, in :func:`compose_workflow`, before any step
+is touched. **Deliberately not a completeness check**: an omitted,
+genuinely-required parameter for a step that never runs (because the
+workflow halts before reaching it) is not an error here -- requiring
+every declared parameter up front, including ones only a halted,
+manually-invoked step would ever need, would add real friction with no
+real safety benefit, since that step is never auto-executed regardless.
+A parameter actually needed by a *runnable* step is still caught
+exactly as before, by :func:`resolve_step_arguments` itself, when that
+step is reached.
 """
 
 from __future__ import annotations
@@ -111,6 +132,35 @@ def resolve_step_arguments(step: WorkflowStep, parameters: Mapping[str, str]) ->
     return resolved
 
 
+def validate_workflow_parameters(
+    descriptor: WorkflowDescriptor, parameters: Mapping[str, str]
+) -> None:
+    """Reject any supplied parameter key that names none of ``descriptor``'s own real parameters.
+
+    A real, minimal, explicit "no arbitrary/unrecognized input" check
+    -- not a completeness check (see module docstring for why a
+    missing, genuinely-required parameter is deliberately left to
+    :func:`resolve_step_arguments`'s own, later, per-step check
+    instead).
+
+    Args:
+        descriptor: The real, already-registered workflow to validate
+            ``parameters`` against.
+        parameters: Caller-supplied parameter values, keyed by name.
+
+    Raises:
+        WorkflowCompositionError: If any key in ``parameters`` is not
+            one of ``descriptor.parameters``.
+    """
+    unknown = sorted(set(parameters) - set(descriptor.parameters))
+    if unknown:
+        msg = (
+            f"Workflow {descriptor.id} does not declare parameter(s) {unknown!r} -- "
+            f"real parameters are {list(descriptor.parameters)!r}."
+        )
+        raise WorkflowCompositionError(msg)
+
+
 def compose_workflow(
     descriptor: WorkflowDescriptor,
     parameters: Mapping[str, str],
@@ -137,10 +187,13 @@ def compose_workflow(
         A :class:`ComposedWorkflow` -- see its own docstring.
 
     Raises:
-        WorkflowCompositionError: If a step before the halt point
-            references an unresolved placeholder (see
-            :func:`resolve_step_arguments`).
+        WorkflowCompositionError: If ``parameters`` contains a key
+            :func:`validate_workflow_parameters` rejects, or a step
+            before the halt point references an unresolved placeholder
+            (see :func:`resolve_step_arguments`).
     """
+    validate_workflow_parameters(descriptor, parameters)
+
     runnable: list[PlanStep] = []
     halted_step: WorkflowStep | None = None
     remaining: list[WorkflowStep] = []
