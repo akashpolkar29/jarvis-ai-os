@@ -778,3 +778,71 @@ it.
   request -- a real, reported process deviation from this project's
   own stated "branch then squash-merge" convention's usual PR-mediated
   form, not a change to its outcome).
+- **WP-191 through WP-200, the M10 safe-workflow-routing queue**:
+  closes `docs/OPEN_DECISIONS.md` item 73 (workflows unreachable
+  outside the CLI) by making the M9 workflow layer a first-class,
+  routable JARVIS surface, with no second router, no second
+  authorization path, and no second execution engine anywhere in the
+  queue -- verified directly by diff, not assumed: `kernel/tasks.py`,
+  `kernel/planning.py`, `application/planning/*`,
+  `kernel/capabilities.py`, `domain/capability.py`, `kernel/desktop.py`
+  (`terminal.run`'s own module), the reasoning `Dispatcher`/
+  `EscalationLadder` internals, and `kernel/job_application.py`/
+  `job_assistance.py` are all byte-for-byte untouched across the whole
+  queue, and zero new `CapabilityId`/`Effect`/`Tier` were added
+  (confirmed: an empty `git diff` against both files). WP-191 proved
+  the plumbing safely first: a fourth real `RouteResult` kind,
+  `RouteKind.WORKFLOW_RUN`, reuses `kernel.workflows.
+  authorize_and_run_workflow` completely unmodified -- the same
+  function `jarvis workflow run` already calls -- wired into
+  `kernel/router.py` before any real text could reach it. WP-192 built
+  the real Stage-A grammar ("run <workflow> workflow [with
+  name=value, ...]"), catching and fixing a real bug live during its
+  own implementation (a naive suffix match silently failed to match
+  any request with trailing parameters, since appending them means
+  the text no longer ends with "workflow"). WP-193 extended Stage B's
+  reasoning fallback with the identical compact, deterministically-
+  filtered context mechanism WP-175 already established for skills --
+  a hallucinated/unregistered workflow id is rejected by the same
+  `is_valid_workflow` structural check `is_registered` already
+  provides for capabilities. WP-194 found and closed one real,
+  empirically-confirmed gap while reviewing the existing parameter
+  model: a typo'd parameter key for a workflow's own halted (never-
+  run) step was previously silently accepted and simply never used;
+  `validate_workflow_parameters` now rejects any unrecognized key up
+  front, deliberately not a completeness check (an omitted parameter
+  only a halted step needs is not an error). WP-195 and WP-196 each
+  found and fixed the identical real UX bug in a different surface --
+  `jarvis do`/`jarvis ui` both originally rendered a granted workflow
+  run as a raw, unreadable Python `repr()` of the whole nested
+  `WorkflowRunOutcome` instead of the same step/halt text `jarvis
+  workflow run` already prints -- both fixed by reusing that one, real
+  print/summarize path, not a second implementation; WP-196 also added
+  real, read-only workflow discovery (`GET /api/workflows`) and a
+  frontend "Workflows" button whose own "Use" action only ever
+  pre-fills the real chat input, still sent through the existing
+  `POST /api/command` flow. WP-197/198/199 hardened all three built-in
+  workflows against their own real, required property lists --
+  no real deficiency was found in any of the three (each work package
+  is tests only), except one real, honest, pre-existing, cross-cutting
+  gap surfaced while hardening Research (`docs/OPEN_DECISIONS.md` item
+  74): `fs.search_content`'s own matched lines carry no `Tainted`/
+  `Provenance` wrapper at all, unlike `fs.read_file`'s -- confirmed via
+  `git log` to predate the entire M9/M10 workflow layer (WP-94), so
+  not a deficiency this queue introduced or could fix on its own.
+  New, real, structural meta-tests prove the whole workflow engine
+  (`kernel/workflows.py`, `application/workflow/composer.py`,
+  `kernel/capability_dispatch.py`) can never import
+  `kernel.job_search`/`job_assistance`/`job_application` at all, and
+  that neither `terminal.run` nor `coding.run_task` has an entry in
+  the one, real, shared `PLAN_STEP_EXECUTORS` dispatch table both
+  `execute_plan` and `planning.run_plan` ever consult -- structural
+  guarantees, not merely today's registry contents. All gates green
+  throughout -- domain/policy/reasoning 100% coverage maintained, 100%
+  branch coverage maintained on `ui_server.py`; the full suite grew
+  from 1994 passing tests at the start of this queue to 2059 by the
+  end, zero regressions. `docs/OPEN_DECISIONS.md` item 73 marked
+  RESOLVED/BUILT, original text preserved as the historical record;
+  item 74 added, real and undecided. No ADR was needed anywhere in
+  this queue. Not tagged -- `v0.10.0` remains the correct next
+  sequential slot, tagging remains the user's own decision.
