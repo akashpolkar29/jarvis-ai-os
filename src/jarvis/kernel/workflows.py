@@ -87,6 +87,28 @@ workflow's own outer gate capability id, and is itself ``Tier.CONFIRM``
 confusing, self-referential nesting; a caller runs
 ``jarvis task create``/``coding.run_task`` separately once it has real
 findings to reason over.
+
+**WP-187, Coding Assistant -- a real, controlled development
+workflow**: three real steps -- ``git.status``, ``fs.find``, and
+``fs.search_content`` (all ``Tier.ALLOW``, run automatically --
+inspect a repository's real state, then locate relevant files by name
+and by content) then ``coding.run_task`` (``Tier.CONFIRM`` -- halts;
+the outer gate on invoking WP-71's real autonomous coding-agent loop,
+which runs its own real tests internally, in its own disposable,
+sandboxed workspace, once manually invoked). **Never a second shell
+executor, and ``terminal.run`` is never touched**: nothing in this
+workflow, or in ``coding.run_task`` itself, runs an arbitrary shell
+command -- ``terminal.run`` remains ADR-0046's own deliberate,
+narrow, always-``Tier.MANUAL_ONLY`` exception to this project's
+no-shell principle, completely outside this workflow's scope, exactly
+matching the Coding skill's own instructions. **Never destructive by
+default**: the coding-agent loop this halts in front of writes only
+inside its own disposable workspace (ADR-0055) until a caller
+separately, explicitly runs it; this workflow performs no write of
+its own. Shares the same real, structural inter-step data-flow gap
+named in the Research workflow's own docstring above -- ``fs.find``'s
+own real matches are not threaded into ``coding.run_task``'s own
+``task`` argument automatically.
 """
 
 from __future__ import annotations
@@ -105,6 +127,9 @@ from jarvis.domain.workflow import WorkflowDescriptor, WorkflowId, WorkflowStep
 from jarvis.domain.workflow_registry import WorkflowRegistry, validate_workflow_registry
 from jarvis.kernel.capabilities import (
     BROWSER_OPEN_PAGE_CAPABILITY_ID,
+    CODING_RUN_TASK_CAPABILITY_ID,
+    FIND_FILES_CAPABILITY_ID,
+    GIT_STATUS_CAPABILITY_ID,
     JOB_SEARCH_OPEN_RESULTS_CAPABILITY_ID,
     MEMORY_RETRIEVE_CAPABILITY_ID,
     PLANNING_RUN_PLAN_CAPABILITY_ID,
@@ -115,6 +140,7 @@ from jarvis.kernel.capability_dispatch import PLAN_STEP_EXECUTORS
 
 JOB_SEARCH_ASSISTANT_WORKFLOW_ID = WorkflowId("job_search_assistant")
 RESEARCH_WORKFLOW_ID = WorkflowId("research")
+CODING_ASSISTANT_WORKFLOW_ID = WorkflowId("coding_assistant")
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -216,6 +242,46 @@ def build_default_workflow_registry(
             ),
             parameters=("query", "url"),
             metadata={"source": "wp186-research"},
+        )
+    )
+
+    registry.register(
+        WorkflowDescriptor(
+            id=CODING_ASSISTANT_WORKFLOW_ID,
+            name="Coding Assistant",
+            description=(
+                "Inspect a repository's real state and locate relevant files, then invoke "
+                "the real, already-built autonomous coding-agent task -- never a second "
+                "shell executor, never a bypass of its own, separate authorization."
+            ),
+            steps=(
+                WorkflowStep(
+                    capability_id=GIT_STATUS_CAPABILITY_ID,
+                    arguments={"repo_dir": "${repo_dir}"},
+                    description="Inspect the target repository's real, current git status.",
+                ),
+                WorkflowStep(
+                    capability_id=FIND_FILES_CAPABILITY_ID,
+                    arguments={"pattern": "${file_pattern}"},
+                    description="Locate relevant files by name.",
+                ),
+                WorkflowStep(
+                    capability_id=SEARCH_CONTENT_CAPABILITY_ID,
+                    arguments={"query": "${code_query}"},
+                    description="Locate relevant code by content.",
+                ),
+                WorkflowStep(
+                    capability_id=CODING_RUN_TASK_CAPABILITY_ID,
+                    arguments={"task": "${task}", "target_repo": "${repo_dir}"},
+                    description=(
+                        "Run the real, autonomous coding-agent task (WP-71) against the "
+                        "target repository, including its own real, internal test "
+                        "execution -- Tier.CONFIRM, halts here; never auto-invoked."
+                    ),
+                ),
+            ),
+            parameters=("repo_dir", "file_pattern", "code_query", "task"),
+            metadata={"source": "wp187-coding-assistant"},
         )
     )
 
